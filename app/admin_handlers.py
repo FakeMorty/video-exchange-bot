@@ -36,7 +36,7 @@ async def cmd_admin(message: Message):
     await message.answer_video(
         video=video.telegram_file_id,
         caption=(
-            f"��� <b>Модерация</b>\n"
+            f"📋 <b>Модерация</b>\n"
             f"ID видео: {video.id}\n"
             f"Автор (user_id): {video.uploader_user_id}\n"
             f"Длительность: {video.duration_seconds or '?'} сек\n"
@@ -119,7 +119,7 @@ async def _send_next_pending(message: Message, admin_id: int):
     await message.answer_video(
         video=video.telegram_file_id,
         caption=(
-            f"��� <b>Модерация</b>\n"
+            f"📋 <b>Модерация</b>\n"
             f"ID видео: {video.id}\n"
             f"Автор (user_id): {video.uploader_user_id}\n"
             f"Длительность: {video.duration_seconds or '?'} сек\n"

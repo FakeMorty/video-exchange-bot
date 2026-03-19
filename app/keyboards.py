@@ -13,9 +13,9 @@ def rules_keyboard() -> InlineKeyboardMarkup:
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="��� Смотреть"), KeyboardButton(text="��� Загрузить")],
-            [KeyboardButton(text="��� Профиль"), KeyboardButton(text="��� Купить монеты")],
-            [KeyboardButton(text="��� Офферы"), KeyboardButton(text="��� Рефералы")],
+            [KeyboardButton(text="🎥 Смотреть"), KeyboardButton(text="📤 Загрузить")],
+            [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="💎 Купить монеты")],
+            [KeyboardButton(text="🎁 Офферы"), KeyboardButton(text="👥 Рефералы")],
         ],
         resize_keyboard=True,
     )
@@ -24,8 +24,8 @@ def main_menu() -> ReplyKeyboardMarkup:
 def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="���", callback_data=f"rate:{video_id}:1"),
-            InlineKeyboardButton(text="���", callback_data=f"rate:{video_id}:-1"),
+            InlineKeyboardButton(text="👍", callback_data=f"rate:{video_id}:1"),
+            InlineKeyboardButton(text="👎", callback_data=f"rate:{video_id}:-1"),
             InlineKeyboardButton(text="▶ Следующее", callback_data="watch_next"),
         ]
     ])
