@@ -40,6 +40,7 @@ class Video(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     uploader_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(20), default="video")  # video / photo
     telegram_file_id: Mapped[str] = mapped_column(Text, nullable=False)
     telegram_file_unique_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")
@@ -105,8 +106,8 @@ class Offer(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     channel_url: Mapped[str] = mapped_column(Text, nullable=False)
-    reward_preview: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=10)
-    reward_final: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=30)
+    reward_preview: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=5)
+    reward_final: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=35)
     penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=40)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

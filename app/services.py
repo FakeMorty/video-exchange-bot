@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,9 @@ from app.config import (
 
 BONUS_AMOUNT = Decimal("1.00")
 BONUS_COOLDOWN_HOURS = 4
+
+PHOTO_UPLOAD_REWARD = Decimal("0.10")
+FREE_PHOTO_LIMIT_PER_4H = 20
 
 OFFER_STEP_1_REWARD = Decimal("5.00")
 OFFER_STEP_2_REWARD = Decimal("10.00")
@@ -54,6 +57,10 @@ def format_file_size(size_bytes: int | None) -> str:
     if size_bytes >= kb:
         return f"{size_bytes / kb:.2f} КБ"
     return f"{size_bytes} Б"
+
+
+def round_bot_friendly(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
 
 # ===== USER =====
@@ -380,7 +387,7 @@ async def apply_offer_penalty(session: AsyncSession, participation: OfferPartici
     return True, f"Применён штраф {OFFER_PENALTY} монет."
 
 
-# ===== VIDEO =====
+# ===== CONTENT SAVE =====
 
 async def save_video(
     session: AsyncSession,
@@ -398,6 +405,7 @@ async def save_video(
 
     video = Video(
         uploader_user_id=uploader.id,
+        content_type="video",
         telegram_file_id=file_id,
         telegram_file_unique_id=file_unique_id,
         duration_seconds=duration,
@@ -409,6 +417,36 @@ async def save_video(
     await session.refresh(video)
     return video
 
+
+async def save_photo(
+    session: AsyncSession,
+    uploader: User,
+    file_id: str,
+    file_unique_id: str,
+    file_size: int | None,
+) -> Video | None:
+    stmt = select(Video).where(Video.telegram_file_unique_id == file_unique_id)
+    result = await session.execute(stmt)
+    existing = result.scalar_one_or_none()
+    if existing:
+        return None
+
+    photo = Video(
+        uploader_user_id=uploader.id,
+        content_type="photo",
+        telegram_file_id=file_id,
+        telegram_file_unique_id=file_unique_id,
+        duration_seconds=None,
+        file_size=file_size,
+        status="pending",
+    )
+    session.add(photo)
+    await session.commit()
+    await session.refresh(photo)
+    return photo
+
+
+# ===== MODERATION =====
 
 async def get_next_pending_video(session: AsyncSession) -> Video | None:
     stmt = (
@@ -438,7 +476,10 @@ async def approve_video(session: AsyncSession, video_id: int) -> Video | None:
     result2 = await session.execute(stmt2)
     uploader = result2.scalar_one_or_none()
     if uploader:
-        uploader.balance += Decimal(str(UPLOAD_REWARD))
+        if video.content_type == "photo":
+            uploader.balance += round_bot_friendly(PHOTO_UPLOAD_REWARD)
+        else:
+            uploader.balance += Decimal(str(UPLOAD_REWARD))
 
     await session.commit()
     await session.refresh(video)
@@ -477,14 +518,18 @@ async def count_rejected_videos(session: AsyncSession) -> int:
     return result.scalar_one()
 
 
-# ===== WATCHING =====
+# ===== WATCHING VIDEO =====
 
 async def get_video_stats_for_user(session: AsyncSession, user: User) -> dict:
-    total_approved_stmt = select(func.count(Video.id)).where(Video.status == "approved")
+    total_approved_stmt = select(func.count(Video.id)).where(
+        Video.status == "approved",
+        Video.content_type == "video",
+    )
     total_approved = (await session.execute(total_approved_stmt)).scalar_one()
 
     approved_not_own_stmt = select(func.count(Video.id)).where(
         Video.status == "approved",
+        Video.content_type == "video",
         Video.uploader_user_id != user.id,
     )
     approved_not_own = (await session.execute(approved_not_own_stmt)).scalar_one()
@@ -493,6 +538,7 @@ async def get_video_stats_for_user(session: AsyncSession, user: User) -> dict:
 
     available_stmt = select(func.count(Video.id)).where(
         Video.status == "approved",
+        Video.content_type == "video",
         Video.uploader_user_id != user.id,
         Video.id.notin_(watched_subq),
     )
@@ -512,6 +558,7 @@ async def get_random_video_for_user(session: AsyncSession, user: User) -> Video 
         select(Video)
         .where(
             Video.status == "approved",
+            Video.content_type == "video",
             Video.uploader_user_id != user.id,
             Video.id.notin_(watched_subq),
         )
@@ -521,6 +568,59 @@ async def get_random_video_for_user(session: AsyncSession, user: User) -> Video 
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
+
+# ===== WATCHING PHOTO =====
+
+async def count_photo_views_last_4h(session: AsyncSession, user_id: int) -> int:
+    since = datetime.utcnow() - timedelta(hours=4)
+
+    stmt = (
+        select(func.count(VideoView.id))
+        .join(Video, Video.id == VideoView.video_id)
+        .where(
+            VideoView.user_id == user_id,
+            Video.content_type == "photo",
+            VideoView.watched_at >= since,
+        )
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+async def get_random_photo_for_user(session: AsyncSession, user: User) -> Video | None:
+    watched_subq = select(VideoView.video_id).where(VideoView.user_id == user.id)
+
+    stmt = (
+        select(Video)
+        .where(
+            Video.status == "approved",
+            Video.content_type == "photo",
+            Video.uploader_user_id != user.id,
+            Video.id.notin_(watched_subq),
+        )
+        .order_by(func.random())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def record_photo_view(session: AsyncSession, user: User, photo: Video) -> bool:
+    stmt = select(VideoView).where(
+        VideoView.user_id == user.id,
+        VideoView.video_id == photo.id,
+    )
+    result = await session.execute(stmt)
+    existing = result.scalar_one_or_none()
+    if existing:
+        return False
+
+    session.add(VideoView(user_id=user.id, video_id=photo.id))
+    await session.commit()
+    return True
+
+
+# ===== COMMON VIEW =====
 
 async def record_view_and_charge(session: AsyncSession, user: User, video: Video) -> bool:
     if user.balance < Decimal(str(WATCH_COST)):

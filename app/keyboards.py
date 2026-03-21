@@ -36,6 +36,13 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     )
 
 
+def watch_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="\U0001f3ac \u0421\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u0432\u0438\u0434\u0435\u043e", callback_data="watch_video_content")],
+        [InlineKeyboardButton(text="\U0001f5bc \u0421\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u0444\u043e\u0442\u043e", callback_data="watch_photo_content")],
+    ])
+
+
 def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -43,6 +50,12 @@ def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="\U0001f44e", callback_data=f"rate:{video_id}:-1"),
             InlineKeyboardButton(text="\u25b6 \u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0435", callback_data="watch_next"),
         ]
+    ])
+
+
+def photo_actions_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="\u25b6 \u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0435 \u0444\u043e\u0442\u043e", callback_data="watch_next_photo")]
     ])
 
 
@@ -76,7 +89,7 @@ def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup
 
 def admin_center_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\U0001f4cb \u0412\u0437\u044f\u0442\u044c \u0432\u0438\u0434\u0435\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text="\U0001f4cb \u0412\u0437\u044f\u0442\u044c \u0432\u0438\u0434\u0435\u043e/\u0444\u043e\u0442\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e", callback_data="admin_get_pending")],
         [InlineKeyboardButton(text="\U0001f4ca \u0421\u0442\u0430\u0442\u0443\u0441 \u043e\u0447\u0435\u0440\u0435\u0434\u0438", callback_data="admin_queue_info")],
         [InlineKeyboardButton(text="\U0001f381 \u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u043e\u0444\u0444\u0435\u0440\u0430\u043c\u0438", callback_data="admin_offers_menu")],
     ])
@@ -112,7 +125,7 @@ def moderation_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="\u274c \u041e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c", callback_data=f"mod_reject:{video_id}"),
         ],
         [
-            InlineKeyboardButton(text="\U0001f4cb \u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0435 \u0432\u0438\u0434\u0435\u043e", callback_data="admin_get_pending"),
+            InlineKeyboardButton(text="\U0001f4cb \u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0435", callback_data="admin_get_pending"),
         ]
     ])
 
@@ -127,6 +140,6 @@ def rejection_reason_keyboard(video_id: int) -> InlineKeyboardMarkup:
 
 def admin_after_action_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\U0001f4cb \u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0435 \u0432\u0438\u0434\u0435\u043e", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text="\U0001f4cb \u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0435", callback_data="admin_get_pending")],
         [InlineKeyboardButton(text="\U0001f3e0 \u0410\u0434\u043c\u0438\u043d-\u0446\u0435\u043d\u0442\u0440", callback_data="admin_center")],
     ])
