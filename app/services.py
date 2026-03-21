@@ -6,13 +6,16 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User, Video, VideoView, VideoRating
-from app.config import STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD
+from app.config import (
+    STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
+    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
+)
 
 BONUS_AMOUNT = Decimal("2.00")
 BONUS_COOLDOWN_HOURS = 4
 
 
-# ===== FORMATTERS =====
+# ===== FORMAT =====
 
 def format_duration(seconds: int | None) -> str:
     if not seconds:
@@ -48,12 +51,31 @@ def format_file_size(size_bytes: int | None) -> str:
 
 # ===== USER =====
 
+async def get_user(session: AsyncSession, telegram_id: int) -> User | None:
+    stmt = select(User).where(User.telegram_id == telegram_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
+    stmt = select(User).where(User.id == user_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_referral_code(session: AsyncSession, referral_code: str) -> User | None:
+    stmt = select(User).where(User.referral_code == referral_code)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_or_create_user(
     session: AsyncSession,
     telegram_id: int,
     username: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
+    referral_code: str | None = None,
 ) -> tuple[User, bool]:
     stmt = select(User).where(User.telegram_id == telegram_id)
     result = await session.execute(stmt)
@@ -67,6 +89,14 @@ async def get_or_create_user(
         await session.refresh(user)
         return user, False
 
+    referred_by_user_id = None
+    inviter = None
+
+    if referral_code:
+        inviter = await get_user_by_referral_code(session, referral_code)
+        if inviter and inviter.telegram_id != telegram_id:
+            referred_by_user_id = inviter.id
+
     user = User(
         telegram_id=telegram_id,
         username=username,
@@ -74,23 +104,20 @@ async def get_or_create_user(
         last_name=last_name,
         balance=Decimal(str(STARTING_BALANCE)),
         referral_code=uuid.uuid4().hex[:8],
+        referred_by_user_id=referred_by_user_id,
+        referral_earnings=Decimal("0.00"),
     )
     session.add(user)
+    await session.flush()
+
+    if inviter:
+        inviter.balance += Decimal(str(REFERRAL_REWARD_INVITER))
+        inviter.referral_earnings += Decimal(str(REFERRAL_REWARD_INVITER))
+        user.balance += Decimal(str(REFERRAL_REWARD_NEW_USER))
+
     await session.commit()
     await session.refresh(user)
     return user, True
-
-
-async def get_user(session: AsyncSession, telegram_id: int) -> User | None:
-    stmt = select(User).where(User.telegram_id == telegram_id)
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none()
-
-
-async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
-    stmt = select(User).where(User.id == user_id)
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none()
 
 
 async def agree_to_rules(session: AsyncSession, telegram_id: int) -> User | None:
@@ -125,7 +152,13 @@ async def claim_daily_bonus(session: AsyncSession, telegram_id: int) -> tuple[bo
     return True, f"Вам начислено {BONUS_AMOUNT} монеты. Баланс: {user.balance}"
 
 
-# ===== VIDEO UPLOAD =====
+async def count_referrals(session: AsyncSession, user_id: int) -> int:
+    stmt = select(func.count(User.id)).where(User.referred_by_user_id == user_id)
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+# ===== VIDEO =====
 
 async def save_video(
     session: AsyncSession,
@@ -155,8 +188,6 @@ async def save_video(
     return video
 
 
-# ===== MODERATION =====
-
 async def get_next_pending_video(session: AsyncSession) -> Video | None:
     stmt = (
         select(Video)
@@ -164,12 +195,6 @@ async def get_next_pending_video(session: AsyncSession) -> Video | None:
         .order_by(Video.created_at.asc())
         .limit(1)
     )
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none()
-
-
-async def get_video_by_id(session: AsyncSession, video_id: int) -> Video | None:
-    stmt = select(Video).where(Video.id == video_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 

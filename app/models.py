@@ -24,6 +24,8 @@ class User(Base):
     status: Mapped[str] = mapped_column(String(50), default="active")
     agreed_to_rules: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_code: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
+    referred_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    referral_earnings: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     last_bonus_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
