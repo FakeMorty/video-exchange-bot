@@ -63,6 +63,28 @@ def round_bot_friendly(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
 
+# ===== ADMINS =====
+
+async def get_user_by_username(session: AsyncSession, username: str) -> User | None:
+    clean_username = username.strip().lstrip("@").lower()
+    stmt = select(User).where(func.lower(User.username) == clean_username)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def set_user_admin(session: AsyncSession, user: User, value: bool) -> User:
+    user.is_admin = value
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def get_db_admins(session: AsyncSession) -> list[User]:
+    stmt = select(User).where(User.is_admin == True).order_by(User.id.asc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 # ===== USER =====
 
 async def get_user(session: AsyncSession, telegram_id: int) -> User | None:
@@ -120,6 +142,7 @@ async def get_or_create_user(
         referral_code=uuid.uuid4().hex[:8],
         referred_by_user_id=referred_by_user_id,
         referral_earnings=Decimal("0.00"),
+        is_admin=False,
     )
     session.add(user)
     await session.flush()

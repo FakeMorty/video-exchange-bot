@@ -17,11 +17,12 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
-    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     balance: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     status: Mapped[str] = mapped_column(String(50), default="active")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     agreed_to_rules: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_code: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
     referred_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
