@@ -29,7 +29,6 @@ async def handle_webhook(request: web.Request) -> web.Response:
     try:
         data = await request.json()
 
-        # Log what we received
         update_id = data.get("update_id", "?")
         msg = data.get("message", {})
         cb = data.get("callback_query", {})
@@ -110,7 +109,7 @@ async def on_startup(app: web.Application):
 
     logger.info(f"Setting webhook: {WEBHOOK_URL}")
     try:
-        await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+        await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=False)
         info = await bot.get_webhook_info()
         logger.info(f"Webhook confirmed: url={info.url}")
     except Exception as e:
@@ -119,9 +118,9 @@ async def on_startup(app: web.Application):
 
 
 async def on_shutdown(app: web.Application):
-    logger.info("Shutting down...")
+    logger.info("Shutting down... (keeping webhook active)")
+    # DO NOT delete webhook - Render restarts will re-set it on startup
     try:
-        await bot.delete_webhook()
         await bot.session.close()
     except Exception as e:
         logger.error(f"Shutdown error: {e}")
