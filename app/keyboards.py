@@ -9,7 +9,7 @@ BTN_UPLOAD = "\U0001f4e4 \u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c"
 BTN_PROFILE = "\U0001f464 \u041f\u0440\u043e\u0444\u0438\u043b\u044c"
 BTN_BUY = "\U0001f4b3 \u041a\u0443\u043f\u0438\u0442\u044c \u043c\u043e\u043d\u0435\u0442\u044b"
 BTN_OFFERS = "\U0001f381 \u041e\u0444\u0444\u0435\u0440\u044b"
-BTN_REFERRALS = "\U0001f465 \u0420\u0435\u0444\u0435\u0440\u0430\u043b\u044b"
+BTN_REFERRALS = "\U0001f465 \u041f\u0440\u0438\u0433\u043b\u0430\u0441\u0438\u0442\u044c \u0434\u0440\u0443\u0433\u0430"
 BTN_BONUS = "\U0001f3c6 \u0411\u043e\u043d\u0443\u0441"
 BTN_ADMIN = "\U0001f6e0 \u0410\u0434\u043c\u0438\u043d"
 
@@ -34,8 +34,8 @@ def rules_keyboard() -> InlineKeyboardMarkup:
 
 def watch_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\U0001f3ac \u0421\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u0432\u0438\u0434\u0435\u043e", callback_data="watch_video_content")],
-        [InlineKeyboardButton(text="\U0001f5bc \u0421\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u0444\u043e\u0442\u043e", callback_data="watch_photo_content")],
+        [InlineKeyboardButton(text="\U0001f3ac \u0412\u0438\u0434\u0435\u043e", callback_data="watch_video_content")],
+        [InlineKeyboardButton(text="\U0001f5bc \u0424\u043e\u0442\u043e", callback_data="watch_photo_content")],
     ])
 
 
@@ -62,6 +62,7 @@ def buy_coins_keyboard() -> InlineKeyboardMarkup:
             text=f"\u2b50 {pkg['stars']} Stars \u2192 {pkg['coins']} \u043c\u043e\u043d\u0435\u0442",
             callback_data=f"buy:{key}",
         )])
+    buttons.append([InlineKeyboardButton(text="\U0001f4dd \u0421\u0432\u043e\u044f \u0441\u0443\u043c\u043c\u0430", callback_data="buy_custom")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -87,6 +88,7 @@ def admin_center_keyboard(is_super_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="\U0001f4ca \u041e\u0447\u0435\u0440\u0435\u0434\u044c", callback_data="admin_queue_info")],
         [InlineKeyboardButton(text="\U0001f4cb \u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text="\u2705 \u041e\u0434\u043e\u0431\u0440\u0438\u0442\u044c \u0432\u0441\u0451", callback_data="admin_approve_all")],
         [InlineKeyboardButton(text="\U0001f381 \u041e\u0444\u0444\u0435\u0440\u044b", callback_data="admin_offers_menu")],
     ]
     if is_super_admin:
@@ -121,8 +123,8 @@ def admin_after_action_keyboard() -> InlineKeyboardMarkup:
 
 def admin_offers_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\u2795 \u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043e\u0444\u0444\u0435\u0440", callback_data="admin_offer_create")],
-        [InlineKeyboardButton(text="\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a \u043e\u0444\u0444\u0435\u0440\u043e\u0432", callback_data="admin_offer_list")],
+        [InlineKeyboardButton(text="\u2795 \u0421\u043e\u0437\u0434\u0430\u0442\u044c", callback_data="admin_offer_create")],
+        [InlineKeyboardButton(text="\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data="admin_offer_list")],
         [InlineKeyboardButton(text="\U0001f519 \u041d\u0430\u0437\u0430\u0434", callback_data="admin_center")],
     ])
 
@@ -136,13 +138,11 @@ def admin_offer_list_keyboard(offers) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# ===== ADMIN MANAGE =====
-
 def admin_manage_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a \u0430\u0434\u043c\u0438\u043d\u043e\u0432", callback_data="admm_list")],
-        [InlineKeyboardButton(text="\u2795 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0430\u0434\u043c\u0438\u043d\u0430", callback_data="admm_add")],
-        [InlineKeyboardButton(text="\u2796 \u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0430\u0434\u043c\u0438\u043d\u0430", callback_data="admm_remove")],
+        [InlineKeyboardButton(text="\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data="admm_list")],
+        [InlineKeyboardButton(text="\u2795 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c", callback_data="admm_add")],
+        [InlineKeyboardButton(text="\u2796 \u0423\u0434\u0430\u043b\u0438\u0442\u044c", callback_data="admm_remove")],
         [InlineKeyboardButton(text="\U0001f519 \u041d\u0430\u0437\u0430\u0434", callback_data="admin_center")],
     ])
 

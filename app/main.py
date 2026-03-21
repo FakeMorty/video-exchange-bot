@@ -1,160 +1,97 @@
-import asyncio
 import logging
-import os
+import asyncio
 import traceback
 
-from aiohttp import web
 from aiogram import Bot, Dispatcher
-from aiogram.types import Update
-from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+from aiohttp import web
 
-from app.config import BOT_TOKEN, WEBHOOK_URL, WEBHOOK_PATH, WEBHOOK_BASE
-from app.db import init_db, reset_db
+from app.config import BOT_TOKEN, OFFER_BROADCAST_INTERVAL_HOURS
+from app.db import engine, Base, async_session
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
+from app.services import get_active_offers, get_users_without_offer
+from app.keyboards import offer_view_keyboard
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
-dp.include_router(admin_router)
-dp.include_router(user_router)
 
-webhook_keeper_task = None
-
-
-async def ensure_webhook():
-    try:
-        info = await bot.get_webhook_info()
-        if info.url != WEBHOOK_URL:
-            logger.warning(f"[WEBHOOK_KEEPER] Webhook lost! was='{info.url}' expected='{WEBHOOK_URL}'")
-            await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=False)
-            logger.info(f"[WEBHOOK_KEEPER] Webhook restored: {WEBHOOK_URL}")
-        return True
-    except Exception as e:
-        logger.error(f"[WEBHOOK_KEEPER] Error: {e}")
-        return False
-
-
-async def webhook_keeper():
+async def offer_broadcaster(bot: Bot):
+    interval = OFFER_BROADCAST_INTERVAL_HOURS * 3600
     while True:
-        await asyncio.sleep(30)
-        await ensure_webhook()
+        await asyncio.sleep(interval)
+        try:
+            async with async_session() as session:
+                offers = await get_active_offers(session)
+                for offer in offers:
+                    users = await get_users_without_offer(session, offer.id)
+                    for user in users:
+                        try:
+                            text = (
+                                f"\U0001f381 <b>{offer.title}</b>\n\n"
+                                f"{offer.description}\n\n"
+                                f"\U0001f4b0 \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>40</b> \u043c\u043e\u043d\u0435\u0442"
+                            )
+                            await bot.send_message(
+                                user.telegram_id,
+                                text,
+                                parse_mode="HTML",
+                                reply_markup=offer_view_keyboard(offer.id, offer.channel_url),
+                            )
+                        except Exception:
+                            pass
+                        await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"[OFFER_BROADCAST] {e}")
+            logger.error(traceback.format_exc())
 
 
-async def handle_webhook(request: web.Request) -> web.Response:
-    try:
-        data = await request.json()
-        update = Update.model_validate(data, context={"bot": bot})
-        await dp.feed_update(bot, update)
-    except Exception as e:
-        logger.error(f"[WEBHOOK] ERROR: {e}")
-        logger.error(traceback.format_exc())
-
-    return web.Response(text="ok")
+async def on_startup(app):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("DB ready")
 
 
-async def handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok"})
+async def handle_health(request):
+    return web.Response(text="OK")
 
 
-async def handle_debug_webhook(request: web.Request) -> web.Response:
-    try:
-        info = await bot.get_webhook_info()
-        return web.json_response({
-            "url": info.url,
-            "pending_update_count": info.pending_update_count,
-            "last_error_date": str(info.last_error_date) if info.last_error_date else None,
-            "last_error_message": info.last_error_message,
-            "webhook_base": WEBHOOK_BASE,
-        })
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_set_webhook(request: web.Request) -> web.Response:
-    try:
-        await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
-        info = await bot.get_webhook_info()
-        return web.json_response({"result": "webhook set", "url": info.url})
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_reset_db(request: web.Request) -> web.Response:
+async def handle_reset(request):
     secret = request.query.get("secret", "")
-    expected = BOT_TOKEN[:10]
-
-    if secret != expected:
-        return web.json_response({"error": "forbidden"}, status=403)
-
-    try:
-        await reset_db()
-        return web.json_response({"result": "db reset complete"})
-    except Exception as e:
-        logger.error(f"[RESET_DB] ERROR: {e}")
-        logger.error(traceback.format_exc())
-        return web.json_response({"error": str(e)}, status=500)
+    if secret != "8747618457":
+        return web.Response(text="Forbidden", status=403)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    return web.Response(text="DB reset OK")
 
 
-async def on_startup(app: web.Application):
-    global webhook_keeper_task
+async def main():
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
-    logger.info("=" * 50)
-    logger.info("BOT STARTING")
-    logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
-    logger.info("=" * 50)
+    dp = Dispatcher()
+    dp.include_router(user_router)
+    dp.include_router(admin_router)
 
-    await init_db()
-    logger.info("Database OK")
-
-    if not WEBHOOK_BASE:
-        logger.error("WEBHOOK_BASE is empty!")
-        return
-
-    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=False)
-    info = await bot.get_webhook_info()
-    logger.info(f"Webhook confirmed: url={info.url}")
-
-    webhook_keeper_task = asyncio.create_task(webhook_keeper())
-    logger.info("Webhook keeper started")
-
-
-async def on_shutdown(app: web.Application):
-    global webhook_keeper_task
-    logger.info("Shutting down... (NOT deleting webhook)")
-
-    if webhook_keeper_task:
-        webhook_keeper_task.cancel()
-
-    try:
-        await bot.session.close()
-    except Exception as e:
-        logger.error(f"Shutdown error: {e}")
-
-
-def create_app() -> web.Application:
     app = web.Application()
-
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
     app.router.add_get("/", handle_health)
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/debug-webhook", handle_debug_webhook)
-    app.router.add_get("/set-webhook", handle_set_webhook)
-    app.router.add_get("/reset-db", handle_reset_db)
-
+    app.router.add_get("/reset-db", handle_reset)
     app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
 
-    return app
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
+    logger.info("Web server started on :10000")
+
+    asyncio.create_task(offer_broadcaster(bot))
+    logger.info(f"Offer broadcaster started (every {OFFER_BROADCAST_INTERVAL_HOURS}h)")
+
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    app = create_app()
-    web.run_app(app, host="0.0.0.0", port=port)
+    asyncio.run(main())

@@ -1,29 +1,34 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv(override=False)
+load_dotenv()
 
-BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-ADMINS: list[int] = [int(x.strip()) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
-WEBHOOK_BASE: str = os.getenv("WEBHOOK_BASE", "")
-WEBHOOK_PATH: str = os.getenv("WEBHOOK_PATH", "/webhook")
-WEBHOOK_URL: str = f"{WEBHOOK_BASE}{WEBHOOK_PATH}"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 
-DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot.db")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
-elif DATABASE_URL.startswith("postgresql://") and "+asyncpg" not in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+ADMINS_RAW = os.getenv("ADMINS", "")
+ADMINS = []
+for x in ADMINS_RAW.split(","):
+    x = x.strip()
+    if x.isdigit():
+        ADMINS.append(int(x))
 
-STARTING_BALANCE = 2.0
-WATCH_COST = 1.0
-UPLOAD_REWARD = 0.5
+STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "2"))
+WATCH_COST = float(os.getenv("WATCH_COST", "1"))
+UPLOAD_REWARD = float(os.getenv("UPLOAD_REWARD", "0.5"))
 
-REFERRAL_REWARD_INVITER = 2.0
-REFERRAL_REWARD_NEW_USER = 1.0
+REFERRAL_REWARD_INVITER = float(os.getenv("REFERRAL_REWARD_INVITER", "2"))
+REFERRAL_REWARD_NEW_USER = float(os.getenv("REFERRAL_REWARD_NEW_USER", "1"))
+
+STARS_TO_COINS_RATE = float(os.getenv("STARS_TO_COINS_RATE", "2.0"))
 
 STARS_PACKAGES = {
-    "stars_50": {"title": "50 монет", "stars": 50, "coins": 50},
-    "stars_120": {"title": "120 монет", "stars": 100, "coins": 120},
-    "stars_350": {"title": "350 монет", "stars": 250, "coins": 350},
+    "pack_1":  {"stars": 1,   "coins": 2,    "title": "2 \u043c\u043e\u043d\u0435\u0442\u044b"},
+    "pack_5":  {"stars": 5,   "coins": 10,   "title": "10 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_10": {"stars": 10,  "coins": 20,   "title": "20 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_25": {"stars": 25,  "coins": 50,   "title": "50 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_50": {"stars": 50,  "coins": 100,  "title": "100 \u043c\u043e\u043d\u0435\u0442"},
 }
+
+OFFER_BROADCAST_INTERVAL_HOURS = float(os.getenv("OFFER_BROADCAST_INTERVAL_HOURS", "2.5"))
