@@ -15,6 +15,12 @@ from app.config import (
 BONUS_AMOUNT = Decimal("1.00")
 BONUS_COOLDOWN_HOURS = 4
 
+OFFER_STEP_1_REWARD = Decimal("5.00")
+OFFER_STEP_2_REWARD = Decimal("10.00")
+OFFER_STEP_3_REWARD = Decimal("10.00")
+OFFER_STEP_4_REWARD = Decimal("15.00")
+OFFER_PENALTY = Decimal("40.00")
+
 
 # ===== FORMAT =====
 
@@ -214,17 +220,14 @@ async def create_offer(
     title: str,
     description: str,
     channel_url: str,
-    reward_preview: Decimal,
-    reward_final: Decimal,
-    penalty_unsubscribe: Decimal,
 ) -> Offer:
     offer = Offer(
         title=title,
         description=description,
         channel_url=channel_url,
-        reward_preview=reward_preview,
-        reward_final=reward_final,
-        penalty_unsubscribe=penalty_unsubscribe,
+        reward_preview=OFFER_STEP_1_REWARD,
+        reward_final=OFFER_STEP_2_REWARD + OFFER_STEP_3_REWARD + OFFER_STEP_4_REWARD,
+        penalty_unsubscribe=OFFER_PENALTY,
         is_active=True,
     )
     session.add(offer)
@@ -235,6 +238,12 @@ async def create_offer(
 
 async def get_active_offers(session: AsyncSession) -> list[Offer]:
     stmt = select(Offer).where(Offer.is_active == True).order_by(Offer.created_at.desc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_all_offers(session: AsyncSession) -> list[Offer]:
+    stmt = select(Offer).order_by(Offer.created_at.desc())
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
@@ -274,13 +283,13 @@ async def start_offer_participation(session: AsyncSession, user: User, offer: Of
         user_id=user.id,
         offer_id=offer.id,
         status="started",
-        reward_given=Decimal(str(offer.reward_preview)),
+        reward_given=OFFER_STEP_1_REWARD,
     )
     session.add(participation)
-    user.balance += Decimal(str(offer.reward_preview))
+    user.balance += OFFER_STEP_1_REWARD
 
     await session.commit()
-    return True, f"Вы начали участие в оффере и получили {offer.reward_preview} монет."
+    return True, f"Вы начали участие в оффере и получили {OFFER_STEP_1_REWARD} монет."
 
 
 async def verify_offer_subscription(
@@ -299,27 +308,76 @@ async def verify_offer_subscription(
         if participation.status == "verified":
             return True, "Подписка уже подтверждена ранее."
 
-        already_given = Decimal(str(participation.reward_given))
-        preview_reward = Decimal(str(offer.reward_preview))
-        final_reward = Decimal(str(offer.reward_final))
-
-        if already_given < (preview_reward + final_reward):
-            user.balance += final_reward
-            participation.reward_given = already_given + final_reward
-
         participation.status = "verified"
         await session.commit()
-        return True, f"Подписка подтверждена. Вам начислено {final_reward} монет."
+        return True, "Подписка подтверждена. Дальнейшие начисления будут происходить автоматически."
     else:
         if participation.status == "verified":
-            penalty = Decimal(str(offer.penalty_unsubscribe))
-            user.balance = max(Decimal("0.00"), Decimal(str(user.balance)) - penalty)
+            user.balance = max(Decimal("0.00"), Decimal(str(user.balance)) - OFFER_PENALTY)
             participation.status = "penalized"
             await session.commit()
-            return False, f"Вы отписались от канала. Применён штраф {penalty} монет."
+            return False, f"Вы отписались от канала. Применён штраф {OFFER_PENALTY} монет."
 
         await session.commit()
         return False, "Подписка не подтверждена. Подпишитесь на канал и попробуйте снова."
+
+
+async def get_verified_offer_participations(session: AsyncSession) -> list[OfferParticipation]:
+    stmt = select(OfferParticipation).where(OfferParticipation.status == "verified")
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def process_offer_reward_step(
+    session: AsyncSession,
+    participation: OfferParticipation,
+    offer: Offer,
+    user: User,
+) -> tuple[bool, str]:
+    now = datetime.utcnow()
+    started_at = participation.created_at
+    elapsed = now - started_at
+    reward_given = Decimal(str(participation.reward_given))
+
+    target_1 = OFFER_STEP_1_REWARD
+    target_2 = OFFER_STEP_1_REWARD + OFFER_STEP_2_REWARD
+    target_3 = OFFER_STEP_1_REWARD + OFFER_STEP_2_REWARD + OFFER_STEP_3_REWARD
+    target_4 = OFFER_STEP_1_REWARD + OFFER_STEP_2_REWARD + OFFER_STEP_3_REWARD + OFFER_STEP_4_REWARD
+
+    reward_to_add = Decimal("0.00")
+    message = ""
+
+    if elapsed >= timedelta(hours=24) and reward_given < target_4:
+        reward_to_add = target_4 - reward_given
+        message = f"Начислен финальный этап оффера: +{reward_to_add}"
+    elif elapsed >= timedelta(minutes=30) and reward_given < target_3:
+        reward_to_add = target_3 - reward_given
+        message = f"Начислен этап оффера за 30 минут: +{reward_to_add}"
+    elif elapsed >= timedelta(minutes=5) and reward_given < target_2:
+        reward_to_add = target_2 - reward_given
+        message = f"Начислен этап оффера за 5 минут: +{reward_to_add}"
+
+    if reward_to_add <= 0:
+        return False, "Новый этап пока не достигнут."
+
+    user.balance += reward_to_add
+    participation.reward_given = reward_given + reward_to_add
+    participation.checked_at = now
+
+    await session.commit()
+    return True, message
+
+
+async def apply_offer_penalty(session: AsyncSession, participation: OfferParticipation, offer: Offer, user: User) -> tuple[bool, str]:
+    if participation.status != "verified":
+        return False, "Штраф не требуется."
+
+    user.balance = max(Decimal("0.00"), Decimal(str(user.balance)) - OFFER_PENALTY)
+    participation.status = "penalized"
+    participation.checked_at = datetime.utcnow()
+
+    await session.commit()
+    return True, f"Применён штраф {OFFER_PENALTY} монет."
 
 
 # ===== VIDEO =====
