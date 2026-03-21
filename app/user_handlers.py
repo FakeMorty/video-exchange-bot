@@ -21,6 +21,10 @@ from app.services import (
     count_referrals,
     create_payment,
     apply_successful_payment,
+    get_active_offers,
+    get_offer_by_id,
+    start_offer_participation,
+    verify_offer_subscription,
 )
 from app.keyboards import (
     rules_keyboard,
@@ -28,6 +32,8 @@ from app.keyboards import (
     video_rating_keyboard,
     admin_center_keyboard,
     buy_coins_keyboard,
+    offers_list_keyboard,
+    offer_view_keyboard,
     BTN_WATCH,
     BTN_UPLOAD,
     BTN_PROFILE,
@@ -285,6 +291,156 @@ async def successful_payment(message: Message):
         )
 
 
+@router.message(F.text == BTN_OFFERS)
+async def show_offers(message: Message):
+    if not message.from_user:
+        return
+
+    try:
+        async with async_session() as session:
+            offers = await get_active_offers(session)
+
+        if not offers:
+            await message.answer(
+                "🎁 <b>Офферы</b>\n\n"
+                "Сейчас активных офферов нет.",
+                parse_mode="HTML",
+            )
+            return
+
+        await message.answer(
+            "🎁 <b>Доступные офферы</b>\n\nВыберите оффер:",
+            parse_mode="HTML",
+            reply_markup=offers_list_keyboard(offers),
+        )
+    except Exception as e:
+        logger.error(f"[OFFERS] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await message.answer("Не удалось загрузить офферы.")
+
+
+@router.callback_query(F.data.startswith("offer_open:"))
+async def offer_open(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+
+    try:
+        offer_id = int(callback.data.split(":")[1])
+
+        async with async_session() as session:
+            offer = await get_offer_by_id(session, offer_id)
+
+        if not offer or not offer.is_active:
+            await callback.answer("Оффер недоступен", show_alert=True)
+            return
+
+        text = (
+            f"🎁 <b>{offer.title}</b>\n\n"
+            f"{offer.description}\n\n"
+            f"🔗 Канал: {offer.channel_url}\n"
+            f"💰 Награда за старт: <b>{offer.reward_preview}</b>\n"
+            f"💰 Награда за подтверждение: <b>{offer.reward_final}</b>\n"
+            f"⚠️ Штраф за отписку: <b>{offer.penalty_unsubscribe}</b>"
+        )
+
+        await callback.message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=offer_view_keyboard(offer.id, offer.channel_url),
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"[OFFER_OPEN] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await callback.answer("Ошибка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("offer_start:"))
+async def offer_start(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+
+    try:
+        offer_id = int(callback.data.split(":")[1])
+
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            offer = await get_offer_by_id(session, offer_id)
+
+            if not user or not offer:
+                await callback.answer("Оффер не найден", show_alert=True)
+                return
+
+            success, msg = await start_offer_participation(session, user, offer)
+
+        if success:
+            await callback.message.answer(f"✅ {msg}")
+        else:
+            await callback.message.answer(f"ℹ️ {msg}")
+
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"[OFFER_START] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await callback.answer("Ошибка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("offer_check:"))
+async def offer_check(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+
+    try:
+        offer_id = int(callback.data.split(":")[1])
+
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            offer = await get_offer_by_id(session, offer_id)
+
+            if not user or not offer:
+                await callback.answer("Оффер не найден", show_alert=True)
+                return
+
+        # Проверка подписки через Telegram API
+        subscribed = False
+        error_text = None
+
+        try:
+            chat_member = await callback.bot.get_chat_member(chat_id=offer.channel_url, user_id=callback.from_user.id)
+            subscribed = chat_member.status in ("member", "administrator", "creator")
+        except Exception as e:
+            error_text = str(e)
+
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            offer = await get_offer_by_id(session, offer_id)
+
+            if not user or not offer:
+                await callback.answer("Оффер не найден", show_alert=True)
+                return
+
+            success, msg = await verify_offer_subscription(session, user, offer, subscribed)
+
+        if error_text:
+            await callback.message.answer(
+                "⚠️ Бот не смог надёжно проверить подписку.\n"
+                "Убедитесь, что бот имеет доступ к каналу.\n\n"
+                f"Технически: <code>{error_text}</code>",
+                parse_mode="HTML",
+            )
+
+        if success:
+            await callback.message.answer(f"✅ {msg}")
+        else:
+            await callback.message.answer(f"ℹ️ {msg}")
+
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"[OFFER_CHECK] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await callback.answer("Ошибка проверки", show_alert=True)
+
+
 @router.message(F.text == BTN_UPLOAD)
 async def upload_prompt(message: Message):
     await message.answer("Отправьте видео, которое хотите загрузить.")
@@ -355,7 +511,7 @@ async def _send_next_video(message: Message, telegram_id: int):
             if user.balance < Decimal(str(WATCH_COST)):
                 await message.answer(
                     "❌ Недостаточно монет для просмотра.\n"
-                    "Получите бонус, пригласите друзей или купите монеты."
+                    "Получите бонус, пригласите друзей, выполните оффер или купите монеты."
                 )
                 return
 
@@ -457,13 +613,3 @@ async def cb_admin_center(callback: CallbackQuery):
         reply_markup=admin_center_keyboard(),
     )
     await callback.answer()
-
-
-@router.message(F.text == BTN_OFFERS)
-async def offers_stub(message: Message):
-    await message.answer(
-        "🎁 <b>Офферы</b>\n\n"
-        "Раздел уже готовится.\n"
-        "На следующем шаге мы добавим офферы, которые смогут создавать админы.",
-        parse_mode="HTML",
-    )

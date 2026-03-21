@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import User, Video, VideoView, VideoRating, Payment
+from app.models import User, Video, VideoView, VideoRating, Payment, Offer, OfferParticipation
 from app.config import (
     STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
@@ -205,6 +205,121 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> tuple
     await session.commit()
     await session.refresh(user)
     return True, f"Начислено {payment.coins_amount} монет. Баланс: {user.balance}"
+
+
+# ===== OFFERS =====
+
+async def create_offer(
+    session: AsyncSession,
+    title: str,
+    description: str,
+    channel_url: str,
+    reward_preview: Decimal,
+    reward_final: Decimal,
+    penalty_unsubscribe: Decimal,
+) -> Offer:
+    offer = Offer(
+        title=title,
+        description=description,
+        channel_url=channel_url,
+        reward_preview=reward_preview,
+        reward_final=reward_final,
+        penalty_unsubscribe=penalty_unsubscribe,
+        is_active=True,
+    )
+    session.add(offer)
+    await session.commit()
+    await session.refresh(offer)
+    return offer
+
+
+async def get_active_offers(session: AsyncSession) -> list[Offer]:
+    stmt = select(Offer).where(Offer.is_active == True).order_by(Offer.created_at.desc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_offer_by_id(session: AsyncSession, offer_id: int) -> Offer | None:
+    stmt = select(Offer).where(Offer.id == offer_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def toggle_offer_active(session: AsyncSession, offer_id: int) -> Offer | None:
+    offer = await get_offer_by_id(session, offer_id)
+    if not offer:
+        return None
+
+    offer.is_active = not offer.is_active
+    await session.commit()
+    await session.refresh(offer)
+    return offer
+
+
+async def get_offer_participation(session: AsyncSession, user_id: int, offer_id: int) -> OfferParticipation | None:
+    stmt = select(OfferParticipation).where(
+        OfferParticipation.user_id == user_id,
+        OfferParticipation.offer_id == offer_id,
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def start_offer_participation(session: AsyncSession, user: User, offer: Offer) -> tuple[bool, str]:
+    existing = await get_offer_participation(session, user.id, offer.id)
+    if existing:
+        return False, "Вы уже участвуете в этом оффере."
+
+    participation = OfferParticipation(
+        user_id=user.id,
+        offer_id=offer.id,
+        status="started",
+        reward_given=Decimal(str(offer.reward_preview)),
+    )
+    session.add(participation)
+    user.balance += Decimal(str(offer.reward_preview))
+
+    await session.commit()
+    return True, f"Вы начали участие в оффере и получили {offer.reward_preview} монет."
+
+
+async def verify_offer_subscription(
+    session: AsyncSession,
+    user: User,
+    offer: Offer,
+    is_subscribed: bool,
+) -> tuple[bool, str]:
+    participation = await get_offer_participation(session, user.id, offer.id)
+    if not participation:
+        return False, "Сначала начните участие в оффере."
+
+    participation.checked_at = datetime.utcnow()
+
+    if is_subscribed:
+        if participation.status == "verified":
+            return True, "Подписка уже подтверждена ранее."
+
+        already_given = Decimal(str(participation.reward_given))
+        preview_reward = Decimal(str(offer.reward_preview))
+        final_reward = Decimal(str(offer.reward_final))
+
+        if already_given < (preview_reward + final_reward):
+            user.balance += final_reward
+            participation.reward_given = already_given + final_reward
+
+        participation.status = "verified"
+        await session.commit()
+        return True, f"Подписка подтверждена. Вам начислено {final_reward} монет."
+    else:
+        if participation.status == "verified":
+            penalty = Decimal(str(offer.penalty_unsubscribe))
+            user.balance = max(Decimal("0.00"), Decimal(str(user.balance)) - penalty)
+            participation.status = "penalized"
+            await session.commit()
+            return False, f"Вы отписались от канала. Применён штраф {penalty} монет."
+
+        await session.commit()
+        return False, "Подписка не подтверждена. Подпишитесь на канал и попробуйте снова."
 
 
 # ===== VIDEO =====
