@@ -115,31 +115,43 @@ async def send_next_pending_video(message: Message):
                 )
                 return
 
-            video_file_id = video.telegram_file_id
+            file_id = video.telegram_file_id
             video_id = video.id
             uploader_id = video.uploader_user_id
-            duration_text = format_duration(video.duration_seconds)
+            content_type = video.content_type
+            duration_text = format_duration(video.duration_seconds) if video.content_type == "video" else "\u2014"
             file_size_text = format_file_size(video.file_size)
 
-        text = (
-            f"\U0001f4cb <b>\u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f \u0432\u0438\u0434\u0435\u043e</b>\n\n"
-            f"ID \u0432\u0438\u0434\u0435\u043e: <b>{video_id}</b>\n"
+        content_label = "\U0001f5bc \u0424\u043e\u0442\u043e" if content_type == "photo" else "\U0001f3ac \u0412\u0438\u0434\u0435\u043e"
+
+        caption = (
+            f"\U0001f4cb <b>\u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f</b>\n\n"
+            f"\u0422\u0438\u043f: <b>{content_label}</b>\n"
+            f"ID: <b>{video_id}</b>\n"
             f"\u0410\u0432\u0442\u043e\u0440: <code>{uploader_id}</code>\n"
             f"\u0414\u043b\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c: <b>{duration_text}</b>\n"
             f"\u0420\u0430\u0437\u043c\u0435\u0440: <b>{file_size_text}</b>\n"
             f"\u0412 \u043e\u0447\u0435\u0440\u0435\u0434\u0438: <b>{pending_count}</b>"
         )
 
-        await message.answer_video(
-            video=video_file_id,
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=moderation_keyboard(video_id),
-        )
+        if content_type == "photo":
+            await message.answer_photo(
+                photo=file_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=moderation_keyboard(video_id),
+            )
+        else:
+            await message.answer_video(
+                video=file_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=moderation_keyboard(video_id),
+            )
     except Exception as e:
         logger.error(f"[SEND_PENDING] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u0438 \u0432\u0438\u0434\u0435\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.")
+        await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u0438 \u043a\u043e\u043d\u0442\u0435\u043d\u0442\u0430 \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.")
 
 
 @router.callback_query(F.data.startswith("mod_approve:"))
@@ -157,16 +169,18 @@ async def cb_approve(callback: CallbackQuery):
 
         if not video:
             await callback.message.edit_caption(
-                caption=f"\u26a0\ufe0f \u0412\u0438\u0434\u0435\u043e #{video_id} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
+                caption=f"\u26a0\ufe0f \u041a\u043e\u043d\u0442\u0435\u043d\u0442 #{video_id} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.",
                 reply_markup=admin_after_action_keyboard(),
             )
-            await callback.answer("\u0412\u0438\u0434\u0435\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+            await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e")
             return
+
+        reward_text = "0.1 монеты" if video.content_type == "photo" else "0.5 монеты"
 
         await callback.message.edit_caption(
             caption=(
-                f"\u2705 \u0412\u0438\u0434\u0435\u043e #{video_id} \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u043e.\n"
-                f"\u0410\u0432\u0442\u043e\u0440\u0443 \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u043e +0.5 \u043c\u043e\u043d\u0435\u0442\u044b."
+                f"\u2705 \u041a\u043e\u043d\u0442\u0435\u043d\u0442 #{video_id} \u043e\u0434\u043e\u0431\u0440\u0435\u043d.\n"
+                f"\u0410\u0432\u0442\u043e\u0440\u0443 \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u043e +{reward_text}."
             ),
             reply_markup=admin_after_action_keyboard(),
         )
@@ -175,18 +189,18 @@ async def cb_approve(callback: CallbackQuery):
             try:
                 await callback.bot.send_message(
                     uploader.telegram_id,
-                    f"\u2705 \u0412\u0430\u0448\u0435 \u0432\u0438\u0434\u0435\u043e #{video_id} \u043f\u0440\u043e\u0448\u043b\u043e \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
-                    f"\u0412\u0430\u043c \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u043e <b>0.5 \u043c\u043e\u043d\u0435\u0442\u044b</b>.",
+                    f"\u2705 \u0412\u0430\u0448 \u043a\u043e\u043d\u0442\u0435\u043d\u0442 #{video_id} \u043f\u0440\u043e\u0448\u0451\u043b \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
+                    f"\u0412\u0430\u043c \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u043e <b>{reward_text}</b>.",
                     parse_mode="HTML",
                 )
             except Exception as notify_error:
-                logger.warning(f"[APPROVE_NOTIFY] \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u0438\u0442\u044c \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f: {notify_error}")
+                logger.warning(f"[APPROVE_NOTIFY] \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u0438\u0442\u044c: {notify_error}")
 
         await callback.answer("\u041e\u0434\u043e\u0431\u0440\u0435\u043d\u043e")
     except Exception as e:
         logger.error(f"[APPROVE] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u0438", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("mod_reject:"))
@@ -223,15 +237,15 @@ async def cb_reject_reason(callback: CallbackQuery):
 
         if not video:
             await callback.message.edit_caption(
-                caption=f"\u26a0\ufe0f \u0412\u0438\u0434\u0435\u043e #{video_id} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
+                caption=f"\u26a0\ufe0f \u041a\u043e\u043d\u0442\u0435\u043d\u0442 #{video_id} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.",
                 reply_markup=admin_after_action_keyboard(),
             )
-            await callback.answer("\u0412\u0438\u0434\u0435\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+            await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e")
             return
 
         await callback.message.edit_caption(
             caption=(
-                f"\u274c \u0412\u0438\u0434\u0435\u043e #{video_id} \u043e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e.\n"
+                f"\u274c \u041a\u043e\u043d\u0442\u0435\u043d\u0442 #{video_id} \u043e\u0442\u043a\u043b\u043e\u043d\u0451\u043d.\n"
                 f"\u041f\u0440\u0438\u0447\u0438\u043d\u0430: {reason_text}"
             ),
             reply_markup=admin_after_action_keyboard(),
@@ -241,21 +255,19 @@ async def cb_reject_reason(callback: CallbackQuery):
             try:
                 await callback.bot.send_message(
                     uploader.telegram_id,
-                    f"\u274c \u0412\u0430\u0448\u0435 \u0432\u0438\u0434\u0435\u043e #{video_id} \u043d\u0435 \u043f\u0440\u043e\u0448\u043b\u043e \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
+                    f"\u274c \u0412\u0430\u0448 \u043a\u043e\u043d\u0442\u0435\u043d\u0442 #{video_id} \u043d\u0435 \u043f\u0440\u043e\u0448\u0451\u043b \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
                     f"\u041f\u0440\u0438\u0447\u0438\u043d\u0430: <b>{reason_text}</b>.",
                     parse_mode="HTML",
                 )
             except Exception as notify_error:
-                logger.warning(f"[REJECT_NOTIFY] \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u0438\u0442\u044c \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f: {notify_error}")
+                logger.warning(f"[REJECT_NOTIFY] \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u0438\u0442\u044c: {notify_error}")
 
         await callback.answer("\u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e")
     except Exception as e:
         logger.error(f"[REJECT_REASON] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u0438\u0438", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
-
-# ===== OFFERS ADMIN =====
 
 @router.callback_query(F.data == "admin_offers_menu")
 async def admin_offers_menu(callback: CallbackQuery):

@@ -13,8 +13,12 @@ from app.services import (
     agree_to_rules,
     get_user,
     save_video,
+    save_photo,
     get_random_video_for_user,
+    get_random_photo_for_user,
     record_view_and_charge,
+    record_photo_view,
+    count_photo_views_last_4h,
     rate_video,
     claim_daily_bonus,
     get_video_stats_for_user,
@@ -25,11 +29,14 @@ from app.services import (
     get_offer_by_id,
     start_offer_participation,
     verify_offer_subscription,
+    FREE_PHOTO_LIMIT_PER_4H,
 )
 from app.keyboards import (
     rules_keyboard,
     main_menu,
     video_rating_keyboard,
+    photo_actions_keyboard,
+    watch_choice_keyboard,
     admin_center_keyboard,
     buy_coins_keyboard,
     offers_list_keyboard,
@@ -448,14 +455,45 @@ async def offer_check(callback: CallbackQuery):
 
 @router.message(F.text == BTN_UPLOAD)
 async def upload_prompt(message: Message):
-    await message.answer("\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0432\u0438\u0434\u0435\u043e, \u043a\u043e\u0442\u043e\u0440\u043e\u0435 \u0445\u043e\u0442\u0438\u0442\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c.")
+    await message.answer(
+        "\u041c\u043e\u0436\u043d\u043e \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c:\n"
+        "\u2022 \u0432\u0438\u0434\u0435\u043e\n"
+        "\u2022 \u043a\u0440\u0443\u0436\u043e\u043a (video note)\n"
+        "\u2022 \u0444\u043e\u0442\u043e\n\n"
+        "\u041d\u0430\u0433\u0440\u0430\u0434\u0430 \u043f\u043e\u0441\u043b\u0435 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f:\n"
+        "\u2022 \u0432\u0438\u0434\u0435\u043e / \u043a\u0440\u0443\u0436\u043e\u043a: <b>0.5</b>\n"
+        "\u2022 \u0444\u043e\u0442\u043e: <b>0.1</b>",
+        parse_mode="HTML",
+    )
 
 
 @router.message(F.video)
 async def handle_video_upload(message: Message):
     if not message.from_user or not message.video:
         return
+    await _handle_video_like_upload(
+        message=message,
+        file_id=message.video.file_id,
+        file_unique_id=message.video.file_unique_id,
+        duration=message.video.duration,
+        file_size=message.video.file_size,
+    )
 
+
+@router.message(F.video_note)
+async def handle_video_note_upload(message: Message):
+    if not message.from_user or not message.video_note:
+        return
+    await _handle_video_like_upload(
+        message=message,
+        file_id=message.video_note.file_id,
+        file_unique_id=message.video_note.file_unique_id,
+        duration=message.video_note.duration,
+        file_size=message.video_note.file_size,
+    )
+
+
+async def _handle_video_like_upload(message: Message, file_id: str, file_unique_id: str, duration: int | None, file_size: int | None):
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
@@ -470,17 +508,17 @@ async def handle_video_upload(message: Message):
             video = await save_video(
                 session,
                 uploader=user,
-                file_id=message.video.file_id,
-                file_unique_id=message.video.file_unique_id,
-                duration=message.video.duration,
-                file_size=message.video.file_size,
+                file_id=file_id,
+                file_unique_id=file_unique_id,
+                duration=duration,
+                file_size=file_size,
             )
 
         if video is None:
             await message.answer("\u26a0\ufe0f \u042d\u0442\u043e \u0432\u0438\u0434\u0435\u043e \u0443\u0436\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u043b\u043e\u0441\u044c \u0440\u0430\u043d\u0435\u0435. \u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442.")
         else:
             await message.answer(
-                "\u2705 \u0412\u0438\u0434\u0435\u043e \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e \u0438 \u0441\u0440\u0430\u0437\u0443 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
+                "\u2705 \u0412\u0438\u0434\u0435\u043e \u0438\u043b\u0438 \u043a\u0440\u0443\u0436\u043e\u043a \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d \u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
                 "\u041f\u043e\u0441\u043b\u0435 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f \u0432\u044b \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u0435 <b>0.5 \u043c\u043e\u043d\u0435\u0442\u044b</b>.",
                 parse_mode="HTML",
             )
@@ -490,11 +528,68 @@ async def handle_video_upload(message: Message):
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0435 \u0432\u0438\u0434\u0435\u043e.")
 
 
-@router.message(F.text == BTN_WATCH)
-async def watch_video(message: Message):
-    if not message.from_user:
+@router.message(F.photo)
+async def handle_photo_upload(message: Message):
+    if not message.from_user or not message.photo:
         return
-    await _send_next_video(message, message.from_user.id)
+
+    try:
+        largest = message.photo[-1]
+
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 /start")
+                return
+
+            if not user.agreed_to_rules:
+                await message.answer("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u0438\u043c\u0438\u0442\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0435\u0440\u0435\u0437 /start")
+                return
+
+            photo = await save_photo(
+                session,
+                uploader=user,
+                file_id=largest.file_id,
+                file_unique_id=largest.file_unique_id,
+                file_size=largest.file_size,
+            )
+
+        if photo is None:
+            await message.answer("\u26a0\ufe0f \u042d\u0442\u043e \u0444\u043e\u0442\u043e \u0443\u0436\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u043b\u043e\u0441\u044c \u0440\u0430\u043d\u0435\u0435. \u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442.")
+        else:
+            await message.answer(
+                "\u2705 \u0424\u043e\u0442\u043e \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e \u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
+                "\u041f\u043e\u0441\u043b\u0435 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f \u0432\u044b \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u0435 <b>0.1 \u043c\u043e\u043d\u0435\u0442\u044b</b>.",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error(f"[PHOTO_UPLOAD] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0435 \u0444\u043e\u0442\u043e.")
+
+
+@router.message(F.text == BTN_WATCH)
+async def watch_menu(message: Message):
+    await message.answer(
+        "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435, \u0447\u0442\u043e \u0445\u043e\u0442\u0438\u0442\u0435 \u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c:",
+        reply_markup=watch_choice_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "watch_video_content")
+async def cb_watch_video_content(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+    await _send_next_video(callback.message, callback.from_user.id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "watch_photo_content")
+async def cb_watch_photo_content(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+    await _send_next_photo(callback.message, callback.from_user.id)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "watch_next")
@@ -502,6 +597,14 @@ async def cb_watch_next(callback: CallbackQuery):
     if not callback.from_user:
         return
     await _send_next_video(callback.message, callback.from_user.id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "watch_next_photo")
+async def cb_watch_next_photo(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+    await _send_next_photo(callback.message, callback.from_user.id)
     await callback.answer()
 
 
@@ -556,6 +659,50 @@ async def _send_next_video(message: Message, telegram_id: int):
         logger.error(f"[SEND_VIDEO] ERROR: {e}")
         logger.error(traceback.format_exc())
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u043e\u043a\u0430\u0437\u0435 \u0432\u0438\u0434\u0435\u043e.")
+
+
+async def _send_next_photo(message: Message, telegram_id: int):
+    try:
+        async with async_session() as session:
+            user = await get_user(session, telegram_id)
+            if not user:
+                await message.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 /start")
+                return
+
+            views_count = await count_photo_views_last_4h(session, user.id)
+            if views_count >= FREE_PHOTO_LIMIT_PER_4H:
+                await message.answer(
+                    f"\u26d4 \u041b\u0438\u043c\u0438\u0442 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e\u0433\u043e \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430 \u0444\u043e\u0442\u043e \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d.\n"
+                    f"\u041c\u043e\u0436\u043d\u043e \u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u043d\u0435 \u0431\u043e\u043b\u0435\u0435 {FREE_PHOTO_LIMIT_PER_4H} \u0444\u043e\u0442\u043e \u0437\u0430 4 \u0447\u0430\u0441\u0430."
+                )
+                return
+
+            photo = await get_random_photo_for_user(session, user)
+            if not photo:
+                await message.answer("\U0001f4ed \u0414\u043b\u044f \u0432\u0430\u0441 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043d\u043e\u0432\u044b\u0445 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u043d\u044b\u0445 \u0444\u043e\u0442\u043e.")
+                return
+
+            recorded = await record_photo_view(session, user, photo)
+            if not recorded:
+                await message.answer("\u274c \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0438\u0441\u0430\u0442\u044c \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u0444\u043e\u0442\u043e.")
+                return
+
+            remaining = FREE_PHOTO_LIMIT_PER_4H - (views_count + 1)
+            photo_file_id = photo.telegram_file_id
+
+        await message.answer_photo(
+            photo=photo_file_id,
+            caption=(
+                f"\U0001f5bc \u0424\u043e\u0442\u043e \u043f\u043e\u043a\u0430\u0437\u0430\u043d\u043e \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e.\n"
+                f"\u041e\u0441\u0442\u0430\u043b\u043e\u0441\u044c \u043b\u0438\u043c\u0438\u0442\u0430 \u043d\u0430 4 \u0447\u0430\u0441\u0430: <b>{remaining}</b>"
+            ),
+            parse_mode="HTML",
+            reply_markup=photo_actions_keyboard(),
+        )
+    except Exception as e:
+        logger.error(f"[SEND_PHOTO] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u043e\u043a\u0430\u0437\u0435 \u0444\u043e\u0442\u043e.")
 
 
 @router.callback_query(F.data.startswith("rate:"))
