@@ -48,13 +48,13 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 RULES_TEXT = (
-    "⚠️ <b>Правила использования</b>\n\n"
-    "1. Бот содержит контент 18+.\n"
-    "2. Используя бота, вы подтверждаете, что вам есть 18 лет.\n"
-    "3. Запрещено загружать контент с несовершеннолетними.\n"
-    "4. Запрещён контент с насилием.\n"
-    "5. Администрация имеет право ограничить доступ при нарушениях.\n\n"
-    "Нажмите кнопку ниже, чтобы принять правила."
+    "\u26a0\ufe0f <b>\u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u044f</b>\n\n"
+    "1. \u0411\u043e\u0442 \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u0442 \u043a\u043e\u043d\u0442\u0435\u043d\u0442 18+.\n"
+    "2. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u044f \u0431\u043e\u0442\u0430, \u0432\u044b \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0430\u0435\u0442\u0435, \u0447\u0442\u043e \u0432\u0430\u043c \u0435\u0441\u0442\u044c 18 \u043b\u0435\u0442.\n"
+    "3. \u0417\u0430\u043f\u0440\u0435\u0449\u0435\u043d\u043e \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u0442\u044c \u043a\u043e\u043d\u0442\u0435\u043d\u0442 \u0441 \u043d\u0435\u0441\u043e\u0432\u0435\u0440\u0448\u0435\u043d\u043d\u043e\u043b\u0435\u0442\u043d\u0438\u043c\u0438.\n"
+    "4. \u0417\u0430\u043f\u0440\u0435\u0449\u0451\u043d \u043a\u043e\u043d\u0442\u0435\u043d\u0442 \u0441 \u043d\u0430\u0441\u0438\u043b\u0438\u0435\u043c.\n"
+    "5. \u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u0438\u043c\u0435\u0435\u0442 \u043f\u0440\u0430\u0432\u043e \u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0438\u0442\u044c \u0434\u043e\u0441\u0442\u0443\u043f \u043f\u0440\u0438 \u043d\u0430\u0440\u0443\u0448\u0435\u043d\u0438\u044f\u0445.\n\n"
+    "\u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 \u043d\u0438\u0436\u0435, \u0447\u0442\u043e\u0431\u044b \u043f\u0440\u0438\u043d\u044f\u0442\u044c \u043f\u0440\u0430\u0432\u0438\u043b\u0430."
 )
 
 
@@ -93,15 +93,15 @@ async def cmd_start(message: Message, command: CommandObject):
                 return
 
             await message.answer(
-                f"С возвращением!\n\n"
-                f"💰 Баланс: <b>{user.balance}</b> монет",
+                f"\u0421 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u0438\u0435\u043c!\n\n"
+                f"\U0001f4b0 \u0411\u0430\u043b\u0430\u043d\u0441: <b>{user.balance}</b> \u043c\u043e\u043d\u0435\u0442",
                 parse_mode="HTML",
                 reply_markup=main_menu(is_admin=is_admin(message.from_user.id)),
             )
     except Exception as e:
         logger.error(f"[START] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("Произошла ошибка при запуске.")
+        await message.answer("\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0437\u0430\u043f\u0443\u0441\u043a\u0435.")
 
 
 @router.callback_query(F.data == "accept_rules")
@@ -113,10 +113,10 @@ async def cb_accept_rules(callback: CallbackQuery):
         async with async_session() as session:
             await agree_to_rules(session, callback.from_user.id)
 
-        await callback.message.edit_text("✅ Правила приняты.")
+        await callback.message.edit_text("\u2705 \u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u043f\u0440\u0438\u043d\u044f\u0442\u044b.")
         await callback.message.answer(
-            "Добро пожаловать!\n\n"
-            "🎁 Вам начислен стартовый баланс: <b>2</b> монеты",
+            "\u0414\u043e\u0431\u0440\u043e \u043f\u043e\u0436\u0430\u043b\u043e\u0432\u0430\u0442\u044c!\n\n"
+            "\U0001f381 \u0412\u0430\u043c \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d \u0441\u0442\u0430\u0440\u0442\u043e\u0432\u044b\u0439 \u0431\u0430\u043b\u0430\u043d\u0441: <b>2</b> \u043c\u043e\u043d\u0435\u0442\u044b",
             parse_mode="HTML",
             reply_markup=main_menu(is_admin=is_admin(callback.from_user.id)),
         )
@@ -124,7 +124,7 @@ async def cb_accept_rules(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"[ACCEPT_RULES] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("Ошибка", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
 @router.message(F.text == BTN_BONUS)
@@ -137,13 +137,13 @@ async def daily_bonus(message: Message):
             success, msg = await claim_daily_bonus(session, message.from_user.id)
 
         if success:
-            await message.answer(f"🏆 {msg}")
+            await message.answer(f"\U0001f3c6 {msg}")
         else:
-            await message.answer(f"⏳ {msg}")
+            await message.answer(f"\u23f3 {msg}")
     except Exception as e:
         logger.error(f"[BONUS] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("Не удалось получить бонус.")
+        await message.answer("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0431\u043e\u043d\u0443\u0441.")
 
 
 @router.message(F.text == BTN_PROFILE)
@@ -156,24 +156,24 @@ async def show_profile(message: Message):
             user = await get_user(session, message.from_user.id)
 
         if not user:
-            await message.answer("Пользователь не найден. Нажмите /start")
+            await message.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 /start")
             return
 
-        role = "Администратор" if is_admin(message.from_user.id) else "Пользователь"
+        role = "\u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440" if is_admin(message.from_user.id) else "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c"
 
         text = (
-            f"👤 <b>Профиль</b>\n\n"
-            f"🆔 Telegram ID: <code>{user.telegram_id}</code>\n"
-            f"💰 Баланс: <b>{user.balance}</b> монет\n"
-            f"🔗 Реферальный код: <code>{user.referral_code}</code>\n"
-            f"📊 Статус: {user.status}\n"
-            f"🛡 Роль: {role}"
+            f"\U0001f464 <b>\u041f\u0440\u043e\u0444\u0438\u043b\u044c</b>\n\n"
+            f"\U0001f194 Telegram ID: <code>{user.telegram_id}</code>\n"
+            f"\U0001f4b0 \u0411\u0430\u043b\u0430\u043d\u0441: <b>{user.balance}</b> \u043c\u043e\u043d\u0435\u0442\n"
+            f"\U0001f517 \u0420\u0435\u0444\u0435\u0440\u0430\u043b\u044c\u043d\u044b\u0439 \u043a\u043e\u0434: <code>{user.referral_code}</code>\n"
+            f"\U0001f4ca \u0421\u0442\u0430\u0442\u0443\u0441: {user.status}\n"
+            f"\U0001f6e1 \u0420\u043e\u043b\u044c: {role}"
         )
         await message.answer(text, parse_mode="HTML")
     except Exception as e:
         logger.error(f"[PROFILE] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("Не удалось открыть профиль.")
+        await message.answer("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c.")
 
 
 @router.message(F.text == BTN_REFERRALS)
@@ -185,7 +185,7 @@ async def referrals_info(message: Message):
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if not user:
-                await message.answer("Пользователь не найден. Нажмите /start")
+                await message.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 /start")
                 return
 
             referrals_count = await count_referrals(session, user.id)
@@ -194,27 +194,27 @@ async def referrals_info(message: Message):
         referral_link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}"
 
         text = (
-            f"👥 <b>Рефералы</b>\n\n"
-            f"🔗 Ваша ссылка:\n<code>{referral_link}</code>\n\n"
-            f"🧩 Ваш код: <code>{user.referral_code}</code>\n"
-            f"👤 Приглашено пользователей: <b>{referrals_count}</b>\n"
-            f"💰 Заработано по рефералам: <b>{user.referral_earnings}</b> монет\n\n"
-            f"За каждого приглашённого:\n"
-            f"• вам: <b>+2</b> монеты\n"
-            f"• ему: <b>+1</b> монета"
+            f"\U0001f465 <b>\u0420\u0435\u0444\u0435\u0440\u0430\u043b\u044b</b>\n\n"
+            f"\U0001f517 \u0412\u0430\u0448\u0430 \u0441\u0441\u044b\u043b\u043a\u0430:\n<code>{referral_link}</code>\n\n"
+            f"\U0001f9e9 \u0412\u0430\u0448 \u043a\u043e\u0434: <code>{user.referral_code}</code>\n"
+            f"\U0001f464 \u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439: <b>{referrals_count}</b>\n"
+            f"\U0001f4b0 \u0417\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e \u043f\u043e \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u0430\u043c: <b>{user.referral_earnings}</b> \u043c\u043e\u043d\u0435\u0442\n\n"
+            f"\u0417\u0430 \u043a\u0430\u0436\u0434\u043e\u0433\u043e \u043f\u0440\u0438\u0433\u043b\u0430\u0448\u0451\u043d\u043d\u043e\u0433\u043e:\n"
+            f"\u2022 \u0432\u0430\u043c: <b>+2</b> \u043c\u043e\u043d\u0435\u0442\u044b\n"
+            f"\u2022 \u0435\u043c\u0443: <b>+1</b> \u043c\u043e\u043d\u0435\u0442\u0430"
         )
         await message.answer(text, parse_mode="HTML")
     except Exception as e:
         logger.error(f"[REFERRALS] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("Не удалось открыть раздел рефералов.")
+        await message.answer("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0440\u0430\u0437\u0434\u0435\u043b \u0440\u0435\u0444\u0435\u0440\u0430\u043b\u043e\u0432.")
 
 
 @router.message(F.text == BTN_BUY)
 async def buy_coins(message: Message):
     await message.answer(
-        "💎 <b>Покупка монет через Telegram Stars</b>\n\n"
-        "Выберите пакет:",
+        "\U0001f48e <b>\u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u043c\u043e\u043d\u0435\u0442 \u0447\u0435\u0440\u0435\u0437 Telegram Stars</b>\n\n"
+        "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0430\u043a\u0435\u0442:",
         parse_mode="HTML",
         reply_markup=buy_coins_keyboard(),
     )
@@ -228,24 +228,24 @@ async def cb_buy_package(callback: CallbackQuery):
     package_key = callback.data.split(":", 1)[1]
     package = STARS_PACKAGES.get(package_key)
     if not package:
-        await callback.answer("Пакет не найден", show_alert=True)
+        await callback.answer("\u041f\u0430\u043a\u0435\u0442 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", show_alert=True)
         return
 
     try:
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             if not user:
-                await callback.answer("Пользователь не найден", show_alert=True)
+                await callback.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", show_alert=True)
                 return
 
             payment = await create_payment(session, user, package_key)
             if not payment:
-                await callback.answer("Не удалось создать платёж", show_alert=True)
+                await callback.answer("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u043f\u043b\u0430\u0442\u0451\u0436", show_alert=True)
                 return
 
         await callback.message.answer_invoice(
-            title=f"Покупка: {package['title']}",
-            description=f"Пополнение баланса на {package['coins']} монет",
+            title=f"\u041f\u043e\u043a\u0443\u043f\u043a\u0430: {package['title']}",
+            description=f"\u041f\u043e\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0431\u0430\u043b\u0430\u043d\u0441\u0430 \u043d\u0430 {package['coins']} \u043c\u043e\u043d\u0435\u0442",
             payload=payment.payload,
             provider_token="",
             currency="XTR",
@@ -256,7 +256,7 @@ async def cb_buy_package(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"[BUY] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("Ошибка оплаты", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u043f\u043b\u0430\u0442\u044b", show_alert=True)
 
 
 @router.pre_checkout_query()
@@ -280,14 +280,14 @@ async def successful_payment(message: Message):
             success, msg = await apply_successful_payment(session, payload)
 
         if success:
-            await message.answer(f"✅ Оплата прошла успешно.\n{msg}")
+            await message.answer(f"\u2705 \u041e\u043f\u043b\u0430\u0442\u0430 \u043f\u0440\u043e\u0448\u043b\u0430 \u0443\u0441\u043f\u0435\u0448\u043d\u043e.\n{msg}")
         else:
-            await message.answer(f"⚠️ Оплата прошла, но возникла проблема: {msg}")
+            await message.answer(f"\u26a0\ufe0f \u041e\u043f\u043b\u0430\u0442\u0430 \u043f\u0440\u043e\u0448\u043b\u0430, \u043d\u043e \u0432\u043e\u0437\u043d\u0438\u043a\u043b\u0430 \u043f\u0440\u043e\u0431\u043b\u0435\u043c\u0430: {msg}")
     except Exception as e:
         logger.error(f"[SUCCESS_PAYMENT] ERROR: {e}")
         logger.error(traceback.format_exc())
         await message.answer(
-            "Оплата прошла, но произошла ошибка при начислении монет. Напишите администратору."
+            "\u041e\u043f\u043b\u0430\u0442\u0430 \u043f\u0440\u043e\u0448\u043b\u0430, \u043d\u043e \u043f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u0438\u0438 \u043c\u043e\u043d\u0435\u0442. \u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0443."
         )
 
 
@@ -302,21 +302,21 @@ async def show_offers(message: Message):
 
         if not offers:
             await message.answer(
-                "🎁 <b>Офферы</b>\n\n"
-                "Сейчас активных офферов нет.",
+                "\U0001f381 <b>\u041e\u0444\u0444\u0435\u0440\u044b</b>\n\n"
+                "\u0421\u0435\u0439\u0447\u0430\u0441 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0445 \u043e\u0444\u0444\u0435\u0440\u043e\u0432 \u043d\u0435\u0442.",
                 parse_mode="HTML",
             )
             return
 
         await message.answer(
-            "🎁 <b>Доступные офферы</b>\n\nВыберите оффер:",
+            "\U0001f381 <b>\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043e\u0444\u0444\u0435\u0440\u044b</b>\n\n\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043e\u0444\u0444\u0435\u0440:",
             parse_mode="HTML",
             reply_markup=offers_list_keyboard(offers),
         )
     except Exception as e:
         logger.error(f"[OFFERS] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("Не удалось загрузить офферы.")
+        await message.answer("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043e\u0444\u0444\u0435\u0440\u044b.")
 
 
 @router.callback_query(F.data.startswith("offer_open:"))
@@ -331,16 +331,19 @@ async def offer_open(callback: CallbackQuery):
             offer = await get_offer_by_id(session, offer_id)
 
         if not offer or not offer.is_active:
-            await callback.answer("Оффер недоступен", show_alert=True)
+            await callback.answer("\u041e\u0444\u0444\u0435\u0440 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d", show_alert=True)
             return
 
         text = (
-            f"🎁 <b>{offer.title}</b>\n\n"
+            f"\U0001f381 <b>{offer.title}</b>\n\n"
             f"{offer.description}\n\n"
-            f"🔗 Канал: {offer.channel_url}\n"
-            f"💰 Награда за старт: <b>{offer.reward_preview}</b>\n"
-            f"💰 Награда за подтверждение: <b>{offer.reward_final}</b>\n"
-            f"⚠️ Штраф за отписку: <b>{offer.penalty_unsubscribe}</b>"
+            f"\U0001f517 \u041a\u0430\u043d\u0430\u043b: {offer.channel_url}\n"
+            f"\U0001f4b0 \u0412\u0441\u0435\u0433\u043e \u043c\u043e\u0436\u043d\u043e \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c: <b>40</b> \u043c\u043e\u043d\u0435\u0442\n"
+            f"\u2022 \u0441\u0440\u0430\u0437\u0443: <b>5</b>\n"
+            f"\u2022 \u0447\u0435\u0440\u0435\u0437 5 \u043c\u0438\u043d: <b>10</b>\n"
+            f"\u2022 \u0447\u0435\u0440\u0435\u0437 30 \u043c\u0438\u043d: <b>10</b>\n"
+            f"\u2022 \u0447\u0435\u0440\u0435\u0437 24 \u0447\u0430\u0441\u0430: <b>15</b>\n"
+            f"\u26a0\ufe0f \u0428\u0442\u0440\u0430\u0444 \u0437\u0430 \u043e\u0442\u043f\u0438\u0441\u043a\u0443: <b>40</b> \u043c\u043e\u043d\u0435\u0442"
         )
 
         await callback.message.answer(
@@ -352,7 +355,7 @@ async def offer_open(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"[OFFER_OPEN] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("Ошибка", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("offer_start:"))
@@ -368,21 +371,21 @@ async def offer_start(callback: CallbackQuery):
             offer = await get_offer_by_id(session, offer_id)
 
             if not user or not offer:
-                await callback.answer("Оффер не найден", show_alert=True)
+                await callback.answer("\u041e\u0444\u0444\u0435\u0440 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", show_alert=True)
                 return
 
             success, msg = await start_offer_participation(session, user, offer)
 
         if success:
-            await callback.message.answer(f"✅ {msg}")
+            await callback.message.answer(f"\u2705 {msg}")
         else:
-            await callback.message.answer(f"ℹ️ {msg}")
+            await callback.message.answer(f"\u2139\ufe0f {msg}")
 
         await callback.answer()
     except Exception as e:
         logger.error(f"[OFFER_START] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("Ошибка", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("offer_check:"))
@@ -398,15 +401,17 @@ async def offer_check(callback: CallbackQuery):
             offer = await get_offer_by_id(session, offer_id)
 
             if not user or not offer:
-                await callback.answer("Оффер не найден", show_alert=True)
+                await callback.answer("\u041e\u0444\u0444\u0435\u0440 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", show_alert=True)
                 return
 
-        # Проверка подписки через Telegram API
         subscribed = False
         error_text = None
 
         try:
-            chat_member = await callback.bot.get_chat_member(chat_id=offer.channel_url, user_id=callback.from_user.id)
+            chat_member = await callback.bot.get_chat_member(
+                chat_id=offer.channel_url,
+                user_id=callback.from_user.id,
+            )
             subscribed = chat_member.status in ("member", "administrator", "creator")
         except Exception as e:
             error_text = str(e)
@@ -416,34 +421,34 @@ async def offer_check(callback: CallbackQuery):
             offer = await get_offer_by_id(session, offer_id)
 
             if not user or not offer:
-                await callback.answer("Оффер не найден", show_alert=True)
+                await callback.answer("\u041e\u0444\u0444\u0435\u0440 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", show_alert=True)
                 return
 
             success, msg = await verify_offer_subscription(session, user, offer, subscribed)
 
         if error_text:
             await callback.message.answer(
-                "⚠️ Бот не смог надёжно проверить подписку.\n"
-                "Убедитесь, что бот имеет доступ к каналу.\n\n"
-                f"Технически: <code>{error_text}</code>",
+                "\u26a0\ufe0f \u0411\u043e\u0442 \u043d\u0435 \u0441\u043c\u043e\u0433 \u043d\u0430\u0434\u0451\u0436\u043d\u043e \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443.\n"
+                "\u0423\u0431\u0435\u0434\u0438\u0442\u0435\u0441\u044c, \u0447\u0442\u043e \u0431\u043e\u0442 \u0438\u043c\u0435\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f \u043a \u043a\u0430\u043d\u0430\u043b\u0443.\n\n"
+                f"\u0422\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438: <code>{error_text}</code>",
                 parse_mode="HTML",
             )
 
         if success:
-            await callback.message.answer(f"✅ {msg}")
+            await callback.message.answer(f"\u2705 {msg}")
         else:
-            await callback.message.answer(f"ℹ️ {msg}")
+            await callback.message.answer(f"\u2139\ufe0f {msg}")
 
         await callback.answer()
     except Exception as e:
         logger.error(f"[OFFER_CHECK] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("Ошибка проверки", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438", show_alert=True)
 
 
 @router.message(F.text == BTN_UPLOAD)
 async def upload_prompt(message: Message):
-    await message.answer("Отправьте видео, которое хотите загрузить.")
+    await message.answer("\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0432\u0438\u0434\u0435\u043e, \u043a\u043e\u0442\u043e\u0440\u043e\u0435 \u0445\u043e\u0442\u0438\u0442\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c.")
 
 
 @router.message(F.video)
@@ -455,11 +460,11 @@ async def handle_video_upload(message: Message):
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if not user:
-                await message.answer("Пользователь не найден. Нажмите /start")
+                await message.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 /start")
                 return
 
             if not user.agreed_to_rules:
-                await message.answer("Сначала примите правила через /start")
+                await message.answer("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u0438\u043c\u0438\u0442\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0435\u0440\u0435\u0437 /start")
                 return
 
             video = await save_video(
@@ -472,17 +477,17 @@ async def handle_video_upload(message: Message):
             )
 
         if video is None:
-            await message.answer("⚠️ Это видео уже загружалось ранее. Дубликат.")
+            await message.answer("\u26a0\ufe0f \u042d\u0442\u043e \u0432\u0438\u0434\u0435\u043e \u0443\u0436\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u043b\u043e\u0441\u044c \u0440\u0430\u043d\u0435\u0435. \u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442.")
         else:
             await message.answer(
-                "✅ Видео загружено и сразу отправлено на модерацию.\n"
-                "После одобрения вы получите <b>0.5 монеты</b>.",
+                "\u2705 \u0412\u0438\u0434\u0435\u043e \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e \u0438 \u0441\u0440\u0430\u0437\u0443 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e.\n"
+                "\u041f\u043e\u0441\u043b\u0435 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f \u0432\u044b \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u0435 <b>0.5 \u043c\u043e\u043d\u0435\u0442\u044b</b>.",
                 parse_mode="HTML",
             )
     except Exception as e:
         logger.error(f"[VIDEO_UPLOAD] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("Ошибка при загрузке видео.")
+        await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0435 \u0432\u0438\u0434\u0435\u043e.")
 
 
 @router.message(F.text == BTN_WATCH)
@@ -505,13 +510,13 @@ async def _send_next_video(message: Message, telegram_id: int):
         async with async_session() as session:
             user = await get_user(session, telegram_id)
             if not user:
-                await message.answer("Пользователь не найден. Нажмите /start")
+                await message.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 /start")
                 return
 
             if user.balance < Decimal(str(WATCH_COST)):
                 await message.answer(
-                    "❌ Недостаточно монет для просмотра.\n"
-                    "Получите бонус, пригласите друзей, выполните оффер или купите монеты."
+                    "\u274c \u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u043c\u043e\u043d\u0435\u0442 \u0434\u043b\u044f \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430.\n"
+                    "\u041f\u043e\u043b\u0443\u0447\u0438\u0442\u0435 \u0431\u043e\u043d\u0443\u0441, \u043f\u0440\u0438\u0433\u043b\u0430\u0441\u0438\u0442\u0435 \u0434\u0440\u0443\u0437\u0435\u0439, \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043e\u0444\u0444\u0435\u0440 \u0438\u043b\u0438 \u043a\u0443\u043f\u0438\u0442\u0435 \u043c\u043e\u043d\u0435\u0442\u044b."
                 )
                 return
 
@@ -520,21 +525,21 @@ async def _send_next_video(message: Message, telegram_id: int):
             video = await get_random_video_for_user(session, user)
             if not video:
                 if stats["total_approved"] == 0:
-                    await message.answer("📭 В базе пока нет одобренных видео.")
+                    await message.answer("\U0001f4ed \u0412 \u0431\u0430\u0437\u0435 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u043d\u044b\u0445 \u0432\u0438\u0434\u0435\u043e.")
                 elif stats["approved_not_own"] == 0:
                     await message.answer(
-                        "📭 Нет доступных видео для просмотра.\n"
-                        "Ваши собственные видео пользователю не показываются."
+                        "\U0001f4ed \u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0445 \u0432\u0438\u0434\u0435\u043e \u0434\u043b\u044f \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430.\n"
+                        "\u0412\u0430\u0448\u0438 \u0441\u043e\u0431\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0435 \u0432\u0438\u0434\u0435\u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044e \u043d\u0435 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e\u0442\u0441\u044f."
                     )
                 elif stats["available"] == 0:
-                    await message.answer("📭 Вы уже просмотрели все доступные вам видео.")
+                    await message.answer("\U0001f4ed \u0412\u044b \u0443\u0436\u0435 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043b\u0438 \u0432\u0441\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u0432\u0430\u043c \u0432\u0438\u0434\u0435\u043e.")
                 else:
-                    await message.answer("📭 Для вас пока нет новых видео.")
+                    await message.answer("\U0001f4ed \u0414\u043b\u044f \u0432\u0430\u0441 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043d\u043e\u0432\u044b\u0445 \u0432\u0438\u0434\u0435\u043e.")
                 return
 
             charged = await record_view_and_charge(session, user, video)
             if not charged:
-                await message.answer("❌ Не удалось списать монету за просмотр.")
+                await message.answer("\u274c \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043f\u0438\u0441\u0430\u0442\u044c \u043c\u043e\u043d\u0435\u0442\u0443 \u0437\u0430 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440.")
                 return
 
             new_balance = user.balance
@@ -543,14 +548,14 @@ async def _send_next_video(message: Message, telegram_id: int):
 
         await message.answer_video(
             video=video_file_id,
-            caption=f"💰 Списана 1 монета.\nТекущий баланс: <b>{new_balance}</b>",
+            caption=f"\U0001f4b0 \u0421\u043f\u0438\u0441\u0430\u043d\u0430 1 \u043c\u043e\u043d\u0435\u0442\u0430.\n\u0422\u0435\u043a\u0443\u0449\u0438\u0439 \u0431\u0430\u043b\u0430\u043d\u0441: <b>{new_balance}</b>",
             parse_mode="HTML",
             reply_markup=video_rating_keyboard(video_db_id),
         )
     except Exception as e:
         logger.error(f"[SEND_VIDEO] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await message.answer("Ошибка при показе видео.")
+        await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u043e\u043a\u0430\u0437\u0435 \u0432\u0438\u0434\u0435\u043e.")
 
 
 @router.callback_query(F.data.startswith("rate:"))
@@ -561,7 +566,7 @@ async def cb_rate_video(callback: CallbackQuery):
     try:
         parts = callback.data.split(":")
         if len(parts) != 3:
-            await callback.answer("Ошибка")
+            await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430")
             return
 
         video_id = int(parts[1])
@@ -570,16 +575,16 @@ async def cb_rate_video(callback: CallbackQuery):
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             if not user:
-                await callback.answer("Пользователь не найден")
+                await callback.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
                 return
 
             await rate_video(session, user.id, video_id, rating)
 
-        await callback.answer("Оценка сохранена")
+        await callback.answer("\u041e\u0446\u0435\u043d\u043a\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0430")
     except Exception as e:
         logger.error(f"[RATE] ERROR: {e}")
         logger.error(traceback.format_exc())
-        await callback.answer("Ошибка оценки", show_alert=True)
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0446\u0435\u043d\u043a\u0438", show_alert=True)
 
 
 @router.message(F.text == BTN_ADMIN)
@@ -588,11 +593,11 @@ async def open_admin_center(message: Message):
         return
 
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ У вас нет доступа к админ-центру.")
+        await message.answer("\u26d4 \u0423 \u0432\u0430\u0441 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u0430\u0434\u043c\u0438\u043d-\u0446\u0435\u043d\u0442\u0440\u0443.")
         return
 
     await message.answer(
-        "🛠 <b>Админ-центр</b>\n\nВыберите действие:",
+        "\U0001f6e0 <b>\u0410\u0434\u043c\u0438\u043d-\u0446\u0435\u043d\u0442\u0440</b>\n\n\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435:",
         parse_mode="HTML",
         reply_markup=admin_center_keyboard(),
     )
@@ -604,11 +609,11 @@ async def cb_admin_center(callback: CallbackQuery):
         return
 
     if not is_admin(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
+        await callback.answer("\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430", show_alert=True)
         return
 
     await callback.message.answer(
-        "🛠 <b>Админ-центр</b>\n\nВыберите действие:",
+        "\U0001f6e0 <b>\u0410\u0434\u043c\u0438\u043d-\u0446\u0435\u043d\u0442\u0440</b>\n\n\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435:",
         parse_mode="HTML",
         reply_markup=admin_center_keyboard(),
     )
