@@ -3,21 +3,39 @@ import traceback
 from decimal import Decimal
 
 from aiogram import Router, F
-from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery
+from aiogram.filters import CommandStart, CommandObject
+from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 
-from app.config import ADMINS, WATCH_COST
+from app.config import ADMINS, WATCH_COST, STARS_PACKAGES
 from app.db import async_session
-from app.keyboards import (
-    rules_keyboard, main_menu, video_rating_keyboard,
-    BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
-    BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
-    admin_center_keyboard,
-)
 from app.services import (
-    get_or_create_user, agree_to_rules, get_user,
-    save_video, get_random_video_for_user, record_view_and_charge,
-    rate_video, claim_daily_bonus,
+    get_or_create_user,
+    agree_to_rules,
+    get_user,
+    save_video,
+    get_random_video_for_user,
+    record_view_and_charge,
+    rate_video,
+    claim_daily_bonus,
+    get_video_stats_for_user,
+    count_referrals,
+    create_payment,
+    apply_successful_payment,
+)
+from app.keyboards import (
+    rules_keyboard,
+    main_menu,
+    video_rating_keyboard,
+    admin_center_keyboard,
+    buy_coins_keyboard,
+    BTN_WATCH,
+    BTN_UPLOAD,
+    BTN_PROFILE,
+    BTN_BUY,
+    BTN_OFFERS,
+    BTN_REFERRALS,
+    BTN_BONUS,
+    BTN_ADMIN,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,10 +57,15 @@ def is_admin(telegram_id: int) -> bool:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message):
-    logger.info(f"[START] user={message.from_user.id if message.from_user else '?'}")
+async def cmd_start(message: Message, command: CommandObject):
     if not message.from_user:
         return
+
+    referral_code = None
+    if command and command.args:
+        arg = command.args.strip()
+        if arg.startswith("ref_"):
+            referral_code = arg.replace("ref_", "", 1)
 
     try:
         async with async_session() as session:
@@ -52,10 +75,15 @@ async def cmd_start(message: Message):
                 username=message.from_user.username,
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
+                referral_code=referral_code,
             )
 
             if not user.agreed_to_rules:
-                await message.answer(RULES_TEXT, parse_mode="HTML", reply_markup=rules_keyboard())
+                await message.answer(
+                    RULES_TEXT,
+                    parse_mode="HTML",
+                    reply_markup=rules_keyboard(),
+                )
                 return
 
             await message.answer(
@@ -93,36 +121,6 @@ async def cb_accept_rules(callback: CallbackQuery):
         await callback.answer("Ошибка", show_alert=True)
 
 
-@router.message(F.text == BTN_PROFILE)
-async def show_profile(message: Message):
-    if not message.from_user:
-        return
-
-    try:
-        async with async_session() as session:
-            user = await get_user(session, message.from_user.id)
-
-        if not user:
-            await message.answer("Пользователь не найден. Нажмите /start")
-            return
-
-        user_type = "Администратор" if is_admin(message.from_user.id) else "Пользователь"
-
-        text = (
-            f"👤 <b>Профиль</b>\n\n"
-            f"🆔 Telegram ID: <code>{user.telegram_id}</code>\n"
-            f"💰 Баланс: <b>{user.balance}</b> монет\n"
-            f"🔗 Реферальный код: <code>{user.referral_code}</code>\n"
-            f"📊 Статус: {user.status}\n"
-            f"🛡 Роль: {user_type}"
-        )
-        await message.answer(text, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"[PROFILE] ERROR: {e}")
-        logger.error(traceback.format_exc())
-        await message.answer("Не удалось открыть профиль.")
-
-
 @router.message(F.text == BTN_BONUS)
 async def daily_bonus(message: Message):
     if not message.from_user:
@@ -140,6 +138,151 @@ async def daily_bonus(message: Message):
         logger.error(f"[BONUS] ERROR: {e}")
         logger.error(traceback.format_exc())
         await message.answer("Не удалось получить бонус.")
+
+
+@router.message(F.text == BTN_PROFILE)
+async def show_profile(message: Message):
+    if not message.from_user:
+        return
+
+    try:
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+
+        if not user:
+            await message.answer("Пользователь не найден. Нажмите /start")
+            return
+
+        role = "Администратор" if is_admin(message.from_user.id) else "Пользователь"
+
+        text = (
+            f"👤 <b>Профиль</b>\n\n"
+            f"🆔 Telegram ID: <code>{user.telegram_id}</code>\n"
+            f"💰 Баланс: <b>{user.balance}</b> монет\n"
+            f"🔗 Реферальный код: <code>{user.referral_code}</code>\n"
+            f"📊 Статус: {user.status}\n"
+            f"🛡 Роль: {role}"
+        )
+        await message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"[PROFILE] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await message.answer("Не удалось открыть профиль.")
+
+
+@router.message(F.text == BTN_REFERRALS)
+async def referrals_info(message: Message):
+    if not message.from_user:
+        return
+
+    try:
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("Пользователь не найден. Нажмите /start")
+                return
+
+            referrals_count = await count_referrals(session, user.id)
+
+        bot_username = (await message.bot.get_me()).username
+        referral_link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}"
+
+        text = (
+            f"👥 <b>Рефералы</b>\n\n"
+            f"🔗 Ваша ссылка:\n<code>{referral_link}</code>\n\n"
+            f"🧩 Ваш код: <code>{user.referral_code}</code>\n"
+            f"👤 Приглашено пользователей: <b>{referrals_count}</b>\n"
+            f"💰 Заработано по рефералам: <b>{user.referral_earnings}</b> монет\n\n"
+            f"За каждого приглашённого:\n"
+            f"• вам: <b>+2</b> монеты\n"
+            f"• ему: <b>+1</b> монета"
+        )
+        await message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"[REFERRALS] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await message.answer("Не удалось открыть раздел рефералов.")
+
+
+@router.message(F.text == BTN_BUY)
+async def buy_coins(message: Message):
+    await message.answer(
+        "💎 <b>Покупка монет через Telegram Stars</b>\n\n"
+        "Выберите пакет:",
+        parse_mode="HTML",
+        reply_markup=buy_coins_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("buy:"))
+async def cb_buy_package(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+
+    package_key = callback.data.split(":", 1)[1]
+    package = STARS_PACKAGES.get(package_key)
+    if not package:
+        await callback.answer("Пакет не найден", show_alert=True)
+        return
+
+    try:
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            if not user:
+                await callback.answer("Пользователь не найден", show_alert=True)
+                return
+
+            payment = await create_payment(session, user, package_key)
+            if not payment:
+                await callback.answer("Не удалось создать платёж", show_alert=True)
+                return
+
+        await callback.message.answer_invoice(
+            title=f"Покупка: {package['title']}",
+            description=f"Пополнение баланса на {package['coins']} монет",
+            payload=payment.payload,
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label=package["title"], amount=package["stars"])],
+        )
+
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"[BUY] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await callback.answer("Ошибка оплаты", show_alert=True)
+
+
+@router.pre_checkout_query()
+async def pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
+    try:
+        await pre_checkout_query.answer(ok=True)
+    except Exception as e:
+        logger.error(f"[PRE_CHECKOUT] ERROR: {e}")
+        logger.error(traceback.format_exc())
+
+
+@router.message(F.successful_payment)
+async def successful_payment(message: Message):
+    if not message.from_user or not message.successful_payment:
+        return
+
+    try:
+        payload = message.successful_payment.invoice_payload
+
+        async with async_session() as session:
+            success, msg = await apply_successful_payment(session, payload)
+
+        if success:
+            await message.answer(f"✅ Оплата прошла успешно.\n{msg}")
+        else:
+            await message.answer(f"⚠️ Оплата прошла, но возникла проблема: {msg}")
+    except Exception as e:
+        logger.error(f"[SUCCESS_PAYMENT] ERROR: {e}")
+        logger.error(traceback.format_exc())
+        await message.answer(
+            "Оплата прошла, но произошла ошибка при начислении монет. Напишите администратору."
+        )
 
 
 @router.message(F.text == BTN_UPLOAD)
@@ -212,13 +355,25 @@ async def _send_next_video(message: Message, telegram_id: int):
             if user.balance < Decimal(str(WATCH_COST)):
                 await message.answer(
                     "❌ Недостаточно монет для просмотра.\n"
-                    "Загрузите видео, получите бонус или купите монеты."
+                    "Получите бонус, пригласите друзей или купите монеты."
                 )
                 return
 
+            stats = await get_video_stats_for_user(session, user)
+
             video = await get_random_video_for_user(session, user)
             if not video:
-                await message.answer("📭 Для вас пока нет новых одобренных видео.")
+                if stats["total_approved"] == 0:
+                    await message.answer("📭 В базе пока нет одобренных видео.")
+                elif stats["approved_not_own"] == 0:
+                    await message.answer(
+                        "📭 Нет доступных видео для просмотра.\n"
+                        "Ваши собственные видео пользователю не показываются."
+                    )
+                elif stats["available"] == 0:
+                    await message.answer("📭 Вы уже просмотрели все доступные вам видео.")
+                else:
+                    await message.answer("📭 Для вас пока нет новых видео.")
                 return
 
             charged = await record_view_and_charge(session, user, video)
@@ -304,16 +459,11 @@ async def cb_admin_center(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message(F.text == BTN_BUY)
-async def buy_coins_stub(message: Message):
-    await message.answer("💎 Покупка монет скоро будет доступна.")
-
-
 @router.message(F.text == BTN_OFFERS)
 async def offers_stub(message: Message):
-    await message.answer("🎁 Рекламные офферы скоро появятся.")
-
-
-@router.message(F.text == BTN_REFERRALS)
-async def referrals_stub(message: Message):
-    await message.answer("👥 Реферальная система будет расширена в следующих обновлениях.") 
+    await message.answer(
+        "🎁 <b>Офферы</b>\n\n"
+        "Раздел уже готовится.\n"
+        "На следующем шаге мы добавим офферы, которые смогут создавать админы.",
+        parse_mode="HTML",
+    )
