@@ -10,7 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from app.config import BOT_TOKEN, WEBHOOK_URL, WEBHOOK_PATH, WEBHOOK_BASE
-from app.db import init_db
+from app.db import init_db, reset_db
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
 
@@ -29,7 +29,6 @@ webhook_keeper_task = None
 
 
 async def ensure_webhook():
-    """Check and restore webhook if it was deleted."""
     try:
         info = await bot.get_webhook_info()
         if info.url != WEBHOOK_URL:
@@ -43,7 +42,6 @@ async def ensure_webhook():
 
 
 async def webhook_keeper():
-    """Background task: check webhook every 30 seconds."""
     while True:
         await asyncio.sleep(30)
         await ensure_webhook()
@@ -52,36 +50,8 @@ async def webhook_keeper():
 async def handle_webhook(request: web.Request) -> web.Response:
     try:
         data = await request.json()
-
-        update_id = data.get("update_id", "?")
-        msg = data.get("message", {})
-        cb = data.get("callback_query", {})
-
-        if msg:
-            user = msg.get("from", {})
-            text = msg.get("text", "")
-            video = "VIDEO" if msg.get("video") else ""
-            content = text or video or "other"
-            logger.info(
-                f"[WEBHOOK] update={update_id} "
-                f"user={user.get('id', '?')} (@{user.get('username', '?')}) "
-                f"content={content}"
-            )
-        elif cb:
-            user = cb.get("from", {})
-            cb_data = cb.get("data", "")
-            logger.info(
-                f"[WEBHOOK] update={update_id} "
-                f"user={user.get('id', '?')} (@{user.get('username', '?')}) "
-                f"callback={cb_data}"
-            )
-        else:
-            logger.info(f"[WEBHOOK] update={update_id} type=unknown")
-
         update = Update.model_validate(data, context={"bot": bot})
         await dp.feed_update(bot, update)
-        logger.info(f"[WEBHOOK] update={update_id} processed OK")
-
     except Exception as e:
         logger.error(f"[WEBHOOK] ERROR: {e}")
         logger.error(traceback.format_exc())
@@ -101,6 +71,7 @@ async def handle_debug_webhook(request: web.Request) -> web.Response:
             "pending_update_count": info.pending_update_count,
             "last_error_date": str(info.last_error_date) if info.last_error_date else None,
             "last_error_message": info.last_error_message,
+            "webhook_base": WEBHOOK_BASE,
         })
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
@@ -112,6 +83,22 @@ async def handle_set_webhook(request: web.Request) -> web.Response:
         info = await bot.get_webhook_info()
         return web.json_response({"result": "webhook set", "url": info.url})
     except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_reset_db(request: web.Request) -> web.Response:
+    secret = request.query.get("secret", "")
+    expected = BOT_TOKEN[:10]
+
+    if secret != expected:
+        return web.json_response({"error": "forbidden"}, status=403)
+
+    try:
+        await reset_db()
+        return web.json_response({"result": "db reset complete"})
+    except Exception as e:
+        logger.error(f"[RESET_DB] ERROR: {e}")
+        logger.error(traceback.format_exc())
         return web.json_response({"error": str(e)}, status=500)
 
 
@@ -130,14 +117,12 @@ async def on_startup(app: web.Application):
         logger.error("WEBHOOK_BASE is empty!")
         return
 
-    # Set webhook
     await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=False)
     info = await bot.get_webhook_info()
     logger.info(f"Webhook confirmed: url={info.url}")
 
-    # Start background task to keep webhook alive
     webhook_keeper_task = asyncio.create_task(webhook_keeper())
-    logger.info("Webhook keeper started (checks every 30s)")
+    logger.info("Webhook keeper started")
 
 
 async def on_shutdown(app: web.Application):
@@ -161,6 +146,7 @@ def create_app() -> web.Application:
     app.router.add_get("/health", handle_health)
     app.router.add_get("/debug-webhook", handle_debug_webhook)
     app.router.add_get("/set-webhook", handle_set_webhook)
+    app.router.add_get("/reset-db", handle_reset_db)
 
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
