@@ -9,11 +9,13 @@ from aiogram.types import Message, CallbackQuery
 from app.db import async_session
 from app.services import (
     get_or_create_user, agree_to_rules, get_user,
-    save_video, get_random_video_for_user, record_view_and_charge, rate_video,
+    save_video, get_random_video_for_user, record_view_and_charge,
+    rate_video, claim_daily_bonus,
 )
 from app.keyboards import (
     rules_keyboard, main_menu, video_rating_keyboard,
-    BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY, BTN_OFFERS, BTN_REFERRALS,
+    BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY, BTN_OFFERS,
+    BTN_REFERRALS, BTN_BONUS,
 )
 from app.config import WATCH_COST
 
@@ -45,11 +47,10 @@ async def cmd_start(message: Message):
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
             )
-            logger.info(f"[START] user={message.from_user.id} created={created} agreed={user.agreed_to_rules}")
+            logger.info(f"[START] created={created} agreed={user.agreed_to_rules} balance={user.balance}")
 
             if not user.agreed_to_rules:
                 await message.answer(RULES_TEXT, parse_mode="HTML", reply_markup=rules_keyboard())
-                logger.info(f"[START] sent rules to user={message.from_user.id}")
                 return
 
             await message.answer(
@@ -57,7 +58,6 @@ async def cmd_start(message: Message):
                 parse_mode="HTML",
                 reply_markup=main_menu(),
             )
-            logger.info(f"[START] sent menu to user={message.from_user.id}")
     except Exception as e:
         logger.error(f"[START] ERROR: {e}")
         logger.error(traceback.format_exc())
@@ -80,9 +80,28 @@ async def cb_accept_rules(callback: CallbackQuery):
             reply_markup=main_menu(),
         )
         await callback.answer()
-        logger.info(f"[ACCEPT_RULES] OK user={callback.from_user.id}")
     except Exception as e:
         logger.error(f"[ACCEPT_RULES] ERROR: {e}")
+        logger.error(traceback.format_exc())
+
+
+@router.message(F.text == BTN_BONUS)
+async def daily_bonus(message: Message):
+    logger.info(f"[BONUS] user={message.from_user.id if message.from_user else '?'}")
+    if not message.from_user:
+        return
+
+    try:
+        async with async_session() as session:
+            success, msg = await claim_daily_bonus(session, message.from_user.id)
+
+        if success:
+            await message.answer(f"\U0001f3c6 {msg}", parse_mode="HTML")
+        else:
+            await message.answer(f"\u23f3 {msg}")
+        logger.info(f"[BONUS] user={message.from_user.id} success={success} msg={msg}")
+    except Exception as e:
+        logger.error(f"[BONUS] ERROR: {e}")
         logger.error(traceback.format_exc())
 
 
@@ -104,11 +123,10 @@ async def show_profile(message: Message):
             f"\U0001f464 <b>\u041f\u0440\u043e\u0444\u0438\u043b\u044c</b>\n\n"
             f"\U0001f194 Telegram ID: <code>{user.telegram_id}</code>\n"
             f"\U0001f4b0 \u0411\u0430\u043b\u0430\u043d\u0441: <b>{user.balance}</b> \u043c\u043e\u043d\u0435\u0442\n"
-            f"\U0001f517 \u0420\u0435\u0444\u0435\u0440\u0430\u043b\u044c\u043d\u044b\u0439 \u043a\u043e\u0434: <code>{user.referral_code}</code>\n"
+            f"\U0001f517 \u0420\u0435\u0444. \u043a\u043e\u0434: <code>{user.referral_code}</code>\n"
             f"\U0001f4ca \u0421\u0442\u0430\u0442\u0443\u0441: {user.status}"
         )
         await message.answer(text, parse_mode="HTML")
-        logger.info(f"[PROFILE] OK user={message.from_user.id} balance={user.balance}")
     except Exception as e:
         logger.error(f"[PROFILE] ERROR: {e}")
         logger.error(traceback.format_exc())
@@ -147,15 +165,14 @@ async def handle_video_upload(message: Message):
             )
 
         if video is None:
-            await message.answer("\u26a0\ufe0f \u042d\u0442\u043e \u0432\u0438\u0434\u0435\u043e \u0443\u0436\u0435 \u0431\u044b\u043b\u043e \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e \u0440\u0430\u043d\u0435\u0435 (\u0434\u0443\u0431\u043b\u0438\u043a\u0430\u0442).")
-            logger.info(f"[VIDEO_UPLOAD] duplicate user={message.from_user.id}")
+            await message.answer("\u26a0\ufe0f \u042d\u0442\u043e \u0432\u0438\u0434\u0435\u043e \u0443\u0436\u0435 \u0431\u044b\u043b\u043e \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e (\u0434\u0443\u0431\u043b\u0438\u043a\u0430\u0442).")
         else:
             await message.answer(
                 "\u2705 \u0412\u0438\u0434\u0435\u043e \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e \u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e!\n"
                 "\u0412\u044b \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u0435 <b>0.5 \u043c\u043e\u043d\u0435\u0442\u044b</b> \u043f\u043e\u0441\u043b\u0435 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f.",
                 parse_mode="HTML",
             )
-            logger.info(f"[VIDEO_UPLOAD] saved video_id={video.id} user={message.from_user.id}")
+            logger.info(f"[VIDEO_UPLOAD] saved video_id={video.id}")
     except Exception as e:
         logger.error(f"[VIDEO_UPLOAD] ERROR: {e}")
         logger.error(traceback.format_exc())
@@ -186,20 +203,16 @@ async def _send_next_video(message: Message, telegram_id: int):
                 await message.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 /start")
                 return
 
-            logger.info(f"[SEND_VIDEO] user={telegram_id} balance={user.balance}")
-
             if user.balance < Decimal(str(WATCH_COST)):
                 await message.answer(
-                    "\u274c \u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u043c\u043e\u043d\u0435\u0442 \u0434\u043b\u044f \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430.\n"
+                    "\u274c \u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u043c\u043e\u043d\u0435\u0442.\n"
                     "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u0432\u0438\u0434\u0435\u043e \u0438\u043b\u0438 \u043a\u0443\u043f\u0438\u0442\u0435 \u043c\u043e\u043d\u0435\u0442\u044b!",
                 )
-                logger.info(f"[SEND_VIDEO] not enough coins user={telegram_id}")
                 return
 
             video = await get_random_video_for_user(session, user)
             if not video:
-                await message.answer("\U0001f4ed \u0412 \u0431\u0430\u0437\u0435 \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u043d\u043e\u0432\u044b\u0445 \u0432\u0438\u0434\u0435\u043e \u0434\u043b\u044f \u0432\u0430\u0441.")
-                logger.info(f"[SEND_VIDEO] no videos for user={telegram_id}")
+                await message.answer("\U0001f4ed \u041d\u0435\u0442 \u043d\u043e\u0432\u044b\u0445 \u0432\u0438\u0434\u0435\u043e \u0434\u043b\u044f \u0432\u0430\u0441.")
                 return
 
             charged = await record_view_and_charge(session, user, video)
@@ -208,15 +221,16 @@ async def _send_next_video(message: Message, telegram_id: int):
                 return
 
             new_balance = user.balance
-            logger.info(f"[SEND_VIDEO] sending video_id={video.id} to user={telegram_id} new_balance={new_balance}")
+            video_file_id = video.telegram_file_id
+            video_db_id = video.id
 
         await message.answer_video(
-            video=video.telegram_file_id,
+            video=video_file_id,
             caption=f"\U0001f4b0 \u0421\u043f\u0438\u0441\u0430\u043d\u0430 1 \u043c\u043e\u043d\u0435\u0442\u0430. \u0411\u0430\u043b\u0430\u043d\u0441: <b>{new_balance}</b>",
             parse_mode="HTML",
-            reply_markup=video_rating_keyboard(video.id),
+            reply_markup=video_rating_keyboard(video_db_id),
         )
-        logger.info(f"[SEND_VIDEO] OK video sent to user={telegram_id}")
+        logger.info(f"[SEND_VIDEO] OK video={video_db_id} user={telegram_id} balance={new_balance}")
     except Exception as e:
         logger.error(f"[SEND_VIDEO] ERROR: {e}")
         logger.error(traceback.format_exc())
@@ -242,12 +256,10 @@ async def cb_rate_video(callback: CallbackQuery):
             if not user:
                 await callback.answer("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
                 return
-
             await rate_video(session, user.id, video_id, rating)
 
         emoji = "\U0001f44d" if rating == 1 else "\U0001f44e"
         await callback.answer(f"\u0412\u044b \u043e\u0446\u0435\u043d\u0438\u043b\u0438: {emoji}")
-        logger.info(f"[RATE] OK user={callback.from_user.id} video={video_id} rating={rating}")
     except Exception as e:
         logger.error(f"[RATE] ERROR: {e}")
         logger.error(traceback.format_exc())
@@ -255,17 +267,14 @@ async def cb_rate_video(callback: CallbackQuery):
 
 @router.message(F.text == BTN_BUY)
 async def buy_coins_stub(message: Message):
-    logger.info(f"[BUY] user={message.from_user.id if message.from_user else '?'}")
     await message.answer("\U0001f51c \u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u043c\u043e\u043d\u0435\u0442 \u0441\u043a\u043e\u0440\u043e \u0431\u0443\u0434\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.")
 
 
 @router.message(F.text == BTN_OFFERS)
 async def offers_stub(message: Message):
-    logger.info(f"[OFFERS] user={message.from_user.id if message.from_user else '?'}")
     await message.answer("\U0001f51c \u0420\u0435\u043a\u043b\u0430\u043c\u043d\u044b\u0435 \u043e\u0444\u0444\u0435\u0440\u044b \u0441\u043a\u043e\u0440\u043e \u043f\u043e\u044f\u0432\u044f\u0442\u0441\u044f.")
 
 
 @router.message(F.text == BTN_REFERRALS)
 async def referrals_stub(message: Message):
-    logger.info(f"[REFERRALS] user={message.from_user.id if message.from_user else '?'}")
-    await message.answer("\U0001f51c \u0420\u0435\u0444\u0435\u0440\u0430\u043b\u044c\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430 \u0431\u0443\u0434\u0435\u0442 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0430 \u0432 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0445 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f\u0445.")
+    await message.answer("\U0001f51c \u0420\u0435\u0444\u0435\u0440\u0430\u043b\u044c\u043d\u0430\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u0430 \u0431\u0443\u0434\u0435\u0442 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0430.")

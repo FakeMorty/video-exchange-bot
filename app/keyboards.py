@@ -9,6 +9,7 @@ BTN_PROFILE = "\U0001f464 \u041f\u0440\u043e\u0444\u0438\u043b\u044c"
 BTN_BUY = "\U0001f48e \u041a\u0443\u043f\u0438\u0442\u044c \u043c\u043e\u043d\u0435\u0442\u044b"
 BTN_OFFERS = "\U0001f381 \u041e\u0444\u0444\u0435\u0440\u044b"
 BTN_REFERRALS = "\U0001f465 \u0420\u0435\u0444\u0435\u0440\u0430\u043b\u044b"
+BTN_BONUS = "\U0001f3c6 \u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u044b\u0439 \u0431\u043e\u043d\u0443\u0441"
 
 
 def rules_keyboard() -> InlineKeyboardMarkup:
@@ -23,8 +24,9 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_WATCH), KeyboardButton(text=BTN_UPLOAD)],
-            [KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_BUY)],
-            [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
+            [KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_BONUS)],
+            [KeyboardButton(text=BTN_BUY), KeyboardButton(text=BTN_OFFERS)],
+            [KeyboardButton(text=BTN_REFERRALS)],
         ],
         resize_keyboard=True,
     )

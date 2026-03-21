@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select, func
@@ -7,8 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import User, Video, VideoView, VideoRating
 from app.config import STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD
 
+BONUS_AMOUNT = Decimal("2")
+BONUS_COOLDOWN_HOURS = 4
 
-# ──────────────────────────── USER ────────────────────────────
+
+# ===== USER =====
 
 async def get_or_create_user(
     session: AsyncSession,
@@ -56,7 +60,29 @@ async def agree_to_rules(session: AsyncSession, telegram_id: int) -> User | None
     return user
 
 
-# ──────────────────────────── VIDEO UPLOAD ────────────────────
+async def claim_daily_bonus(session: AsyncSession, telegram_id: int) -> tuple[bool, str]:
+    """Returns (success, message)."""
+    user = await get_user(session, telegram_id)
+    if not user:
+        return False, "User not found"
+
+    now = datetime.utcnow()
+
+    if user.last_bonus_at:
+        next_available = user.last_bonus_at + timedelta(hours=BONUS_COOLDOWN_HOURS)
+        if now < next_available:
+            remaining = next_available - now
+            hours = int(remaining.total_seconds() // 3600)
+            minutes = int((remaining.total_seconds() % 3600) // 60)
+            return False, f"Next bonus in {hours}h {minutes}m"
+
+    user.balance += BONUS_AMOUNT
+    user.last_bonus_at = now
+    await session.commit()
+    return True, f"+{BONUS_AMOUNT} coins! Balance: {user.balance}"
+
+
+# ===== VIDEO UPLOAD =====
 
 async def save_video(
     session: AsyncSession,
@@ -86,10 +112,15 @@ async def save_video(
     return video
 
 
-# ──────────────────────────── MODERATION ──────────────────────
+# ===== MODERATION =====
 
 async def get_next_pending_video(session: AsyncSession) -> Video | None:
-    stmt = select(Video).where(Video.status == "pending").order_by(Video.created_at.asc()).limit(1)
+    stmt = (
+        select(Video)
+        .where(Video.status == "pending")
+        .order_by(Video.created_at.asc())
+        .limit(1)
+    )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -102,15 +133,16 @@ async def approve_video(session: AsyncSession, video_id: int) -> Video | None:
         return None
 
     video.status = "approved"
-    await session.commit()
 
+    # credit uploader
     stmt2 = select(User).where(User.id == video.uploader_user_id)
     result2 = await session.execute(stmt2)
     uploader = result2.scalar_one_or_none()
     if uploader:
         uploader.balance += Decimal(str(UPLOAD_REWARD))
-        await session.commit()
 
+    await session.commit()
+    await session.refresh(video)
     return video
 
 
@@ -124,6 +156,7 @@ async def reject_video(session: AsyncSession, video_id: int, reason: str) -> Vid
     video.status = "rejected"
     video.rejection_reason = reason
     await session.commit()
+    await session.refresh(video)
     return video
 
 
@@ -133,7 +166,7 @@ async def count_pending_videos(session: AsyncSession) -> int:
     return result.scalar_one()
 
 
-# ──────────────────────────── WATCHING ────────────────────────
+# ===== WATCHING =====
 
 async def get_random_video_for_user(session: AsyncSession, user: User) -> Video | None:
     watched_subq = select(VideoView.video_id).where(VideoView.user_id == user.id)
@@ -163,7 +196,7 @@ async def record_view_and_charge(session: AsyncSession, user: User, video: Video
     return True
 
 
-# ──────────────────────────── RATING ──────────────────────────
+# ===== RATING =====
 
 async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating: int) -> None:
     stmt = select(VideoRating).where(
