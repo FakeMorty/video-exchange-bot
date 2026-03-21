@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# load_dotenv loads .env file ONLY if it exists, does NOT override real env vars
+load_dotenv(override=False)
 
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
 ADMINS: list[int] = [int(x.strip()) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
