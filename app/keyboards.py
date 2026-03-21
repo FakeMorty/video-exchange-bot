@@ -46,6 +46,14 @@ def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+def buy_coins_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="50 монет — 50 ⭐", callback_data="buy:stars_50")],
+        [InlineKeyboardButton(text="120 монет — 100 ⭐", callback_data="buy:stars_120")],
+        [InlineKeyboardButton(text="350 монет — 250 ⭐", callback_data="buy:stars_350")],
+    ])
+
+
 def admin_center_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="\U0001f4cb \u0412\u0437\u044f\u0442\u044c \u0432\u0438\u0434\u0435\u043e \u043d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044e", callback_data="admin_get_pending")],

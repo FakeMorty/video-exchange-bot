@@ -5,13 +5,14 @@ from decimal import Decimal
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import User, Video, VideoView, VideoRating
+from app.models import User, Video, VideoView, VideoRating, Payment
 from app.config import (
     STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
+    STARS_PACKAGES,
 )
 
-BONUS_AMOUNT = Decimal("2.00")
+BONUS_AMOUNT = Decimal("1.00")
 BONUS_COOLDOWN_HOURS = 4
 
 
@@ -149,13 +150,61 @@ async def claim_daily_bonus(session: AsyncSession, telegram_id: int) -> tuple[bo
     user.last_bonus_at = now
     await session.commit()
     await session.refresh(user)
-    return True, f"Вам начислено {BONUS_AMOUNT} монеты. Баланс: {user.balance}"
+    return True, f"Вам начислена {BONUS_AMOUNT} монета. Баланс: {user.balance}"
 
 
 async def count_referrals(session: AsyncSession, user_id: int) -> int:
     stmt = select(func.count(User.id)).where(User.referred_by_user_id == user_id)
     result = await session.execute(stmt)
     return result.scalar_one()
+
+
+# ===== PAYMENTS =====
+
+async def create_payment(session: AsyncSession, user: User, package_key: str) -> Payment | None:
+    package = STARS_PACKAGES.get(package_key)
+    if not package:
+        return None
+
+    payload = f"{package_key}:{user.telegram_id}:{uuid.uuid4().hex[:12]}"
+
+    payment = Payment(
+        user_id=user.id,
+        payload=payload,
+        stars_amount=package["stars"],
+        coins_amount=Decimal(str(package["coins"])),
+        status="pending",
+    )
+    session.add(payment)
+    await session.commit()
+    await session.refresh(payment)
+    return payment
+
+
+async def get_payment_by_payload(session: AsyncSession, payload: str) -> Payment | None:
+    stmt = select(Payment).where(Payment.payload == payload)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def apply_successful_payment(session: AsyncSession, payload: str) -> tuple[bool, str]:
+    payment = await get_payment_by_payload(session, payload)
+    if not payment:
+        return False, "Платёж не найден."
+
+    if payment.status == "paid":
+        return True, "Платёж уже обработан."
+
+    user = await get_user_by_id(session, payment.user_id)
+    if not user:
+        return False, "Пользователь не найден."
+
+    payment.status = "paid"
+    user.balance += payment.coins_amount
+
+    await session.commit()
+    await session.refresh(user)
+    return True, f"Начислено {payment.coins_amount} монет. Баланс: {user.balance}"
 
 
 # ===== VIDEO =====

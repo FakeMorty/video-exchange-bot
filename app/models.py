@@ -32,6 +32,7 @@ class User(Base):
     videos: Mapped[list["Video"]] = relationship(back_populates="uploader")
     views: Mapped[list["VideoView"]] = relationship(back_populates="user")
     ratings: Mapped[list["VideoRating"]] = relationship(back_populates="user")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="user")
 
 
 class Video(Base):
@@ -81,3 +82,46 @@ class VideoRating(Base):
 
     user: Mapped["User"] = relationship(back_populates="ratings")
     video: Mapped["Video"] = relationship(back_populates="ratings")
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    payload: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    stars_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    coins_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="payments")
+
+
+class Offer(Base):
+    __tablename__ = "offers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    channel_url: Mapped[str] = mapped_column(Text, nullable=False)
+    reward_preview: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=10)
+    reward_final: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=30)
+    penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=40)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class OfferParticipation(Base):
+    __tablename__ = "offer_participations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "offer_id", name="uq_user_offer"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="started")
+    reward_given: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
