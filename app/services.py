@@ -8,11 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import User, Video, VideoView, VideoRating
 from app.config import STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD
 
-BONUS_AMOUNT = Decimal("2")
+BONUS_AMOUNT = Decimal("2.00")
 BONUS_COOLDOWN_HOURS = 4
 
-
-# ===== USER =====
 
 async def get_or_create_user(
     session: AsyncSession,
@@ -30,6 +28,7 @@ async def get_or_create_user(
         user.first_name = first_name
         user.last_name = last_name
         await session.commit()
+        await session.refresh(user)
         return user, False
 
     user = User(
@@ -57,14 +56,14 @@ async def agree_to_rules(session: AsyncSession, telegram_id: int) -> User | None
     if user:
         user.agreed_to_rules = True
         await session.commit()
+        await session.refresh(user)
     return user
 
 
 async def claim_daily_bonus(session: AsyncSession, telegram_id: int) -> tuple[bool, str]:
-    """Returns (success, message)."""
     user = await get_user(session, telegram_id)
     if not user:
-        return False, "User not found"
+        return False, "Пользователь не найден."
 
     now = datetime.utcnow()
 
@@ -72,17 +71,17 @@ async def claim_daily_bonus(session: AsyncSession, telegram_id: int) -> tuple[bo
         next_available = user.last_bonus_at + timedelta(hours=BONUS_COOLDOWN_HOURS)
         if now < next_available:
             remaining = next_available - now
-            hours = int(remaining.total_seconds() // 3600)
-            minutes = int((remaining.total_seconds() % 3600) // 60)
-            return False, f"Next bonus in {hours}h {minutes}m"
+            total_seconds = int(remaining.total_seconds())
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            return False, f"Бонус будет доступен через {hours} ч. {minutes} мин."
 
     user.balance += BONUS_AMOUNT
     user.last_bonus_at = now
     await session.commit()
-    return True, f"+{BONUS_AMOUNT} coins! Balance: {user.balance}"
+    await session.refresh(user)
+    return True, f"Вам начислено {BONUS_AMOUNT} монеты. Баланс: {user.balance}"
 
-
-# ===== VIDEO UPLOAD =====
 
 async def save_video(
     session: AsyncSession,
@@ -112,8 +111,6 @@ async def save_video(
     return video
 
 
-# ===== MODERATION =====
-
 async def get_next_pending_video(session: AsyncSession) -> Video | None:
     stmt = (
         select(Video)
@@ -132,12 +129,15 @@ async def approve_video(session: AsyncSession, video_id: int) -> Video | None:
     if not video:
         return None
 
-    video.status = "approved"
+    if video.status != "pending":
+        return video
 
-    # credit uploader
-    stmt2 = select(User).where(User.id == video.uploader_user_id)
-    result2 = await session.execute(stmt2)
-    uploader = result2.scalar_one_or_none()
+    video.status = "approved"
+    video.rejection_reason = None
+
+    stmt_uploader = select(User).where(User.id == video.uploader_user_id)
+    result_uploader = await session.execute(stmt_uploader)
+    uploader = result_uploader.scalar_one_or_none()
     if uploader:
         uploader.balance += Decimal(str(UPLOAD_REWARD))
 
@@ -166,7 +166,17 @@ async def count_pending_videos(session: AsyncSession) -> int:
     return result.scalar_one()
 
 
-# ===== WATCHING =====
+async def count_approved_videos(session: AsyncSession) -> int:
+    stmt = select(func.count(Video.id)).where(Video.status == "approved")
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+async def count_rejected_videos(session: AsyncSession) -> int:
+    stmt = select(func.count(Video.id)).where(Video.status == "rejected")
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
 
 async def get_random_video_for_user(session: AsyncSession, user: User) -> Video | None:
     watched_subq = select(VideoView.video_id).where(VideoView.user_id == user.id)
@@ -189,14 +199,21 @@ async def record_view_and_charge(session: AsyncSession, user: User, video: Video
     if user.balance < Decimal(str(WATCH_COST)):
         return False
 
+    stmt = select(VideoView).where(
+        VideoView.user_id == user.id,
+        VideoView.video_id == video.id,
+    )
+    result = await session.execute(stmt)
+    existing_view = result.scalar_one_or_none()
+    if existing_view:
+        return False
+
     view = VideoView(user_id=user.id, video_id=video.id)
     session.add(view)
     user.balance -= Decimal(str(WATCH_COST))
     await session.commit()
     return True
 
-
-# ===== RATING =====
 
 async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating: int) -> None:
     stmt = select(VideoRating).where(
@@ -209,7 +226,6 @@ async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating:
     if existing:
         existing.rating = rating
     else:
-        r = VideoRating(user_id=user_id, video_id=video_id, rating=rating)
-        session.add(r)
+        session.add(VideoRating(user_id=user_id, video_id=video_id, rating=rating))
 
     await session.commit()
