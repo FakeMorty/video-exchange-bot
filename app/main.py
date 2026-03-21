@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import traceback
@@ -23,6 +24,29 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher()
 dp.include_router(admin_router)
 dp.include_router(user_router)
+
+webhook_keeper_task = None
+
+
+async def ensure_webhook():
+    """Check and restore webhook if it was deleted."""
+    try:
+        info = await bot.get_webhook_info()
+        if info.url != WEBHOOK_URL:
+            logger.warning(f"[WEBHOOK_KEEPER] Webhook lost! was='{info.url}' expected='{WEBHOOK_URL}'")
+            await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=False)
+            logger.info(f"[WEBHOOK_KEEPER] Webhook restored: {WEBHOOK_URL}")
+        return True
+    except Exception as e:
+        logger.error(f"[WEBHOOK_KEEPER] Error: {e}")
+        return False
+
+
+async def webhook_keeper():
+    """Background task: check webhook every 30 seconds."""
+    while True:
+        await asyncio.sleep(30)
+        await ensure_webhook()
 
 
 async def handle_webhook(request: web.Request) -> web.Response:
@@ -92,34 +116,37 @@ async def handle_set_webhook(request: web.Request) -> web.Response:
 
 
 async def on_startup(app: web.Application):
+    global webhook_keeper_task
+
     logger.info("=" * 50)
     logger.info("BOT STARTING")
-    logger.info(f"BOT_TOKEN present: {bool(BOT_TOKEN)}")
-    logger.info(f"WEBHOOK_BASE: {WEBHOOK_BASE}")
     logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
     logger.info("=" * 50)
 
-    logger.info("Initializing database...")
     await init_db()
     logger.info("Database OK")
 
-    if not WEBHOOK_URL or WEBHOOK_URL == "/webhook":
-        logger.error("WEBHOOK_URL is empty! Check WEBHOOK_BASE env variable.")
+    if not WEBHOOK_BASE:
+        logger.error("WEBHOOK_BASE is empty!")
         return
 
-    logger.info(f"Setting webhook: {WEBHOOK_URL}")
-    try:
-        await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=False)
-        info = await bot.get_webhook_info()
-        logger.info(f"Webhook confirmed: url={info.url}")
-    except Exception as e:
-        logger.error(f"Failed to set webhook: {e}")
-        logger.error(traceback.format_exc())
+    # Set webhook
+    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=False)
+    info = await bot.get_webhook_info()
+    logger.info(f"Webhook confirmed: url={info.url}")
+
+    # Start background task to keep webhook alive
+    webhook_keeper_task = asyncio.create_task(webhook_keeper())
+    logger.info("Webhook keeper started (checks every 30s)")
 
 
 async def on_shutdown(app: web.Application):
-    logger.info("Shutting down... (keeping webhook active)")
-    # DO NOT delete webhook - Render restarts will re-set it on startup
+    global webhook_keeper_task
+    logger.info("Shutting down... (NOT deleting webhook)")
+
+    if webhook_keeper_task:
+        webhook_keeper_task.cancel()
+
     try:
         await bot.session.close()
     except Exception as e:
@@ -143,6 +170,5 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
-    logger.info(f"Starting server on port {port}")
     app = create_app()
     web.run_app(app, host="0.0.0.0", port=port)
