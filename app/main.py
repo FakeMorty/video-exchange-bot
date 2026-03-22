@@ -71,6 +71,10 @@ async def handle_reset(request):
 async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
+    # Удаляем webhook чтобы polling работал
+    await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Webhook deleted, switching to polling")
+
     dp = Dispatcher()
     dp.include_router(user_router)
     dp.include_router(admin_router)
