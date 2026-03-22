@@ -61,17 +61,31 @@ def is_super_admin(telegram_id: int) -> bool:
     return telegram_id in ADMINS
 
 
+def extract_channel_id(channel_url: str) -> str:
+    """https://t.me/sni4ydaka -> @sni4ydaka"""
+    url = channel_url.strip().rstrip("/")
+    if url.startswith("https://t.me/"):
+        username = url.replace("https://t.me/", "", 1)
+        return f"@{username}"
+    if url.startswith("http://t.me/"):
+        username = url.replace("http://t.me/", "", 1)
+        return f"@{username}"
+    if url.startswith("t.me/"):
+        username = url.replace("t.me/", "", 1)
+        return f"@{username}"
+    if url.startswith("@"):
+        return url
+    return f"@{url}"
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
     if not message.from_user:
         return
     await state.clear()
-
     referral_code = None
     if command and command.args:
-        arg = command.args.strip()
-        referral_code = arg
-
+        referral_code = command.args.strip()
     try:
         async with async_session() as session:
             user, created = await get_or_create_user(
@@ -103,7 +117,10 @@ async def cb_accept_rules(callback: CallbackQuery):
             user = await get_user(session, callback.from_user.id)
             admin_flag = is_any_admin(callback.from_user.id, user)
         await callback.message.edit_text("\u2705 \u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u043f\u0440\u0438\u043d\u044f\u0442\u044b.")
-        await callback.message.answer("\u0414\u043e\u0431\u0440\u043e \u043f\u043e\u0436\u0430\u043b\u043e\u0432\u0430\u0442\u044c! \u0421\u0442\u0430\u0440\u0442\u043e\u0432\u044b\u0439 \u0431\u0430\u043b\u0430\u043d\u0441: <b>2</b>", parse_mode="HTML", reply_markup=main_menu(is_admin=admin_flag))
+        await callback.message.answer(
+            "\u0414\u043e\u0431\u0440\u043e \u043f\u043e\u0436\u0430\u043b\u043e\u0432\u0430\u0442\u044c! \u0421\u0442\u0430\u0440\u0442\u043e\u0432\u044b\u0439 \u0431\u0430\u043b\u0430\u043d\u0441: <b>2</b>",
+            parse_mode="HTML", reply_markup=main_menu(is_admin=admin_flag),
+        )
         await callback.answer()
     except Exception as e:
         logger.error(f"[ACCEPT] {e}")
@@ -182,8 +199,7 @@ async def buy_coins(message: Message):
         "\U0001f48e <b>\u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u043c\u043e\u043d\u0435\u0442</b>\n\n"
         f"\u041a\u0443\u0440\u0441: 1 Star = {STARS_TO_COINS_RATE} \u043c\u043e\u043d\u0435\u0442\n\n"
         "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0430\u043a\u0435\u0442 \u0438\u043b\u0438 \u0432\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0432\u043e\u044e \u0441\u0443\u043c\u043c\u0443:",
-        parse_mode="HTML",
-        reply_markup=buy_coins_keyboard(),
+        parse_mode="HTML", reply_markup=buy_coins_keyboard(),
     )
 
 
@@ -209,9 +225,7 @@ async def cb_buy_package(callback: CallbackQuery):
         await callback.message.answer_invoice(
             title=f"{package['coins']} \u043c\u043e\u043d\u0435\u0442",
             description=f"\u041f\u043e\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u043d\u0430 {package['coins']} \u043c\u043e\u043d\u0435\u0442",
-            payload=payment.payload,
-            provider_token="",
-            currency="XTR",
+            payload=payment.payload, provider_token="", currency="XTR",
             prices=[LabeledPrice(label=f"{package['coins']} \u043c\u043e\u043d\u0435\u0442", amount=package["stars"])],
         )
         await callback.answer()
@@ -226,10 +240,9 @@ async def cb_buy_custom(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(CustomPayState.waiting_amount)
     await callback.message.answer(
-        f"\U0001f4dd \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0437\u0432\u0451\u0437\u0434 (Stars).\n"
+        f"\U0001f4dd \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u043b-\u0432\u043e \u0437\u0432\u0451\u0437\u0434 (Stars).\n"
         f"\u041a\u0443\u0440\u0441: 1 Star = {STARS_TO_COINS_RATE} \u043c\u043e\u043d\u0435\u0442\n\n"
-        f"\u041c\u0438\u043d\u0438\u043c\u0443\u043c: 1 Star\n"
-        f"\u0414\u043b\u044f \u043e\u0442\u043c\u0435\u043d\u044b: /start",
+        f"\u041c\u0438\u043d: 1 Star\n/start \u0434\u043b\u044f \u043e\u0442\u043c\u0435\u043d\u044b",
     )
     await callback.answer()
 
@@ -255,9 +268,7 @@ async def custom_pay_amount(message: Message, state: FSMContext):
         await message.answer_invoice(
             title=f"{coins} \u043c\u043e\u043d\u0435\u0442",
             description=f"{stars} Stars \u2192 {coins} \u043c\u043e\u043d\u0435\u0442",
-            payload=payment.payload,
-            provider_token="",
-            currency="XTR",
+            payload=payment.payload, provider_token="", currency="XTR",
             prices=[LabeledPrice(label=f"{coins} \u043c\u043e\u043d\u0435\u0442", amount=stars)],
         )
     except Exception as e:
@@ -360,12 +371,18 @@ async def offer_check(callback: CallbackQuery):
             if not user or not offer:
                 await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", show_alert=True)
                 return
+
+        # --- FIX: convert URL to @username ---
+        chat_id = extract_channel_id(offer.channel_url)
         subscribed = False
+        check_error = None
         try:
-            cm = await callback.bot.get_chat_member(chat_id=offer.channel_url, user_id=callback.from_user.id)
+            cm = await callback.bot.get_chat_member(chat_id=chat_id, user_id=callback.from_user.id)
             subscribed = cm.status in ("member", "administrator", "creator")
-        except Exception:
-            pass
+        except Exception as e:
+            check_error = str(e)
+            logger.warning(f"[OFFER_CHECK] get_chat_member failed for {chat_id}: {e}")
+
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             offer = await get_offer_by_id(session, offer_id)
@@ -373,10 +390,20 @@ async def offer_check(callback: CallbackQuery):
                 await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", show_alert=True)
                 return
             success, msg = await verify_offer_subscription(session, user, offer, subscribed)
+
+        if check_error:
+            await callback.message.answer(
+                f"\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443.\n"
+                f"\u041a\u0430\u043d\u0430\u043b: <code>{chat_id}</code>\n"
+                f"\u041e\u0448\u0438\u0431\u043a\u0430: <code>{check_error}</code>",
+                parse_mode="HTML",
+            )
+
         await callback.message.answer(f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}")
         await callback.answer()
     except Exception as e:
         logger.error(f"[OFFER_CHECK] {e}")
+        logger.error(traceback.format_exc())
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
