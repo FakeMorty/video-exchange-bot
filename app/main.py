@@ -23,12 +23,15 @@ logger = logging.getLogger(__name__)
 
 
 async def tg_log(bot: Bot, text: str):
+    """Отправка лога в один или несколько чатов (через запятую в LOG_CHAT_ID)."""
     if not LOG_CHAT_ID:
         return
-    try:
-        await bot.send_message(int(LOG_CHAT_ID), text, parse_mode="HTML")
-    except Exception as e:
-        logger.warning(f"[TG_LOG_FAIL] {e}")
+    chat_ids = [s.strip() for s in LOG_CHAT_ID.split(",") if s.strip()]
+    for cid in chat_ids:
+        try:
+            await bot.send_message(int(cid), text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"[TG_LOG_FAIL] chat_id={cid}: {e}")
 
 
 async def offer_broadcaster(bot: Bot):
@@ -100,21 +103,16 @@ async def on_startup(app):
     logger.info("DB ready")
 
 
-# ──────────────────────────────────────────────
-#  Health / root — GET и HEAD
-# ──────────────────────────────────────────────
+# ── Health endpoints (GET + HEAD) ──
 async def handle_health(request):
-    """GET /health  и  GET /"""
     return web.Response(text="OK")
 
 
 async def handle_health_head(request):
-    """HEAD /health  и  HEAD /
-    Тело не нужно — возвращаем 200 с Content-Length=2 (как у 'OK')."""
     return web.Response(
         status=200,
         content_type="text/plain",
-        headers={"Content-Length": "2"},   # длина «OK»
+        headers={"Content-Length": "2"},
     )
 
 
@@ -141,12 +139,12 @@ async def main():
 
     app = web.Application()
 
-    # ── GET ──
+    # GET
     app.router.add_get("/", handle_health)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/reset-db", handle_reset)
 
-    # ── HEAD  (для UptimeRobot free-плана) ──
+    # HEAD (для UptimeRobot)
     app.router.add_head("/", handle_health_head)
     app.router.add_head("/health", handle_health_head)
 
