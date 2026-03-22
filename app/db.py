@@ -1,10 +1,22 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.config import DATABASE_URL
-from app.models import Base
 
-engine = create_async_engine(DATABASE_URL, echo=False)
+
+def _fix_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+engine = create_async_engine(_fix_url(DATABASE_URL), echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+# import Base here to re-export for main.py
+from app.models import Base
 
 
 async def init_db():
