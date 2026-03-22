@@ -32,3 +32,45 @@ STARS_PACKAGES = {
 }
 
 OFFER_BROADCAST_INTERVAL_HOURS = float(os.getenv("OFFER_BROADCAST_INTERVAL_HOURS", "2.5"))
+
+# === LEVELS ===
+LEVEL_XP_BASE = 100
+LEVEL_XP_MULTIPLIER = 1.5
+XP_PER_WATCH = 5
+XP_PER_UPLOAD = 20
+XP_PER_RATING = 2
+XP_PER_COMMENT = 3
+XP_PER_REACTION = 1
+XP_PER_GAME = 3
+
+# === VIP ===
+VIP_PRICE_STARS = 50
+VIP_DURATION_DAYS = 30
+VIP_BONUS_MULTIPLIER = 2.0
+VIP_FREE_PHOTOS = True
+
+# === GAMES ===
+LOOTBOX_COST = 5
+LOOTBOX_REWARDS = [
+    (0.30, 1),
+    (0.25, 3),
+    (0.20, 5),
+    (0.12, 10),
+    (0.08, 20),
+    (0.04, 50),
+    (0.01, 100),
+]
+
+DICE_MIN_BET = 1
+DICE_MAX_BET = 50
+
+# === QUESTS ===
+DAILY_QUESTS = [
+    {"type": "watch", "target": 3, "reward": 2, "desc": "\u041f\u043e\u0441\u043c\u043e\u0442\u0440\u0438 3 \u0432\u0438\u0434\u0435\u043e"},
+    {"type": "upload", "target": 1, "reward": 3, "desc": "\u0417\u0430\u0433\u0440\u0443\u0437\u0438 1 \u043a\u043e\u043d\u0442\u0435\u043d\u0442"},
+    {"type": "rate", "target": 3, "reward": 1, "desc": "\u041e\u0446\u0435\u043d\u0438 3 \u0432\u0438\u0434\u0435\u043e"},
+    {"type": "comment", "target": 2, "reward": 2, "desc": "\u041e\u0441\u0442\u0430\u0432\u044c 2 \u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u044f"},
+    {"type": "react", "target": 5, "reward": 1, "desc": "\u041f\u043e\u0441\u0442\u0430\u0432\u044c 5 \u0440\u0435\u0430\u043a\u0446\u0438\u0439"},
+]
+
+REACTION_TYPES = ["\U0001f525", "\u2764\ufe0f", "\U0001f602", "\U0001f44d", "\U0001f4af"]
