@@ -6,6 +6,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "")
+PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")
 
 ADMINS_RAW = os.getenv("ADMINS", "")
 ADMINS = []
@@ -31,6 +32,14 @@ STARS_PACKAGES = {
     "pack_50": {"stars": 50,  "coins": 100,  "title": "100 \u043c\u043e\u043d\u0435\u0442"},
 }
 
+# ===== MONEY PACKS =====
+MONEY_PACKAGES = {
+    "money_99": {"amount": 9900, "coins": 250, "title": "250 \u043c\u043e\u043d\u0435\u0442"},
+    "money_199": {"amount": 19900, "coins": 600, "title": "600 \u043c\u043e\u043d\u0435\u0442"},
+    "money_499": {"amount": 49900, "coins": 1800, "title": "1800 \u043c\u043e\u043d\u0435\u0442"},
+}
+# amount в копейках/центах для Telegram invoice
+
 OFFER_BROADCAST_INTERVAL_HOURS = float(os.getenv("OFFER_BROADCAST_INTERVAL_HOURS", "2.5"))
 
 # === LEVELS ===
@@ -46,8 +55,9 @@ XP_PER_GAME = 3
 # === VIP ===
 VIP_PRICE_STARS = 50
 VIP_DURATION_DAYS = 30
-VIP_BONUS_MULTIPLIER = 2.0
+VIP_BONUS_MULTIPLIER = 3.0
 VIP_FREE_PHOTOS = True
+VIP_WATCH_DISCOUNT = 0.5
 
 # === GAMES ===
 LOOTBOX_COST = 5
@@ -73,6 +83,11 @@ DAILY_QUESTS = [
     {"type": "react", "target": 5, "reward": 1, "desc": "\u041f\u043e\u0441\u0442\u0430\u0432\u044c 5 \u0440\u0435\u0430\u043a\u0446\u0438\u0439"},
 ]
 
+PREMIUM_DAILY_QUESTS = [
+    {"type": "watch", "target": 10, "reward": 8, "desc": "VIP: \u041f\u043e\u0441\u043c\u043e\u0442\u0440\u0438 10 \u0432\u0438\u0434\u0435\u043e"},
+    {"type": "comment", "target": 5, "reward": 5, "desc": "VIP: \u041e\u0441\u0442\u0430\u0432\u044c 5 \u043a\u043e\u043c\u043c\u0435\u043d\u0442\u043e\u0432"},
+]
+
 REACTION_TYPES = ["\U0001f525", "\u2764\ufe0f", "\U0001f602", "\U0001f44d", "\U0001f4af"]
 
 # === ANTI-SPAM COMMENTS ===
@@ -86,3 +101,7 @@ LOG_CHAT_ID = os.getenv("LOG_CHAT_ID", "")
 WEEKLY_TOP1_REWARD = float(os.getenv("WEEKLY_TOP1_REWARD", "25"))
 WEEKLY_TOP2_REWARD = float(os.getenv("WEEKLY_TOP2_REWARD", "15"))
 WEEKLY_TOP3_REWARD = float(os.getenv("WEEKLY_TOP3_REWARD", "10"))
+
+# === MONETIZATION ===
+PIN_OFFER_COST = float(os.getenv("PIN_OFFER_COST", "100"))
+BUMP_VIDEO_COST = float(os.getenv("BUMP_VIDEO_COST", "25"))

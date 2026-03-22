@@ -97,6 +97,13 @@ def extract_channel_id(channel_url: str) -> str:
     return f"@{url}"
 
 
+async def safe_edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None):
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=reply_markup)
+
+
 def format_level_text(user) -> str:
     lvl, current_xp, need_xp = calc_level_info(user.xp)
     vip_text = "\n\U0001f48e VIP: \u0430\u043a\u0442\u0438\u0432\u0435\u043d" if is_vip(user) else ""
@@ -471,11 +478,7 @@ async def offer_open(callback: CallbackQuery):
             f"\U0001f4b0 \u0412\u0441\u0435\u0433\u043e: <b>40</b>\n"
             f"\u26a0\ufe0f \u0428\u0442\u0440\u0430\u0444: <b>40</b>"
         )
-        await callback.message.answer(
-            text,
-            parse_mode="HTML",
-            reply_markup=offer_view_keyboard(offer.id, offer.channel_url),
-        )
+        await safe_edit_or_answer(callback, text, offer_view_keyboard(offer.id, offer.channel_url))
         await callback.answer()
     except Exception as e:
         logger.error(f"[OFFER_OPEN] {e}")
@@ -496,7 +499,10 @@ async def offer_start(callback: CallbackQuery):
                 return
             success, msg = await start_offer_participation(session, user, offer)
 
-        await callback.message.answer(f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}")
+        text = f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}"
+        if success:
+            text += "\n\n\u041f\u043e\u0434\u043f\u0438\u0448\u0438\u0442\u0435\u0441\u044c \u043d\u0430 \u043a\u0430\u043d\u0430\u043b \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c."
+        await safe_edit_or_answer(callback, text, offer_view_keyboard(offer_id, offer.channel_url))
         await callback.answer()
     except Exception as e:
         logger.error(f"[OFFER_START] {e}")
@@ -531,7 +537,11 @@ async def offer_check(callback: CallbackQuery):
             offer = await get_offer_by_id(session, offer_id)
             success, msg = await verify_offer_subscription(session, user, offer, subscribed)
 
-        await callback.message.answer(f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}")
+        await safe_edit_or_answer(
+            callback,
+            f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}",
+            offer_view_keyboard(offer.id, offer.channel_url),
+        )
         await callback.answer()
     except Exception as e:
         logger.error(f"[OFFER_CHECK] {e}")
@@ -561,13 +571,12 @@ async def game_lootbox(callback: CallbackQuery):
             if success:
                 await add_xp(session, user, XP_PER_GAME)
 
-        if success:
-            await callback.message.answer(
-                f"\U0001f4e6 \u0412\u044b \u043e\u0442\u043a\u0440\u044b\u043b\u0438 \u043b\u0443\u0442\u0431\u043e\u043a\u0441 \u0438 \u0432\u044b\u0438\u0433\u0440\u0430\u043b\u0438 <b>{reward}</b> \u043c\u043e\u043d\u0435\u0442!",
-                parse_mode="HTML",
-            )
-        else:
-            await callback.message.answer(f"\u26a0\ufe0f {msg}")
+        text = (
+            f"\U0001f4e6 \u0412\u044b \u043e\u0442\u043a\u0440\u044b\u043b\u0438 \u043b\u0443\u0442\u0431\u043e\u043a\u0441 \u0438 \u0432\u044b\u0438\u0433\u0440\u0430\u043b\u0438 <b>{reward}</b> \u043c\u043e\u043d\u0435\u0442!"
+            if success else
+            f"\u26a0\ufe0f {msg}"
+        )
+        await safe_edit_or_answer(callback, text, games_menu_keyboard())
         await callback.answer()
     except Exception as e:
         logger.error(f"[GAME_LOOTBOX] {e}")
@@ -577,7 +586,7 @@ async def game_lootbox(callback: CallbackQuery):
 @router.callback_query(F.data == "game_dice")
 async def game_dice_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GameState.waiting_dice_bet)
-    await callback.message.answer("\U0001f3b2 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043a\u043e\u0441\u0442\u0435\u0439 (1-50):")
+    await safe_edit_or_answer(callback, "\U0001f3b2 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043a\u043e\u0441\u0442\u0435\u0439 (1-50):")
     await callback.answer()
 
 
@@ -603,9 +612,10 @@ async def game_dice_process(message: Message, state: FSMContext):
                 f"\U0001f3b2 \u0412\u044b\u043f\u0430\u043b\u043e: <b>{roll}</b>\n"
                 f"\U0001f4b0 \u0412\u044b\u0438\u0433\u0440\u044b\u0448: <b>{win}</b>",
                 parse_mode="HTML",
+                reply_markup=games_menu_keyboard(),
             )
         else:
-            await message.answer(f"\u26a0\ufe0f {msg}")
+            await message.answer(f"\u26a0\ufe0f {msg}", reply_markup=games_menu_keyboard())
     except Exception as e:
         logger.error(f"[GAME_DICE] {e}")
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
@@ -616,7 +626,7 @@ async def game_dice_process(message: Message, state: FSMContext):
 @router.callback_query(F.data == "game_coinflip")
 async def game_coinflip_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GameState.waiting_coin_bet)
-    await callback.message.answer("\U0001fa99 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043c\u043e\u043d\u0435\u0442\u043a\u0438 (1-50):")
+    await safe_edit_or_answer(callback, "\U0001fa99 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043c\u043e\u043d\u0435\u0442\u043a\u0438 (1-50):")
     await callback.answer()
 
 
@@ -642,9 +652,10 @@ async def game_coinflip_process(message: Message, state: FSMContext):
             await message.answer(
                 f"\U0001fa99 {side_text}\n\U0001f4b0 \u0412\u044b\u0438\u0433\u0440\u044b\u0448: <b>{win}</b>",
                 parse_mode="HTML",
+                reply_markup=games_menu_keyboard(),
             )
         else:
-            await message.answer(f"\u26a0\ufe0f {msg}")
+            await message.answer(f"\u26a0\ufe0f {msg}", reply_markup=games_menu_keyboard())
     except Exception as e:
         logger.error(f"[GAME_COIN] {e}")
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
@@ -655,7 +666,7 @@ async def game_coinflip_process(message: Message, state: FSMContext):
 @router.callback_query(F.data == "game_guess")
 async def game_guess_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GameState.waiting_guess_number)
-    await callback.message.answer("\U0001f522 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043b\u043e 1-10:")
+    await safe_edit_or_answer(callback, "\U0001f522 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043b\u043e 1-10:")
     await callback.answer()
 
 
@@ -696,9 +707,10 @@ async def game_guess_bet(message: Message, state: FSMContext):
                 f"\u041e\u0442\u0432\u0435\u0442: <b>{answer}</b>\n"
                 f"\U0001f4b0 \u0412\u044b\u0438\u0433\u0440\u044b\u0448: <b>{win}</b>",
                 parse_mode="HTML",
+                reply_markup=games_menu_keyboard(),
             )
         else:
-            await message.answer(f"\u26a0\ufe0f {msg}")
+            await message.answer(f"\u26a0\ufe0f {msg}", reply_markup=games_menu_keyboard())
     except Exception as e:
         logger.error(f"[GAME_GUESS] {e}")
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
@@ -720,15 +732,16 @@ async def top_uploaders(callback: CallbackQuery):
             rows = await get_top_uploaders(session)
 
         if not rows:
-            await callback.message.answer("\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445.")
+            text = "\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445."
         else:
             lines = ["\U0001f3c6 <b>\u0422\u043e\u043f \u0437\u0430\u0433\u0440\u0443\u0437\u0447\u0438\u043a\u043e\u0432</b>\n"]
             for i, row in enumerate(rows, start=1):
                 username, first_name, telegram_id, cnt = row
                 name = f"@{username}" if username else (first_name or str(telegram_id))
                 lines.append(f"{i}. {name} \u2014 {cnt}")
-            await callback.message.answer("\n".join(lines), parse_mode="HTML")
+            text = "\n".join(lines)
 
+        await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
     except Exception as e:
         logger.error(f"[TOP_UPLOADERS] {e}")
@@ -742,15 +755,16 @@ async def top_viewers(callback: CallbackQuery):
             rows = await get_top_viewers(session)
 
         if not rows:
-            await callback.message.answer("\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445.")
+            text = "\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445."
         else:
             lines = ["\U0001f440 <b>\u0422\u043e\u043f \u0437\u0440\u0438\u0442\u0435\u043b\u0435\u0439</b>\n"]
             for i, row in enumerate(rows, start=1):
                 username, first_name, telegram_id, cnt = row
                 name = f"@{username}" if username else (first_name or str(telegram_id))
                 lines.append(f"{i}. {name} \u2014 {cnt}")
-            await callback.message.answer("\n".join(lines), parse_mode="HTML")
+            text = "\n".join(lines)
 
+        await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
     except Exception as e:
         logger.error(f"[TOP_VIEWERS] {e}")
@@ -764,14 +778,15 @@ async def top_levels(callback: CallbackQuery):
             users = await get_top_by_level(session)
 
         if not users:
-            await callback.message.answer("\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445.")
+            text = "\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445."
         else:
             lines = ["\U0001f4c8 <b>\u0422\u043e\u043f \u043f\u043e XP</b>\n"]
             for i, u in enumerate(users, start=1):
                 name = f"@{u.username}" if u.username else (u.first_name or str(u.telegram_id))
                 lines.append(f"{i}. {name} \u2014 lvl {u.level}, XP {u.xp}")
-            await callback.message.answer("\n".join(lines), parse_mode="HTML")
+            text = "\n".join(lines)
 
+        await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
     except Exception as e:
         logger.error(f"[TOP_LEVELS] {e}")
@@ -785,14 +800,15 @@ async def top_richest(callback: CallbackQuery):
             users = await get_top_richest(session)
 
         if not users:
-            await callback.message.answer("\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445.")
+            text = "\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445."
         else:
             lines = ["\U0001f4b0 <b>\u0422\u043e\u043f \u0431\u043e\u0433\u0430\u0447\u0435\u0439</b>\n"]
             for i, u in enumerate(users, start=1):
                 name = f"@{u.username}" if u.username else (u.first_name or str(u.telegram_id))
                 lines.append(f"{i}. {name} \u2014 {u.balance}")
-            await callback.message.answer("\n".join(lines), parse_mode="HTML")
+            text = "\n".join(lines)
 
+        await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
     except Exception as e:
         logger.error(f"[TOP_RICHEST] {e}")
@@ -832,8 +848,10 @@ async def quest_claim(callback: CallbackQuery):
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             success, msg = await claim_quest_reward(session, user, quest_id)
+            quests = await ensure_daily_quests(session, user.id)
 
-        await callback.message.answer(f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}")
+        text = f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}"
+        await safe_edit_or_answer(callback, text, quests_keyboard(quests))
         await callback.answer()
     except Exception as e:
         logger.error(f"[QUEST_CLAIM] {e}")
@@ -914,6 +932,7 @@ async def add_comment_process(message: Message, state: FSMContext):
                 await message.answer("/start")
                 await state.clear()
                 return
+
             await add_comment(session, user.id, video_id, text)
             await add_xp(session, user, XP_PER_COMMENT)
             await increment_quest(session, user.id, "comment")
@@ -1217,10 +1236,10 @@ async def cb_admin_center(callback: CallbackQuery):
             return
 
         sa = is_super_admin(callback.from_user.id)
-        await callback.message.answer(
+        await safe_edit_or_answer(
+            callback,
             "\U0001f6e0 <b>\u0410\u0434\u043c\u0438\u043d</b>",
-            parse_mode="HTML",
-            reply_markup=admin_center_keyboard(is_super_admin=sa),
+            admin_center_keyboard(is_super_admin=sa),
         )
         await callback.answer()
     except Exception as e:

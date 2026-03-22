@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import traceback
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -11,7 +12,10 @@ from app.config import BOT_TOKEN, OFFER_BROADCAST_INTERVAL_HOURS, LOG_CHAT_ID
 from app.db import engine, Base, async_session
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
-from app.services import get_active_offers, get_users_without_offer, reward_weekly_top_users
+from app.services import (
+    get_active_offers, get_users_without_offer,
+    reward_weekly_top_users,
+)
 from app.keyboards import offer_view_keyboard
 
 logging.basicConfig(level=logging.INFO)
@@ -62,10 +66,6 @@ async def weekly_rewards_worker(bot: Bot):
     while True:
         await asyncio.sleep(3600)
         try:
-            now = asyncio.get_event_loop().time()
-            # Просто раз в час проверка по UTC времени в Python не очень точна,
-            # поэтому делаем выплату в понедельник примерно в 00-01 UTC через datetime.
-            from datetime import datetime
             dt = datetime.utcnow()
             if dt.weekday() == 0 and dt.hour == 0:
                 async with async_session() as session:
@@ -84,7 +84,9 @@ async def weekly_rewards_worker(bot: Bot):
                             )
                         except Exception:
                             pass
+
                     await tg_log(bot, "\n".join(lines))
+
                 await asyncio.sleep(3700)
         except Exception as e:
             logger.error(f"[WEEKLY_REWARDS] {e}")

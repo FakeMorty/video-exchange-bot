@@ -14,16 +14,17 @@ from app.models import (
 from app.config import (
     STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
-    STARS_PACKAGES, STARS_TO_COINS_RATE,
+    STARS_PACKAGES, STARS_TO_COINS_RATE, MONEY_PACKAGES,
     LEVEL_XP_BASE, LEVEL_XP_MULTIPLIER,
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
-    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER,
+    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT,
     LOOTBOX_COST, LOOTBOX_REWARDS,
     DICE_MIN_BET, DICE_MAX_BET,
-    DAILY_QUESTS, REACTION_TYPES,
+    DAILY_QUESTS, PREMIUM_DAILY_QUESTS, REACTION_TYPES,
     COMMENTS_PER_10_MIN, COMMENT_MIN_INTERVAL_SEC,
     WEEKLY_TOP1_REWARD, WEEKLY_TOP2_REWARD, WEEKLY_TOP3_REWARD,
+    PIN_OFFER_COST, BUMP_VIDEO_COST,
 )
 
 BONUS_AMOUNT = Decimal("1.00")
@@ -89,6 +90,14 @@ def is_vip(user):
     if not user.vip_until:
         return False
     return user.vip_until > datetime.utcnow()
+
+
+def get_watch_cost_for_user(user):
+    base = Decimal(str(WATCH_COST))
+    if is_vip(user):
+        discounted = base * Decimal(str(VIP_WATCH_DISCOUNT))
+        return round_coin(discounted)
+    return base
 
 
 async def activate_vip(session, user):
@@ -230,7 +239,7 @@ async def claim_daily_bonus(session, telegram_id):
     await session.commit()
     await session.refresh(user)
 
-    vip_mark = " (VIP x2)" if is_vip(user) else ""
+    vip_mark = " (VIP bonus)" if is_vip(user) else ""
     return True, f"+{bonus}{vip_mark}. \u0411\u0430\u043b\u0430\u043d\u0441: {user.balance}"
 
 
@@ -266,6 +275,24 @@ async def create_custom_payment(session, user, stars):
         payload=payload,
         stars_amount=stars,
         coins_amount=coins,
+        status="pending",
+    )
+    session.add(p)
+    await session.commit()
+    await session.refresh(p)
+    return p
+
+
+async def create_money_payment(session, user, package_key):
+    pkg = MONEY_PACKAGES.get(package_key)
+    if not pkg:
+        return None
+    payload = f"money:{package_key}:{user.telegram_id}:{uuid.uuid4().hex[:12]}"
+    p = Payment(
+        user_id=user.id,
+        payload=payload,
+        stars_amount=0,
+        coins_amount=Decimal(str(pkg["coins"])),
         status="pending",
     )
     session.add(p)
@@ -338,6 +365,19 @@ async def toggle_offer_active(session, oid):
     await session.commit()
     await session.refresh(o)
     return o
+
+
+async def pin_offer_for_coins(session, user, offer_id):
+    offer = await get_offer_by_id(session, offer_id)
+    if not offer:
+        return False, "\u041e\u0444\u0444\u0435\u0440 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
+    cost = Decimal(str(PIN_OFFER_COST))
+    if user.balance < cost:
+        return False, "\u041d\u0435\u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u043c\u043e\u043d\u0435\u0442."
+    user.balance -= cost
+    offer.created_at = datetime.utcnow()
+    await session.commit()
+    return True, f"\u041e\u0444\u0444\u0435\u0440 #{offer.id} \u043f\u043e\u0434\u043d\u044f\u0442 \u0437\u0430 {cost} \u043c\u043e\u043d\u0435\u0442."
 
 
 async def start_offer_participation(session, user, offer):
@@ -439,6 +479,19 @@ async def save_photo(session, uploader, file_id, file_unique_id, file_size):
     return p
 
 
+async def bump_video_for_coins(session, user, video_id):
+    video = (await session.execute(select(Video).where(Video.id == video_id, Video.uploader_user_id == user.id))).scalar_one_or_none()
+    if not video:
+        return False, "\u0412\u0438\u0434\u0435\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e."
+    cost = Decimal(str(BUMP_VIDEO_COST))
+    if user.balance < cost:
+        return False, "\u041d\u0435\u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u043c\u043e\u043d\u0435\u0442."
+    user.balance -= cost
+    video.created_at = datetime.utcnow()
+    await session.commit()
+    return True, f"\u0412\u0438\u0434\u0435\u043e #{video.id} \u043f\u043e\u0434\u043d\u044f\u0442\u043e \u0437\u0430 {cost} \u043c\u043e\u043d\u0435\u0442."
+
+
 # ========== MODERATION ==========
 
 async def get_next_pending_video(session):
@@ -528,7 +581,8 @@ async def get_random_video_for_user(session, user):
 
 
 async def record_view_and_charge(session, user, video):
-    if user.balance < Decimal(str(WATCH_COST)):
+    cost = get_watch_cost_for_user(user)
+    if user.balance < cost:
         return False
 
     exists = (await session.execute(select(VideoView).where(
@@ -539,7 +593,7 @@ async def record_view_and_charge(session, user, video):
         return False
 
     session.add(VideoView(user_id=user.id, video_id=video.id))
-    user.balance -= Decimal(str(WATCH_COST))
+    user.balance -= cost
     await session.commit()
     return True
 
@@ -805,7 +859,7 @@ async def play_guess(session, user, guess, bet):
 
 # ========== QUESTS ==========
 
-async def ensure_daily_quests(session, user_id):
+async def ensure_daily_quests(session, user_id, user=None):
     today = datetime.utcnow().date()
     existing = list((await session.execute(
         select(DailyQuestProgress).where(
@@ -817,7 +871,11 @@ async def ensure_daily_quests(session, user_id):
         return existing
 
     quests = []
-    for q in DAILY_QUESTS:
+    all_quests = list(DAILY_QUESTS)
+    if user and is_vip(user):
+        all_quests.extend(PREMIUM_DAILY_QUESTS)
+
+    for q in all_quests:
         qp = DailyQuestProgress(
             user_id=user_id,
             quest_type=q["type"],
@@ -839,19 +897,17 @@ async def ensure_daily_quests(session, user_id):
 
 async def increment_quest(session, user_id, quest_type):
     today = datetime.utcnow().date()
-    q = (await session.execute(select(DailyQuestProgress).where(
+    q_all = list((await session.execute(select(DailyQuestProgress).where(
         DailyQuestProgress.user_id == user_id,
         DailyQuestProgress.quest_type == quest_type,
         DailyQuestProgress.quest_date == today,
         DailyQuestProgress.completed == False,
-    ))).scalar_one_or_none()
+    ))).scalars().all())
 
-    if not q:
-        return
-
-    q.progress += 1
-    if q.progress >= q.target:
-        q.completed = True
+    for q in q_all:
+        q.progress += 1
+        if q.progress >= q.target:
+            q.completed = True
 
     await session.commit()
 
