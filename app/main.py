@@ -45,7 +45,7 @@ async def offer_broadcaster(bot: Bot):
                             text = (
                                 f"\U0001f381 <b>{offer.title}</b>\n\n"
                                 f"{offer.description}\n\n"
-                                f"\U0001f4b0 \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>40</b> \u043c\u043e\u043d\u0435\u0442"
+                                f"\U0001f4b0 Награда: <b>40</b> монет"
                             )
                             await bot.send_message(
                                 user.telegram_id,
@@ -78,8 +78,8 @@ async def weekly_rewards_worker(bot: Bot):
                         try:
                             await bot.send_message(
                                 user.telegram_id,
-                                f"\U0001f3c6 \u0412\u044b \u043f\u043e\u043f\u0430\u043b\u0438 \u0432 weekly top-{idx}!\n"
-                                f"\U0001f4b0 \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>{reward}</b>",
+                                f"\U0001f3c6 Вы попали в weekly top-{idx}!\n"
+                                f"\U0001f4b0 Награда: <b>{reward}</b>",
                                 parse_mode="HTML",
                             )
                         except Exception:
@@ -100,8 +100,22 @@ async def on_startup(app):
     logger.info("DB ready")
 
 
+# ──────────────────────────────────────────────
+#  Health / root — GET и HEAD
+# ──────────────────────────────────────────────
 async def handle_health(request):
+    """GET /health  и  GET /"""
     return web.Response(text="OK")
+
+
+async def handle_health_head(request):
+    """HEAD /health  и  HEAD /
+    Тело не нужно — возвращаем 200 с Content-Length=2 (как у 'OK')."""
+    return web.Response(
+        status=200,
+        content_type="text/plain",
+        headers={"Content-Length": "2"},   # длина «OK»
+    )
 
 
 async def handle_reset(request):
@@ -126,9 +140,16 @@ async def main():
     dp.include_router(admin_router)
 
     app = web.Application()
+
+    # ── GET ──
     app.router.add_get("/", handle_health)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/reset-db", handle_reset)
+
+    # ── HEAD  (для UptimeRobot free-плана) ──
+    app.router.add_head("/", handle_health_head)
+    app.router.add_head("/health", handle_health_head)
+
     app.on_startup.append(on_startup)
 
     runner = web.AppRunner(app)
