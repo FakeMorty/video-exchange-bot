@@ -74,3 +74,15 @@ DAILY_QUESTS = [
 ]
 
 REACTION_TYPES = ["\U0001f525", "\u2764\ufe0f", "\U0001f602", "\U0001f44d", "\U0001f4af"]
+
+# === ANTI-SPAM COMMENTS ===
+COMMENTS_PER_10_MIN = int(os.getenv("COMMENTS_PER_10_MIN", "5"))
+COMMENT_MIN_INTERVAL_SEC = int(os.getenv("COMMENT_MIN_INTERVAL_SEC", "15"))
+
+# === TG LOGGING ===
+LOG_CHAT_ID = os.getenv("LOG_CHAT_ID", "")
+
+# === WEEKLY REWARDS ===
+WEEKLY_TOP1_REWARD = float(os.getenv("WEEKLY_TOP1_REWARD", "25"))
+WEEKLY_TOP2_REWARD = float(os.getenv("WEEKLY_TOP2_REWARD", "15"))
+WEEKLY_TOP3_REWARD = float(os.getenv("WEEKLY_TOP3_REWARD", "10"))

@@ -1,5 +1,6 @@
 import logging
 import traceback
+from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -7,7 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
-from app.config import ADMINS
+from app.config import ADMINS, LOG_CHAT_ID
 from app.db import async_session
 from app.services import (
     get_user, get_next_pending_video, approve_video, reject_video,
@@ -16,6 +17,7 @@ from app.services import (
     format_duration, format_file_size, get_user_by_id,
     create_offer, get_all_offers, toggle_offer_active,
     get_user_by_username, set_user_admin, get_db_admins,
+    get_admin_extended_stats,
 )
 from app.keyboards import (
     moderation_keyboard, rejection_reason_keyboard,
@@ -59,6 +61,15 @@ async def check_admin(tid: int) -> bool:
     return False
 
 
+async def send_admin_log(bot, text: str):
+    if not LOG_CHAT_ID:
+        return
+    try:
+        await bot.send_message(int(LOG_CHAT_ID), text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"[TG_LOG_FAIL] {e}")
+
+
 @router.message(Command("admin"))
 async def cmd_admin(message: Message):
     if not message.from_user:
@@ -68,7 +79,11 @@ async def cmd_admin(message: Message):
         await message.answer("\u26d4")
         return
     sa = is_super_admin(message.from_user.id)
-    await message.answer("\U0001f6e0 <b>\u0410\u0434\u043c\u0438\u043d</b>", parse_mode="HTML", reply_markup=admin_center_keyboard(is_super_admin=sa))
+    await message.answer(
+        "\U0001f6e0 <b>\u0410\u0434\u043c\u0438\u043d</b>",
+        parse_mode="HTML",
+        reply_markup=admin_center_keyboard(is_super_admin=sa),
+    )
 
 
 @router.callback_query(F.data == "admin_queue_info")
@@ -84,18 +99,83 @@ async def cb_queue(callback: CallbackQuery):
             p = await count_pending_videos(session)
             a = await count_approved_videos(session)
             r = await count_rejected_videos(session)
+
         sa = is_super_admin(callback.from_user.id)
-        await callback.message.answer(
+        text = (
             f"\U0001f4ca <b>\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430</b>\n\n"
             f"\u23f3 \u041d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u0438: <b>{p}</b>\n"
             f"\u2705 \u041e\u0434\u043e\u0431\u0440\u0435\u043d\u043e: <b>{a}</b>\n"
-            f"\u274c \u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e: <b>{r}</b>",
-            parse_mode="HTML", reply_markup=admin_center_keyboard(is_super_admin=sa),
+            f"\u274c \u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e: <b>{r}</b>"
         )
+
+        try:
+            await callback.message.edit_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=admin_center_keyboard(is_super_admin=sa),
+            )
+        except Exception:
+            await callback.message.answer(
+                text,
+                parse_mode="HTML",
+                reply_markup=admin_center_keyboard(is_super_admin=sa),
+            )
+
         await callback.answer()
     except Exception as e:
         logger.error(f"[QUEUE] {e}")
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_extended_stats")
+async def cb_extended_stats(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+    ok = await check_admin(callback.from_user.id)
+    if not ok:
+        await callback.answer("\u26d4", show_alert=True)
+        return
+
+    try:
+        async with async_session() as session:
+            stats = await get_admin_extended_stats(session)
+
+        text = (
+            "\U0001f4ca <b>\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430+</b>\n\n"
+            f"\U0001f465 \u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0438: <b>{stats['users']}</b>\n"
+            f"\U0001f48e VIP: <b>{stats['vip']}</b>\n"
+            f"\U0001f4ac \u041a\u043e\u043c\u043c\u0435\u043d\u0442\u044b: <b>{stats['comments']}</b>\n"
+            f"\u2764\ufe0f \u0420\u0435\u0430\u043a\u0446\u0438\u0438: <b>{stats['reactions']}</b>\n"
+            f"\U0001f3ae \u0418\u0433\u0440\u044b: <b>{stats['games']}</b>\n"
+            f"\U0001f381 \u041e\u0444\u0444\u0435\u0440\u044b: <b>{stats['offers']}</b>"
+        )
+
+        await callback.message.answer(text, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"[ADMIN_EXTENDED_STATS] {e}")
+        await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_logs")
+async def cb_admin_logs(callback: CallbackQuery):
+    if not callback.from_user:
+        return
+    if not await check_admin(callback.from_user.id):
+        await callback.answer("\u26d4", show_alert=True)
+        return
+
+    if not LOG_CHAT_ID:
+        await callback.answer("LOG_CHAT_ID \u043d\u0435 \u0437\u0430\u0434\u0430\u043d", show_alert=True)
+        return
+
+    text = (
+        "\U0001f4dc <b>\u041b\u043e\u0433-\u0446\u0435\u043d\u0442\u0440</b>\n\n"
+        f"\u041b\u043e\u0433\u0438 \u0438\u0434\u0443\u0442 \u0432 chat_id: <code>{LOG_CHAT_ID}</code>\n"
+        "\u0412\u0430\u0436\u043d\u044b\u0435 \u0441\u043e\u0431\u044b\u0442\u0438\u044f \u0431\u0443\u0434\u0443\u0442 \u043f\u0440\u0438\u0445\u043e\u0434\u0438\u0442\u044c \u0442\u0443\u0434\u0430."
+    )
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
 
 
 # ===== APPROVE ALL =====
@@ -111,10 +191,20 @@ async def cb_approve_all(callback: CallbackQuery):
     try:
         async with async_session() as session:
             count = await approve_all_pending(session)
+
         sa = is_super_admin(callback.from_user.id)
+        text = f"\u2705 \u041e\u0434\u043e\u0431\u0440\u0435\u043d\u043e \u0432\u0441\u0451: <b>{count}</b> \u0435\u0434."
         await callback.message.answer(
-            f"\u2705 \u041e\u0434\u043e\u0431\u0440\u0435\u043d\u043e \u0432\u0441\u0451: <b>{count}</b> \u0435\u0434.",
-            parse_mode="HTML", reply_markup=admin_center_keyboard(is_super_admin=sa),
+            text,
+            parse_mode="HTML",
+            reply_markup=admin_center_keyboard(is_super_admin=sa),
+        )
+        await send_admin_log(
+            callback.bot,
+            f"\U0001f7e2 <b>APPROVE ALL</b>\n"
+            f"\u0410\u0434\u043c\u0438\u043d: <code>{callback.from_user.id}</code>\n"
+            f"\u041e\u0434\u043e\u0431\u0440\u0435\u043d\u043e: <b>{count}</b>\n"
+            f"\u0412\u0440\u0435\u043c\u044f: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
         )
         await callback.answer()
     except Exception as e:
@@ -134,16 +224,16 @@ async def cb_pending(callback: CallbackQuery):
         await callback.answer("\u26d4", show_alert=True)
         return
     await callback.answer()
-    await _send_pending(callback.message)
+    await _send_pending(callback.message, callback.from_user.id)
 
 
-async def _send_pending(message):
+async def _send_pending(message, admin_id: int | None = None):
     try:
         async with async_session() as session:
             pc = await count_pending_videos(session)
             video = await get_next_pending_video(session)
             if not video:
-                await message.answer("\u2705 \u041f\u0443\u0441\u0442\u043e.", reply_markup=admin_center_keyboard())
+                await message.answer("\u2705 \u041f\u0443\u0441\u0442\u043e.", reply_markup=admin_center_keyboard(is_super_admin=admin_id in ADMINS if admin_id else False))
                 return
             fid = video.telegram_file_id
             vid = video.id
@@ -151,8 +241,17 @@ async def _send_pending(message):
             ct = video.content_type
             dur = format_duration(video.duration_seconds) if ct == "video" else "\u2014"
             sz = format_file_size(video.file_size)
+
         label = "\U0001f5bc \u0424\u043e\u0442\u043e" if ct == "photo" else "\U0001f3ac \u0412\u0438\u0434\u0435\u043e"
-        cap = f"\U0001f4cb <b>\u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f</b>\n\n{label} #{vid}\n\u0410\u0432\u0442\u043e\u0440: {uid}\n\u0414\u043b\u0438\u0442.: {dur}\n\u0420\u0430\u0437\u043c.: {sz}\n\u041e\u0447\u0435\u0440\u0435\u0434\u044c: {pc}"
+        cap = (
+            f"\U0001f4cb <b>\u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f</b>\n\n"
+            f"{label} #{vid}\n"
+            f"\u0410\u0432\u0442\u043e\u0440: {uid}\n"
+            f"\u0414\u043b\u0438\u0442.: {dur}\n"
+            f"\u0420\u0430\u0437\u043c.: {sz}\n"
+            f"\u041e\u0447\u0435\u0440\u0435\u0434\u044c: {pc}"
+        )
+
         if ct == "photo":
             await message.answer_photo(photo=fid, caption=cap, parse_mode="HTML", reply_markup=moderation_keyboard(vid))
         else:
@@ -175,17 +274,40 @@ async def cb_approve(callback: CallbackQuery):
         async with async_session() as session:
             video = await approve_video(session, vid)
             uploader = await get_user_by_id(session, video.uploader_user_id) if video else None
+
         if not video:
-            await callback.message.edit_caption(caption=f"#{vid} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.", reply_markup=admin_after_action_keyboard())
+            await callback.message.edit_caption(
+                caption=f"#{vid} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.",
+                reply_markup=admin_after_action_keyboard(),
+            )
             await callback.answer()
             return
+
         rw = "0.1" if video.content_type == "photo" else "0.5"
-        await callback.message.edit_caption(caption=f"\u2705 #{vid} +{rw}", reply_markup=admin_after_action_keyboard())
+        await callback.message.edit_caption(
+            caption=f"\u2705 #{vid} +{rw}",
+            reply_markup=admin_after_action_keyboard(),
+        )
+
         if uploader:
             try:
-                await callback.bot.send_message(uploader.telegram_id, f"\u2705 #{vid} \u043e\u0434\u043e\u0431\u0440\u0435\u043d. +<b>{rw}</b>", parse_mode="HTML")
+                await callback.bot.send_message(
+                    uploader.telegram_id,
+                    f"\u2705 #{vid} \u043e\u0434\u043e\u0431\u0440\u0435\u043d. +<b>{rw}</b>",
+                    parse_mode="HTML",
+                )
             except Exception:
                 pass
+
+        await send_admin_log(
+            callback.bot,
+            f"\U0001f7e2 <b>APPROVED</b>\n"
+            f"\u0410\u0434\u043c\u0438\u043d: <code>{callback.from_user.id}</code>\n"
+            f"\u041a\u043e\u043d\u0442\u0435\u043d\u0442: <b>#{vid}</b>\n"
+            f"\u0422\u0438\u043f: {video.content_type}\n"
+            f"\u0410\u0432\u0442\u043e\u0440: <code>{video.uploader_user_id}</code>"
+        )
+
         await callback.answer("\u041e\u0434\u043e\u0431\u0440\u0435\u043d\u043e")
     except Exception as e:
         logger.error(f"[APPROVE] {e}")
@@ -218,19 +340,43 @@ async def cb_reject_reason(callback: CallbackQuery):
         vid = int(parts[1])
         rk = parts[2]
         rt = REASON_MAP.get(rk, "\u0414\u0440\u0443\u0433\u043e\u0435")
+
         async with async_session() as session:
             video = await reject_video(session, vid, rt)
             uploader = await get_user_by_id(session, video.uploader_user_id) if video else None
+
         if not video:
-            await callback.message.edit_caption(caption=f"#{vid} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.", reply_markup=admin_after_action_keyboard())
+            await callback.message.edit_caption(
+                caption=f"#{vid} \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.",
+                reply_markup=admin_after_action_keyboard(),
+            )
             await callback.answer()
             return
-        await callback.message.edit_caption(caption=f"\u274c #{vid}: {rt}", reply_markup=admin_after_action_keyboard())
+
+        await callback.message.edit_caption(
+            caption=f"\u274c #{vid}: {rt}",
+            reply_markup=admin_after_action_keyboard(),
+        )
+
         if uploader:
             try:
-                await callback.bot.send_message(uploader.telegram_id, f"\u274c #{vid}: <b>{rt}</b>", parse_mode="HTML")
+                await callback.bot.send_message(
+                    uploader.telegram_id,
+                    f"\u274c #{vid}: <b>{rt}</b>",
+                    parse_mode="HTML",
+                )
             except Exception:
                 pass
+
+        await send_admin_log(
+            callback.bot,
+            f"\U0001f534 <b>REJECTED</b>\n"
+            f"\u0410\u0434\u043c\u0438\u043d: <code>{callback.from_user.id}</code>\n"
+            f"\u041a\u043e\u043d\u0442\u0435\u043d\u0442: <b>#{vid}</b>\n"
+            f"\u041f\u0440\u0438\u0447\u0438\u043d\u0430: <b>{rt}</b>\n"
+            f"\u0410\u0432\u0442\u043e\u0440: <code>{video.uploader_user_id}</code>"
+        )
+
         await callback.answer("\u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e")
     except Exception as e:
         logger.error(f"[REJECT] {e}")
@@ -247,7 +393,11 @@ async def offers_menu(callback: CallbackQuery):
     if not ok:
         await callback.answer("\u26d4", show_alert=True)
         return
-    await callback.message.answer("\U0001f381 <b>\u041e\u0444\u0444\u0435\u0440\u044b</b>", parse_mode="HTML", reply_markup=admin_offers_menu_keyboard())
+    await callback.message.answer(
+        "\U0001f381 <b>\u041e\u0444\u0444\u0435\u0440\u044b</b>",
+        parse_mode="HTML",
+        reply_markup=admin_offers_menu_keyboard(),
+    )
     await callback.answer()
 
 
@@ -284,7 +434,18 @@ async def oc_url(message: Message, state: FSMContext):
     try:
         async with async_session() as session:
             offer = await create_offer(session, data["title"], data["description"], message.text or "")
-        await message.answer(f"\u2705 \u041e\u0444\u0444\u0435\u0440 #{offer.id} \u0441\u043e\u0437\u0434\u0430\u043d.", reply_markup=admin_offers_menu_keyboard())
+
+        await message.answer(
+            f"\u2705 \u041e\u0444\u0444\u0435\u0440 #{offer.id} \u0441\u043e\u0437\u0434\u0430\u043d.",
+            reply_markup=admin_offers_menu_keyboard(),
+        )
+        await send_admin_log(
+            message.bot,
+            f"\U0001f381 <b>NEW OFFER</b>\n"
+            f"\u0410\u0434\u043c\u0438\u043d: <code>{message.from_user.id}</code>\n"
+            f"ID: <b>{offer.id}</b>\n"
+            f"\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435: {offer.title}"
+        )
     except Exception as e:
         logger.error(f"[OC] {e}")
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
@@ -325,11 +486,22 @@ async def offer_toggle(callback: CallbackQuery):
         oid = int(callback.data.split(":")[1])
         async with async_session() as session:
             offer = await toggle_offer_active(session, oid)
+
         if not offer:
             await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", show_alert=True)
             return
+
         st = "\u0432\u043a\u043b" if offer.is_active else "\u0432\u044b\u043a\u043b"
         await callback.message.answer(f"{offer.title} \u2014 {st}", reply_markup=admin_offers_menu_keyboard())
+
+        await send_admin_log(
+            callback.bot,
+            f"\U0001f4cc <b>OFFER TOGGLE</b>\n"
+            f"\u0410\u0434\u043c\u0438\u043d: <code>{callback.from_user.id}</code>\n"
+            f"ID: <b>{offer.id}</b>\n"
+            f"\u0421\u0442\u0430\u0442\u0443\u0441: <b>{st}</b>"
+        )
+
         await callback.answer()
     except Exception as e:
         logger.error(f"[OT] {e}")
@@ -345,7 +517,8 @@ async def cb_manage(callback: CallbackQuery):
         return
     await callback.message.edit_text(
         "\U0001f451 <b>\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u0430\u0434\u043c\u0438\u043d\u0430\u043c\u0438</b>",
-        parse_mode="HTML", reply_markup=admin_manage_keyboard(),
+        parse_mode="HTML",
+        reply_markup=admin_manage_keyboard(),
     )
 
 
@@ -410,6 +583,12 @@ async def add_proc(message: Message, state: FSMContext):
                 return
             await set_user_admin(session, user, True)
             await message.answer(f"\u2705 @{user.username} \u0442\u0435\u043f\u0435\u0440\u044c \u0430\u0434\u043c\u0438\u043d!")
+            await send_admin_log(
+                message.bot,
+                f"\U0001f7e2 <b>ADMIN ADDED</b>\n"
+                f"\u0418\u043d\u0438\u0446\u0438\u0430\u0442\u043e\u0440: <code>{message.from_user.id}</code>\n"
+                f"\u041d\u043e\u0432\u044b\u0439 \u0430\u0434\u043c\u0438\u043d: @{user.username or user.telegram_id}"
+            )
     except Exception as e:
         logger.error(f"[AA] {e}")
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
@@ -450,6 +629,12 @@ async def rem_proc(message: Message, state: FSMContext):
                 return
             await set_user_admin(session, user, False)
             await message.answer(f"\u2705 @{user.username} \u0443\u0434\u0430\u043b\u0451\u043d.")
+            await send_admin_log(
+                message.bot,
+                f"\U0001f534 <b>ADMIN REMOVED</b>\n"
+                f"\u0418\u043d\u0438\u0446\u0438\u0430\u0442\u043e\u0440: <code>{message.from_user.id}</code>\n"
+                f"\u0423\u0434\u0430\u043b\u0451\u043d\u043d\u044b\u0439 \u0430\u0434\u043c\u0438\u043d: @{user.username or user.telegram_id}"
+            )
     except Exception as e:
         logger.error(f"[AR] {e}")
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")

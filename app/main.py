@@ -7,15 +7,24 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
 
-from app.config import BOT_TOKEN, OFFER_BROADCAST_INTERVAL_HOURS
+from app.config import BOT_TOKEN, OFFER_BROADCAST_INTERVAL_HOURS, LOG_CHAT_ID
 from app.db import engine, Base, async_session
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
-from app.services import get_active_offers, get_users_without_offer
+from app.services import get_active_offers, get_users_without_offer, reward_weekly_top_users
 from app.keyboards import offer_view_keyboard
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+async def tg_log(bot: Bot, text: str):
+    if not LOG_CHAT_ID:
+        return
+    try:
+        await bot.send_message(int(LOG_CHAT_ID), text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"[TG_LOG_FAIL] {e}")
 
 
 async def offer_broadcaster(bot: Bot):
@@ -46,6 +55,41 @@ async def offer_broadcaster(bot: Bot):
         except Exception as e:
             logger.error(f"[OFFER_BROADCAST] {e}")
             logger.error(traceback.format_exc())
+            await tg_log(bot, f"\u26a0\ufe0f <b>OFFER BROADCAST ERROR</b>\n<code>{e}</code>")
+
+
+async def weekly_rewards_worker(bot: Bot):
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            now = asyncio.get_event_loop().time()
+            # Просто раз в час проверка по UTC времени в Python не очень точна,
+            # поэтому делаем выплату в понедельник примерно в 00-01 UTC через datetime.
+            from datetime import datetime
+            dt = datetime.utcnow()
+            if dt.weekday() == 0 and dt.hour == 0:
+                async with async_session() as session:
+                    rewarded = await reward_weekly_top_users(session)
+
+                if rewarded:
+                    lines = ["\U0001f3c6 <b>Weekly rewards paid</b>\n"]
+                    for idx, (user, reward) in enumerate(rewarded, start=1):
+                        lines.append(f"{idx}. <code>{user.telegram_id}</code> +{reward}")
+                        try:
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"\U0001f3c6 \u0412\u044b \u043f\u043e\u043f\u0430\u043b\u0438 \u0432 weekly top-{idx}!\n"
+                                f"\U0001f4b0 \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>{reward}</b>",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
+                    await tg_log(bot, "\n".join(lines))
+                await asyncio.sleep(3700)
+        except Exception as e:
+            logger.error(f"[WEEKLY_REWARDS] {e}")
+            logger.error(traceback.format_exc())
+            await tg_log(bot, f"\u26a0\ufe0f <b>WEEKLY REWARD ERROR</b>\n<code>{e}</code>")
 
 
 async def on_startup(app):
@@ -71,9 +115,9 @@ async def handle_reset(request):
 async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
-    # Удаляем webhook чтобы polling работал
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Webhook deleted, switching to polling")
+    await tg_log(bot, "\U0001f7e2 <b>Bot started</b>")
 
     dp = Dispatcher()
     dp.include_router(user_router)
@@ -93,6 +137,9 @@ async def main():
 
     asyncio.create_task(offer_broadcaster(bot))
     logger.info(f"Offer broadcaster started (every {OFFER_BROADCAST_INTERVAL_HOURS}h)")
+
+    asyncio.create_task(weekly_rewards_worker(bot))
+    logger.info("Weekly rewards worker started")
 
     await dp.start_polling(bot)
 

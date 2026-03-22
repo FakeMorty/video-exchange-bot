@@ -1,6 +1,6 @@
 import uuid
 import random
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 
 from sqlalchemy import select, func
@@ -22,6 +22,8 @@ from app.config import (
     LOOTBOX_COST, LOOTBOX_REWARDS,
     DICE_MIN_BET, DICE_MAX_BET,
     DAILY_QUESTS, REACTION_TYPES,
+    COMMENTS_PER_10_MIN, COMMENT_MIN_INTERVAL_SEC,
+    WEEKLY_TOP1_REWARD, WEEKLY_TOP2_REWARD, WEEKLY_TOP3_REWARD,
 )
 
 BONUS_AMOUNT = Decimal("1.00")
@@ -103,8 +105,10 @@ async def activate_vip(session, user):
 async def create_vip_payment(session, user):
     payload = f"vip:{user.telegram_id}:{uuid.uuid4().hex[:12]}"
     payment = Payment(
-        user_id=user.id, payload=payload,
-        stars_amount=VIP_PRICE_STARS, coins_amount=Decimal("0"),
+        user_id=user.id,
+        payload=payload,
+        stars_amount=VIP_PRICE_STARS,
+        coins_amount=Decimal("0"),
         status="pending",
     )
     session.add(payment)
@@ -170,13 +174,17 @@ async def get_or_create_user(session, telegram_id, username=None, first_name=Non
             referred_by = inviter.id
 
     user = User(
-        telegram_id=telegram_id, username=username,
-        first_name=first_name, last_name=last_name,
+        telegram_id=telegram_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
         balance=Decimal(str(STARTING_BALANCE)),
         referral_code=uuid.uuid4().hex[:8],
         referred_by_user_id=referred_by,
-        referral_earnings=Decimal("0"), is_admin=False,
-        xp=0, level=1,
+        referral_earnings=Decimal("0"),
+        is_admin=False,
+        xp=0,
+        level=1,
     )
     session.add(user)
     await session.flush()
@@ -204,6 +212,7 @@ async def claim_daily_bonus(session, telegram_id):
     user = await get_user(session, telegram_id)
     if not user:
         return False, "\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
+
     now = datetime.utcnow()
     if user.last_bonus_at:
         nxt = user.last_bonus_at + timedelta(hours=BONUS_COOLDOWN_HOURS)
@@ -211,13 +220,16 @@ async def claim_daily_bonus(session, telegram_id):
             rem = nxt - now
             h, m = int(rem.total_seconds()) // 3600, (int(rem.total_seconds()) % 3600) // 60
             return False, f"\u0427\u0435\u0440\u0435\u0437 {h}\u0447 {m}\u043c."
+
     bonus = BONUS_AMOUNT
     if is_vip(user):
         bonus = bonus * Decimal(str(VIP_BONUS_MULTIPLIER))
+
     user.balance += bonus
     user.last_bonus_at = now
     await session.commit()
     await session.refresh(user)
+
     vip_mark = " (VIP x2)" if is_vip(user) else ""
     return True, f"+{bonus}{vip_mark}. \u0411\u0430\u043b\u0430\u043d\u0441: {user.balance}"
 
@@ -233,7 +245,13 @@ async def create_payment(session, user, package_key):
     if not pkg:
         return None
     payload = f"{package_key}:{user.telegram_id}:{uuid.uuid4().hex[:12]}"
-    p = Payment(user_id=user.id, payload=payload, stars_amount=pkg["stars"], coins_amount=Decimal(str(pkg["coins"])), status="pending")
+    p = Payment(
+        user_id=user.id,
+        payload=payload,
+        stars_amount=pkg["stars"],
+        coins_amount=Decimal(str(pkg["coins"])),
+        status="pending",
+    )
     session.add(p)
     await session.commit()
     await session.refresh(p)
@@ -243,7 +261,13 @@ async def create_payment(session, user, package_key):
 async def create_custom_payment(session, user, stars):
     coins = round_coin(Decimal(str(stars)) * Decimal(str(STARS_TO_COINS_RATE)))
     payload = f"custom:{user.telegram_id}:{uuid.uuid4().hex[:12]}"
-    p = Payment(user_id=user.id, payload=payload, stars_amount=stars, coins_amount=coins, status="pending")
+    p = Payment(
+        user_id=user.id,
+        payload=payload,
+        stars_amount=stars,
+        coins_amount=coins,
+        status="pending",
+    )
     session.add(p)
     await session.commit()
     await session.refresh(p)
@@ -260,9 +284,11 @@ async def apply_successful_payment(session, payload):
         return False, "\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
     if payment.status == "paid":
         return True, "\u0423\u0436\u0435 \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u043d."
+
     user = await get_user_by_id(session, payment.user_id)
     if not user:
         return False, "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
+
     payment.status = "paid"
     if payload.startswith("vip:"):
         await activate_vip(session, user)
@@ -277,9 +303,15 @@ async def apply_successful_payment(session, payload):
 # ========== OFFERS ==========
 
 async def create_offer(session, title, description, channel_url):
-    o = Offer(title=title, description=description, channel_url=channel_url,
-              reward_preview=OFFER_STEP_1_REWARD, reward_final=Decimal("35"),
-              penalty_unsubscribe=OFFER_PENALTY, is_active=True)
+    o = Offer(
+        title=title,
+        description=description,
+        channel_url=channel_url,
+        reward_preview=OFFER_STEP_1_REWARD,
+        reward_final=Decimal("35"),
+        penalty_unsubscribe=OFFER_PENALTY,
+        is_active=True,
+    )
     session.add(o)
     await session.commit()
     await session.refresh(o)
@@ -310,11 +342,21 @@ async def toggle_offer_active(session, oid):
 
 async def start_offer_participation(session, user, offer):
     existing = (await session.execute(select(OfferParticipation).where(
-        OfferParticipation.user_id == user.id, OfferParticipation.offer_id == offer.id
+        OfferParticipation.user_id == user.id,
+        OfferParticipation.offer_id == offer.id,
     ))).scalar_one_or_none()
+
     if existing:
         return False, "\u0423\u0436\u0435 \u0443\u0447\u0430\u0441\u0442\u0432\u0443\u0435\u0442\u0435."
-    session.add(OfferParticipation(user_id=user.id, offer_id=offer.id, status="started", reward_given=OFFER_STEP_1_REWARD))
+
+    session.add(
+        OfferParticipation(
+            user_id=user.id,
+            offer_id=offer.id,
+            status="started",
+            reward_given=OFFER_STEP_1_REWARD,
+        )
+    )
     user.balance += OFFER_STEP_1_REWARD
     await session.commit()
     return True, f"+{OFFER_STEP_1_REWARD} \u043c\u043e\u043d\u0435\u0442."
@@ -322,39 +364,56 @@ async def start_offer_participation(session, user, offer):
 
 async def verify_offer_subscription(session, user, offer, is_sub):
     part = (await session.execute(select(OfferParticipation).where(
-        OfferParticipation.user_id == user.id, OfferParticipation.offer_id == offer.id
+        OfferParticipation.user_id == user.id,
+        OfferParticipation.offer_id == offer.id,
     ))).scalar_one_or_none()
+
     if not part:
         return False, "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u0430\u0447\u043d\u0438\u0442\u0435."
+
     part.checked_at = datetime.utcnow()
+
     if is_sub:
         if part.status == "verified":
             return True, "\u0423\u0436\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e."
         part.status = "verified"
         await session.commit()
         return True, "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 OK."
-    else:
-        if part.status == "verified":
-            user.balance = max(Decimal("0"), Decimal(str(user.balance)) - OFFER_PENALTY)
-            part.status = "penalized"
-            await session.commit()
-            return False, f"\u0428\u0442\u0440\u0430\u0444 {OFFER_PENALTY}."
+
+    if part.status == "verified":
+        user.balance = max(Decimal("0"), Decimal(str(user.balance)) - OFFER_PENALTY)
+        part.status = "penalized"
         await session.commit()
-        return False, "\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e."
+        return False, f"\u0428\u0442\u0440\u0430\u0444 {OFFER_PENALTY}."
+
+    await session.commit()
+    return False, "\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e."
 
 
 async def get_users_without_offer(session, offer_id):
     sub = select(OfferParticipation.user_id).where(OfferParticipation.offer_id == offer_id)
-    return list((await session.execute(select(User).where(User.agreed_to_rules == True, User.id.notin_(sub)))).scalars().all())
+    return list((await session.execute(select(User).where(
+        User.agreed_to_rules == True,
+        User.id.notin_(sub),
+    ))).scalars().all())
 
 
 # ========== CONTENT ==========
 
 async def save_video(session, uploader, file_id, file_unique_id, duration, file_size):
-    if (await session.execute(select(Video).where(Video.telegram_file_unique_id == file_unique_id))).scalar_one_or_none():
+    exists = (await session.execute(select(Video).where(Video.telegram_file_unique_id == file_unique_id))).scalar_one_or_none()
+    if exists:
         return None
-    v = Video(uploader_user_id=uploader.id, content_type="video", telegram_file_id=file_id,
-              telegram_file_unique_id=file_unique_id, duration_seconds=duration, file_size=file_size, status="pending")
+
+    v = Video(
+        uploader_user_id=uploader.id,
+        content_type="video",
+        telegram_file_id=file_id,
+        telegram_file_unique_id=file_unique_id,
+        duration_seconds=duration,
+        file_size=file_size,
+        status="pending",
+    )
     session.add(v)
     await session.commit()
     await session.refresh(v)
@@ -362,10 +421,18 @@ async def save_video(session, uploader, file_id, file_unique_id, duration, file_
 
 
 async def save_photo(session, uploader, file_id, file_unique_id, file_size):
-    if (await session.execute(select(Video).where(Video.telegram_file_unique_id == file_unique_id))).scalar_one_or_none():
+    exists = (await session.execute(select(Video).where(Video.telegram_file_unique_id == file_unique_id))).scalar_one_or_none()
+    if exists:
         return None
-    p = Video(uploader_user_id=uploader.id, content_type="photo", telegram_file_id=file_id,
-              telegram_file_unique_id=file_unique_id, file_size=file_size, status="pending")
+
+    p = Video(
+        uploader_user_id=uploader.id,
+        content_type="photo",
+        telegram_file_id=file_id,
+        telegram_file_unique_id=file_unique_id,
+        file_size=file_size,
+        status="pending",
+    )
     session.add(p)
     await session.commit()
     await session.refresh(p)
@@ -382,11 +449,14 @@ async def approve_video(session, video_id):
     v = (await session.execute(select(Video).where(Video.id == video_id))).scalar_one_or_none()
     if not v or v.status != "pending":
         return v
+
     v.status = "approved"
     v.rejection_reason = None
+
     up = (await session.execute(select(User).where(User.id == v.uploader_user_id))).scalar_one_or_none()
     if up:
         up.balance += PHOTO_UPLOAD_REWARD if v.content_type == "photo" else Decimal(str(UPLOAD_REWARD))
+
     await session.commit()
     await session.refresh(v)
     return v
@@ -430,28 +500,44 @@ async def count_rejected_videos(session):
 # ========== WATCH VIDEO ==========
 
 async def get_video_stats_for_user(session, user):
-    total = (await session.execute(select(func.count(Video.id)).where(Video.status == "approved", Video.content_type == "video"))).scalar_one()
-    wsub = select(VideoView.video_id).where(VideoView.user_id == user.id)
-    avail = (await session.execute(select(func.count(Video.id)).where(
-        Video.status == "approved", Video.content_type == "video",
-        Video.uploader_user_id != user.id, Video.id.notin_(wsub)
+    total = (await session.execute(select(func.count(Video.id)).where(
+        Video.status == "approved",
+        Video.content_type == "video",
     ))).scalar_one()
+
+    wsub = select(VideoView.video_id).where(VideoView.user_id == user.id)
+
+    avail = (await session.execute(select(func.count(Video.id)).where(
+        Video.status == "approved",
+        Video.content_type == "video",
+        Video.uploader_user_id != user.id,
+        Video.id.notin_(wsub),
+    ))).scalar_one()
+
     return {"total_approved": total, "available": avail}
 
 
 async def get_random_video_for_user(session, user):
     wsub = select(VideoView.video_id).where(VideoView.user_id == user.id)
     return (await session.execute(select(Video).where(
-        Video.status == "approved", Video.content_type == "video",
-        Video.uploader_user_id != user.id, Video.id.notin_(wsub)
+        Video.status == "approved",
+        Video.content_type == "video",
+        Video.uploader_user_id != user.id,
+        Video.id.notin_(wsub),
     ).order_by(func.random()).limit(1))).scalar_one_or_none()
 
 
 async def record_view_and_charge(session, user, video):
     if user.balance < Decimal(str(WATCH_COST)):
         return False
-    if (await session.execute(select(VideoView).where(VideoView.user_id == user.id, VideoView.video_id == video.id))).scalar_one_or_none():
+
+    exists = (await session.execute(select(VideoView).where(
+        VideoView.user_id == user.id,
+        VideoView.video_id == video.id,
+    ))).scalar_one_or_none()
+    if exists:
         return False
+
     session.add(VideoView(user_id=user.id, video_id=video.id))
     user.balance -= Decimal(str(WATCH_COST))
     await session.commit()
@@ -463,8 +549,12 @@ async def record_view_and_charge(session, user, video):
 async def count_photo_views_last_4h(session, user_id):
     since = datetime.utcnow() - timedelta(hours=4)
     return (await session.execute(
-        select(func.count(VideoView.id)).join(Video).where(
-            VideoView.user_id == user_id, Video.content_type == "photo", VideoView.watched_at >= since
+        select(func.count(VideoView.id))
+        .join(Video)
+        .where(
+            VideoView.user_id == user_id,
+            Video.content_type == "photo",
+            VideoView.watched_at >= since,
         )
     )).scalar_one()
 
@@ -472,14 +562,21 @@ async def count_photo_views_last_4h(session, user_id):
 async def get_random_photo_for_user(session, user):
     wsub = select(VideoView.video_id).where(VideoView.user_id == user.id)
     return (await session.execute(select(Video).where(
-        Video.status == "approved", Video.content_type == "photo",
-        Video.uploader_user_id != user.id, Video.id.notin_(wsub)
+        Video.status == "approved",
+        Video.content_type == "photo",
+        Video.uploader_user_id != user.id,
+        Video.id.notin_(wsub),
     ).order_by(func.random()).limit(1))).scalar_one_or_none()
 
 
 async def record_photo_view(session, user, photo):
-    if (await session.execute(select(VideoView).where(VideoView.user_id == user.id, VideoView.video_id == photo.id))).scalar_one_or_none():
+    exists = (await session.execute(select(VideoView).where(
+        VideoView.user_id == user.id,
+        VideoView.video_id == photo.id,
+    ))).scalar_one_or_none()
+    if exists:
         return False
+
     session.add(VideoView(user_id=user.id, video_id=photo.id))
     await session.commit()
     return True
@@ -489,16 +586,46 @@ async def record_photo_view(session, user, photo):
 
 async def rate_video(session, user_id, video_id, rating):
     existing = (await session.execute(select(VideoRating).where(
-        VideoRating.user_id == user_id, VideoRating.video_id == video_id
+        VideoRating.user_id == user_id,
+        VideoRating.video_id == video_id,
     ))).scalar_one_or_none()
+
     if existing:
         existing.rating = rating
     else:
         session.add(VideoRating(user_id=user_id, video_id=video_id, rating=rating))
+
     await session.commit()
 
 
 # ========== COMMENTS ==========
+
+async def can_user_comment(session, user_id):
+    now = datetime.utcnow()
+    window_start = now - timedelta(minutes=10)
+
+    recent_count = (await session.execute(
+        select(func.count(Comment.id)).where(
+            Comment.user_id == user_id,
+            Comment.created_at >= window_start,
+        )
+    )).scalar_one()
+
+    last_comment = (await session.execute(
+        select(Comment).where(Comment.user_id == user_id).order_by(Comment.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+
+    if recent_count >= COMMENTS_PER_10_MIN:
+        return False, "\u0421\u043b\u0438\u0448\u043a\u043e\u043c \u043c\u043d\u043e\u0433\u043e \u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0435\u0432. \u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435."
+
+    if last_comment:
+        delta = (now - last_comment.created_at).total_seconds()
+        if delta < COMMENT_MIN_INTERVAL_SEC:
+            wait_sec = int(COMMENT_MIN_INTERVAL_SEC - delta)
+            return False, f"\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435 {wait_sec} \u0441\u0435\u043a."
+
+    return True, ""
+
 
 async def add_comment(session, user_id, video_id, text):
     c = Comment(user_id=user_id, video_id=video_id, text=text[:500])
@@ -509,23 +636,31 @@ async def add_comment(session, user_id, video_id, text):
 
 
 async def get_video_comments(session, video_id, limit=10):
-    stmt = (select(Comment, User.username, User.first_name)
-            .join(User, User.id == Comment.user_id)
-            .where(Comment.video_id == video_id)
-            .order_by(Comment.created_at.desc())
-            .limit(limit))
+    stmt = (
+        select(Comment, User.username, User.first_name)
+        .join(User, User.id == Comment.user_id)
+        .where(Comment.video_id == video_id)
+        .order_by(Comment.created_at.desc())
+        .limit(limit)
+    )
     rows = (await session.execute(stmt)).all()
     result = []
     for comment, uname, fname in rows:
         name = f"@{uname}" if uname else (fname or "Anon")
-        result.append({"id": comment.id, "text": comment.text, "author": name, "at": comment.created_at})
+        result.append({
+            "id": comment.id,
+            "text": comment.text,
+            "author": name,
+            "at": comment.created_at,
+        })
     return result
 
 
 async def count_user_comments_today(session, user_id):
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     return (await session.execute(select(func.count(Comment.id)).where(
-        Comment.user_id == user_id, Comment.created_at >= today_start
+        Comment.user_id == user_id,
+        Comment.created_at >= today_start,
     ))).scalar_one()
 
 
@@ -533,19 +668,24 @@ async def count_user_comments_today(session, user_id):
 
 async def add_reaction(session, user_id, video_id, reaction_type):
     existing = (await session.execute(select(ContentReaction).where(
-        ContentReaction.user_id == user_id, ContentReaction.video_id == video_id
+        ContentReaction.user_id == user_id,
+        ContentReaction.video_id == video_id,
     ))).scalar_one_or_none()
+
     if existing:
         existing.reaction_type = reaction_type
     else:
         session.add(ContentReaction(user_id=user_id, video_id=video_id, reaction_type=reaction_type))
+
     await session.commit()
 
 
 async def get_reaction_counts(session, video_id):
-    stmt = (select(ContentReaction.reaction_type, func.count(ContentReaction.id))
-            .where(ContentReaction.video_id == video_id)
-            .group_by(ContentReaction.reaction_type))
+    stmt = (
+        select(ContentReaction.reaction_type, func.count(ContentReaction.id))
+        .where(ContentReaction.video_id == video_id)
+        .group_by(ContentReaction.reaction_type)
+    )
     rows = (await session.execute(stmt)).all()
     return {r: c for r, c in rows}
 
@@ -556,6 +696,7 @@ async def play_lootbox(session, user):
     cost = Decimal(str(LOOTBOX_COST))
     if user.balance < cost:
         return False, 0, "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u043c\u043e\u043d\u0435\u0442."
+
     user.balance -= cost
     roll = random.random()
     cumul = 0
@@ -565,8 +706,15 @@ async def play_lootbox(session, user):
         if roll <= cumul:
             reward = coins
             break
+
     user.balance += Decimal(str(reward))
-    session.add(GameHistory(user_id=user.id, game_type="lootbox", bet=cost, result=Decimal(str(reward)), details=f"won {reward}"))
+    session.add(GameHistory(
+        user_id=user.id,
+        game_type="lootbox",
+        bet=cost,
+        result=Decimal(str(reward)),
+        details=f"won {reward}",
+    ))
     await session.commit()
     await session.refresh(user)
     return True, reward, ""
@@ -578,6 +726,7 @@ async def play_dice(session, user, bet):
         return False, 0, Decimal("0"), f"\u0421\u0442\u0430\u0432\u043a\u0430 {DICE_MIN_BET}-{DICE_MAX_BET}."
     if user.balance < bet_d:
         return False, 0, Decimal("0"), "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e."
+
     user.balance -= bet_d
     roll = random.randint(1, 6)
     if roll >= 4:
@@ -585,7 +734,14 @@ async def play_dice(session, user, bet):
         user.balance += win
     else:
         win = Decimal("0")
-    session.add(GameHistory(user_id=user.id, game_type="dice", bet=bet_d, result=win, details=f"roll={roll}"))
+
+    session.add(GameHistory(
+        user_id=user.id,
+        game_type="dice",
+        bet=bet_d,
+        result=win,
+        details=f"roll={roll}",
+    ))
     await session.commit()
     await session.refresh(user)
     return True, roll, win, ""
@@ -597,6 +753,7 @@ async def play_coinflip(session, user, bet):
         return False, "", Decimal("0"), "\u0421\u0442\u0430\u0432\u043a\u0430 1-50."
     if user.balance < bet_d:
         return False, "", Decimal("0"), "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e."
+
     user.balance -= bet_d
     side = random.choice(["heads", "tails"])
     if side == "heads":
@@ -604,7 +761,14 @@ async def play_coinflip(session, user, bet):
         user.balance += win
     else:
         win = Decimal("0")
-    session.add(GameHistory(user_id=user.id, game_type="coinflip", bet=bet_d, result=win, details=side))
+
+    session.add(GameHistory(
+        user_id=user.id,
+        game_type="coinflip",
+        bet=bet_d,
+        result=win,
+        details=side,
+    ))
     await session.commit()
     await session.refresh(user)
     return True, side, win, ""
@@ -618,6 +782,7 @@ async def play_guess(session, user, guess, bet):
         return False, 0, Decimal("0"), "\u0421\u0442\u0430\u0432\u043a\u0430 1-50."
     if user.balance < bet_d:
         return False, 0, Decimal("0"), "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e."
+
     user.balance -= bet_d
     answer = random.randint(1, 10)
     if guess == answer:
@@ -625,7 +790,14 @@ async def play_guess(session, user, guess, bet):
         user.balance += win
     else:
         win = Decimal("0")
-    session.add(GameHistory(user_id=user.id, game_type="guess", bet=bet_d, result=win, details=f"g={guess},a={answer}"))
+
+    session.add(GameHistory(
+        user_id=user.id,
+        game_type="guess",
+        bet=bet_d,
+        result=win,
+        details=f"g={guess},a={answer}",
+    ))
     await session.commit()
     await session.refresh(user)
     return True, answer, win, ""
@@ -636,19 +808,29 @@ async def play_guess(session, user, guess, bet):
 async def ensure_daily_quests(session, user_id):
     today = datetime.utcnow().date()
     existing = list((await session.execute(
-        select(DailyQuestProgress).where(DailyQuestProgress.user_id == user_id, DailyQuestProgress.quest_date == today)
+        select(DailyQuestProgress).where(
+            DailyQuestProgress.user_id == user_id,
+            DailyQuestProgress.quest_date == today,
+        )
     )).scalars().all())
     if existing:
         return existing
+
     quests = []
     for q in DAILY_QUESTS:
         qp = DailyQuestProgress(
-            user_id=user_id, quest_type=q["type"], quest_date=today,
-            progress=0, target=q["target"], reward=Decimal(str(q["reward"])),
-            completed=False, reward_claimed=False,
+            user_id=user_id,
+            quest_type=q["type"],
+            quest_date=today,
+            progress=0,
+            target=q["target"],
+            reward=Decimal(str(q["reward"])),
+            completed=False,
+            reward_claimed=False,
         )
         session.add(qp)
         quests.append(qp)
+
     await session.commit()
     for qp in quests:
         await session.refresh(qp)
@@ -658,24 +840,33 @@ async def ensure_daily_quests(session, user_id):
 async def increment_quest(session, user_id, quest_type):
     today = datetime.utcnow().date()
     q = (await session.execute(select(DailyQuestProgress).where(
-        DailyQuestProgress.user_id == user_id, DailyQuestProgress.quest_type == quest_type,
-        DailyQuestProgress.quest_date == today, DailyQuestProgress.completed == False,
+        DailyQuestProgress.user_id == user_id,
+        DailyQuestProgress.quest_type == quest_type,
+        DailyQuestProgress.quest_date == today,
+        DailyQuestProgress.completed == False,
     ))).scalar_one_or_none()
+
     if not q:
         return
+
     q.progress += 1
     if q.progress >= q.target:
         q.completed = True
+
     await session.commit()
 
 
 async def claim_quest_reward(session, user, quest_id):
     q = (await session.execute(select(DailyQuestProgress).where(
-        DailyQuestProgress.id == quest_id, DailyQuestProgress.user_id == user.id,
-        DailyQuestProgress.completed == True, DailyQuestProgress.reward_claimed == False,
+        DailyQuestProgress.id == quest_id,
+        DailyQuestProgress.user_id == user.id,
+        DailyQuestProgress.completed == True,
+        DailyQuestProgress.reward_claimed == False,
     ))).scalar_one_or_none()
+
     if not q:
         return False, "\u041d\u0435\u0442 \u043d\u0430\u0433\u0440\u0430\u0434\u044b."
+
     user.balance += q.reward
     q.reward_claimed = True
     await session.commit()
@@ -686,17 +877,25 @@ async def claim_quest_reward(session, user, quest_id):
 # ========== TOPS ==========
 
 async def get_top_uploaders(session, limit=10):
-    stmt = (select(User.username, User.first_name, User.telegram_id, func.count(Video.id).label("cnt"))
-            .join(Video, Video.uploader_user_id == User.id)
-            .where(Video.status == "approved")
-            .group_by(User.id).order_by(func.count(Video.id).desc()).limit(limit))
+    stmt = (
+        select(User.username, User.first_name, User.telegram_id, func.count(Video.id).label("cnt"))
+        .join(Video, Video.uploader_user_id == User.id)
+        .where(Video.status == "approved")
+        .group_by(User.id)
+        .order_by(func.count(Video.id).desc())
+        .limit(limit)
+    )
     return (await session.execute(stmt)).all()
 
 
 async def get_top_viewers(session, limit=10):
-    stmt = (select(User.username, User.first_name, User.telegram_id, func.count(VideoView.id).label("cnt"))
-            .join(VideoView, VideoView.user_id == User.id)
-            .group_by(User.id).order_by(func.count(VideoView.id).desc()).limit(limit))
+    stmt = (
+        select(User.username, User.first_name, User.telegram_id, func.count(VideoView.id).label("cnt"))
+        .join(VideoView, VideoView.user_id == User.id)
+        .group_by(User.id)
+        .order_by(func.count(VideoView.id).desc())
+        .limit(limit)
+    )
     return (await session.execute(stmt)).all()
 
 
@@ -708,3 +907,45 @@ async def get_top_by_level(session, limit=10):
 async def get_top_richest(session, limit=10):
     stmt = select(User).where(User.agreed_to_rules == True).order_by(User.balance.desc()).limit(limit)
     return list((await session.execute(stmt)).scalars().all())
+
+
+# ========== WEEKLY REWARDS ==========
+
+async def reward_weekly_top_users(session):
+    rewarded = []
+
+    richest = await get_top_richest(session, limit=3)
+    rewards = [
+        Decimal(str(WEEKLY_TOP1_REWARD)),
+        Decimal(str(WEEKLY_TOP2_REWARD)),
+        Decimal(str(WEEKLY_TOP3_REWARD)),
+    ]
+
+    for idx, user in enumerate(richest):
+        reward = rewards[idx]
+        user.balance += reward
+        rewarded.append((user, reward))
+
+    await session.commit()
+    return rewarded
+
+
+# ========== ADMIN STATS ==========
+
+async def get_admin_extended_stats(session):
+    users_count = (await session.execute(select(func.count(User.id)))).scalar_one()
+    vip_count = (await session.execute(
+        select(func.count(User.id)).where(User.vip_until.is_not(None), User.vip_until > datetime.utcnow())
+    )).scalar_one()
+    comments_count = (await session.execute(select(func.count(Comment.id)))).scalar_one()
+    reactions_count = (await session.execute(select(func.count(ContentReaction.id)))).scalar_one()
+    games_count = (await session.execute(select(func.count(GameHistory.id)))).scalar_one()
+    offers_count = (await session.execute(select(func.count(Offer.id)))).scalar_one()
+    return {
+        "users": users_count,
+        "vip": vip_count,
+        "comments": comments_count,
+        "reactions": reactions_count,
+        "games": games_count,
+        "offers": offers_count,
+    }

@@ -71,7 +71,7 @@ def reaction_menu_keyboard(video_id: int) -> InlineKeyboardMarkup:
         row.append(InlineKeyboardButton(text=rt, callback_data=f"react:{video_id}:{rt}"))
     return InlineKeyboardMarkup(inline_keyboard=[
         row,
-        [InlineKeyboardButton(text="\U0001f4ac \u041a\u043e\u043c\u043c\u0435\u043d\u0442\u044b", callback_data=f"comments:{video_id}")]
+        [InlineKeyboardButton(text="\U0001f4ac \u041a\u043e\u043c\u043c\u0435\u043d\u0442\u044b", callback_data=f"comments:{video_id}")],
     ])
 
 
@@ -149,6 +149,8 @@ def quests_keyboard(quests) -> InlineKeyboardMarkup:
 def admin_center_keyboard(is_super_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="\U0001f4ca \u041e\u0447\u0435\u0440\u0435\u0434\u044c", callback_data="admin_queue_info")],
+        [InlineKeyboardButton(text="\U0001f4ca \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430+", callback_data="admin_extended_stats")],
+        [InlineKeyboardButton(text="\U0001f4dc \u041b\u043e\u0433\u0438", callback_data="admin_logs")],
         [InlineKeyboardButton(text="\U0001f4cb \u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f", callback_data="admin_get_pending")],
         [InlineKeyboardButton(text="\u2705 \u041e\u0434\u043e\u0431\u0440\u0438\u0442\u044c \u0432\u0441\u0451", callback_data="admin_approve_all")],
         [InlineKeyboardButton(text="\U0001f381 \u041e\u0444\u0444\u0435\u0440\u044b", callback_data="admin_offers_menu")],
