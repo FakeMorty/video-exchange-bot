@@ -3,64 +3,95 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "")
-PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN", "")
 
-ADMINS_RAW = os.getenv("ADMINS", "")
+def _get_str(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+def _get_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
+def _get_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
+BOT_TOKEN = _get_str("BOT_TOKEN")
+DATABASE_URL = _get_str("DATABASE_URL")
+BOT_USERNAME = _get_str("BOT_USERNAME")
+PROVIDER_TOKEN = _get_str("PROVIDER_TOKEN")
+WEBHOOK_BASE = _get_str("WEBHOOK_BASE")
+WEBHOOK_PATH = _get_str("WEBHOOK_PATH")
+LOG_CHAT_ID = _get_str("LOG_CHAT_ID")
+
+ADMINS_RAW = _get_str("ADMINS")
 ADMINS = []
 for x in ADMINS_RAW.split(","):
     x = x.strip()
     if x.isdigit():
         ADMINS.append(int(x))
 
-STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "2"))
-WATCH_COST = float(os.getenv("WATCH_COST", "1"))
-UPLOAD_REWARD = float(os.getenv("UPLOAD_REWARD", "0.5"))
+PORT = _get_int("PORT", 10000)
 
-REFERRAL_REWARD_INVITER = float(os.getenv("REFERRAL_REWARD_INVITER", "2"))
-REFERRAL_REWARD_NEW_USER = float(os.getenv("REFERRAL_REWARD_NEW_USER", "1"))
+STARTING_BALANCE = _get_float("STARTING_BALANCE", 2.0)
+WATCH_COST = _get_float("WATCH_COST", 1.0)
+UPLOAD_REWARD = _get_float("UPLOAD_REWARD", 0.5)
 
-STARS_TO_COINS_RATE = float(os.getenv("STARS_TO_COINS_RATE", "2.0"))
+REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 2.0)
+REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 1.0)
+
+STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 2.0)
 
 STARS_PACKAGES = {
-    "pack_1":  {"stars": 1,   "coins": 2,    "title": "2 \u043c\u043e\u043d\u0435\u0442\u044b"},
-    "pack_5":  {"stars": 5,   "coins": 10,   "title": "10 \u043c\u043e\u043d\u0435\u0442"},
-    "pack_10": {"stars": 10,  "coins": 20,   "title": "20 \u043c\u043e\u043d\u0435\u0442"},
-    "pack_25": {"stars": 25,  "coins": 50,   "title": "50 \u043c\u043e\u043d\u0435\u0442"},
-    "pack_50": {"stars": 50,  "coins": 100,  "title": "100 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_1": {"stars": 1, "coins": 2, "title": "2 \u043c\u043e\u043d\u0435\u0442\u044b"},
+    "pack_5": {"stars": 5, "coins": 10, "title": "10 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_10": {"stars": 10, "coins": 20, "title": "20 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_25": {"stars": 25, "coins": 50, "title": "50 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_50": {"stars": 50, "coins": 100, "title": "100 \u043c\u043e\u043d\u0435\u0442"},
 }
 
-# ===== MONEY PACKS =====
 MONEY_PACKAGES = {
     "money_99": {"amount": 9900, "coins": 250, "title": "250 \u043c\u043e\u043d\u0435\u0442"},
     "money_199": {"amount": 19900, "coins": 600, "title": "600 \u043c\u043e\u043d\u0435\u0442"},
     "money_499": {"amount": 49900, "coins": 1800, "title": "1800 \u043c\u043e\u043d\u0435\u0442"},
 }
-# amount в копейках/центах для Telegram invoice
 
-OFFER_BROADCAST_INTERVAL_HOURS = float(os.getenv("OFFER_BROADCAST_INTERVAL_HOURS", "2.5"))
+OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.5)
 
 # === LEVELS ===
-LEVEL_XP_BASE = 100
-LEVEL_XP_MULTIPLIER = 1.5
-XP_PER_WATCH = 5
-XP_PER_UPLOAD = 20
-XP_PER_RATING = 2
-XP_PER_COMMENT = 3
-XP_PER_REACTION = 1
-XP_PER_GAME = 3
+LEVEL_XP_BASE = _get_int("LEVEL_XP_BASE", 100)
+LEVEL_XP_MULTIPLIER = _get_float("LEVEL_XP_MULTIPLIER", 1.5)
+
+XP_PER_WATCH = _get_int("XP_PER_WATCH", 5)
+XP_PER_UPLOAD = _get_int("XP_PER_UPLOAD", 20)
+XP_PER_RATING = _get_int("XP_PER_RATING", 2)
+XP_PER_COMMENT = _get_int("XP_PER_COMMENT", 3)
+XP_PER_REACTION = _get_int("XP_PER_REACTION", 1)
+XP_PER_GAME = _get_int("XP_PER_GAME", 3)
 
 # === VIP ===
-VIP_PRICE_STARS = 50
-VIP_DURATION_DAYS = 30
-VIP_BONUS_MULTIPLIER = 3.0
+VIP_PRICE_STARS = _get_int("VIP_PRICE_STARS", 50)
+VIP_DURATION_DAYS = _get_int("VIP_DURATION_DAYS", 30)
+VIP_BONUS_MULTIPLIER = _get_float("VIP_BONUS_MULTIPLIER", 3.0)
 VIP_FREE_PHOTOS = True
-VIP_WATCH_DISCOUNT = 0.5
+VIP_WATCH_DISCOUNT = _get_float("VIP_WATCH_DISCOUNT", 0.5)
 
 # === GAMES ===
-LOOTBOX_COST = 5
+LOOTBOX_COST = _get_float("LOOTBOX_COST", 5.0)
 LOOTBOX_REWARDS = [
     (0.30, 1),
     (0.25, 3),
@@ -71,8 +102,8 @@ LOOTBOX_REWARDS = [
     (0.01, 100),
 ]
 
-DICE_MIN_BET = 1
-DICE_MAX_BET = 50
+DICE_MIN_BET = _get_int("DICE_MIN_BET", 1)
+DICE_MAX_BET = _get_int("DICE_MAX_BET", 50)
 
 # === QUESTS ===
 DAILY_QUESTS = [
@@ -91,17 +122,14 @@ PREMIUM_DAILY_QUESTS = [
 REACTION_TYPES = ["\U0001f525", "\u2764\ufe0f", "\U0001f602", "\U0001f44d", "\U0001f4af"]
 
 # === ANTI-SPAM COMMENTS ===
-COMMENTS_PER_10_MIN = int(os.getenv("COMMENTS_PER_10_MIN", "5"))
-COMMENT_MIN_INTERVAL_SEC = int(os.getenv("COMMENT_MIN_INTERVAL_SEC", "15"))
-
-# === TG LOGGING ===
-LOG_CHAT_ID = os.getenv("LOG_CHAT_ID", "")
+COMMENTS_PER_10_MIN = _get_int("COMMENTS_PER_10_MIN", 5)
+COMMENT_MIN_INTERVAL_SEC = _get_int("COMMENT_MIN_INTERVAL_SEC", 15)
 
 # === WEEKLY REWARDS ===
-WEEKLY_TOP1_REWARD = float(os.getenv("WEEKLY_TOP1_REWARD", "25"))
-WEEKLY_TOP2_REWARD = float(os.getenv("WEEKLY_TOP2_REWARD", "15"))
-WEEKLY_TOP3_REWARD = float(os.getenv("WEEKLY_TOP3_REWARD", "10"))
+WEEKLY_TOP1_REWARD = _get_float("WEEKLY_TOP1_REWARD", 25.0)
+WEEKLY_TOP2_REWARD = _get_float("WEEKLY_TOP2_REWARD", 15.0)
+WEEKLY_TOP3_REWARD = _get_float("WEEKLY_TOP3_REWARD", 10.0)
 
 # === MONETIZATION ===
-PIN_OFFER_COST = float(os.getenv("PIN_OFFER_COST", "100"))
-BUMP_VIDEO_COST = float(os.getenv("BUMP_VIDEO_COST", "25"))
+PIN_OFFER_COST = _get_float("PIN_OFFER_COST", 100.0)
+BUMP_VIDEO_COST = _get_float("BUMP_VIDEO_COST", 25.0)

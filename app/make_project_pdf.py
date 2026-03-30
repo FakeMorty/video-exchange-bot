@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Iterable
+from datetime import datetime
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase.pdfmetrics import stringWidth
@@ -10,11 +10,9 @@ from reportlab.pdfgen import canvas
 PROJECT_ROOT = Path(".")
 OUTPUT_FILE = "project_dump.pdf"
 
-# Ограничения
 MAX_PAGES = 90
 MAX_SIZE_MB = 15
 
-# Что включать
 INCLUDE_EXTENSIONS = {
     ".py",
     ".txt",
@@ -28,7 +26,14 @@ INCLUDE_EXTENSIONS = {
     ".sql",
 }
 
-# Что исключать
+SPECIAL_FILENAMES = {
+    "Dockerfile",
+    "Procfile",
+    "requirements.txt",
+    "runtime.txt",
+    ".env",
+}
+
 EXCLUDED_DIRS = {
     ".git",
     ".venv",
@@ -39,62 +44,60 @@ EXCLUDED_DIRS = {
     ".vscode",
     "dist",
     "build",
-    ".mypy_cache",
     ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
 }
 
 EXCLUDED_FILES = {
     OUTPUT_FILE,
 }
 
-# Крупные/мусорные каталоги при желании можно исключить
-OPTIONAL_EXCLUDED_PARTS = {
-    "site-packages",
-}
+MAX_FILE_SIZE_KB = 300
 
 
-def is_probably_text_file(path: Path) -> bool:
+def is_text_candidate(path: Path) -> bool:
+    if path.name in SPECIAL_FILENAMES:
+        return True
     if path.suffix.lower() in INCLUDE_EXTENSIONS:
         return True
-
-    # .env без suffix
     if path.name.startswith(".env"):
         return True
-
     return False
 
 
 def should_skip(path: Path) -> bool:
-    parts = set(path.parts)
-
-    if parts & EXCLUDED_DIRS:
-        return True
-
-    if parts & OPTIONAL_EXCLUDED_PARTS:
+    if path.is_dir():
         return True
 
     if path.name in EXCLUDED_FILES:
         return True
 
-    if path.is_dir():
+    parts = set(path.parts)
+    if parts & EXCLUDED_DIRS:
         return True
 
-    if not is_probably_text_file(path):
+    if not is_text_candidate(path):
+        return True
+
+    try:
+        if path.stat().st_size > MAX_FILE_SIZE_KB * 1024:
+            return True
+    except Exception:
         return True
 
     return False
 
 
-def iter_project_files(root: Path) -> Iterable[Path]:
-    all_files = []
+def iter_project_files(root: Path):
+    files = []
     for path in root.rglob("*"):
         if should_skip(path):
             continue
-        all_files.append(path)
-
-    # Стабильная сортировка
-    all_files.sort(key=lambda p: str(p).lower())
-    return all_files
+        files.append(path)
+    files.sort(key=lambda p: str(p).lower())
+    return files
 
 
 def safe_read_text(path: Path) -> str:
@@ -102,68 +105,78 @@ def safe_read_text(path: Path) -> str:
         try:
             return path.read_text(encoding=enc)
         except Exception:
-            continue
+            pass
     return "[[FAILED TO READ FILE]]"
 
 
-def wrap_line_to_width(text: str, font_name: str, font_size: int, max_width: float) -> list[str]:
-    if not text:
+def wrap_line(line: str, font_name: str, font_size: int, max_width: float):
+    if not line:
         return [""]
 
-    # Быстрая проверка
-    if stringWidth(text, font_name, font_size) <= max_width:
-        return [text]
+    if stringWidth(line, font_name, font_size) <= max_width:
+        return [line]
 
-    result = []
+    parts = []
     current = ""
 
-    for ch in text:
+    for ch in line:
         test = current + ch
         if stringWidth(test, font_name, font_size) <= max_width:
             current = test
         else:
             if current:
-                result.append(current)
+                parts.append(current)
             current = ch
 
     if current:
-        result.append(current)
+        parts.append(current)
 
-    return result
+    return parts
 
 
-def build_text_blocks(root: Path) -> list[str]:
+def build_blocks(root: Path):
+    files = iter_project_files(root)
     blocks = []
-    for path in iter_project_files(root):
+
+    header = [
+        "<PROJECT PDF DUMP>",
+        f"Generated at: {datetime.utcnow().isoformat()} UTC",
+        f"Root: {root.resolve()}",
+        f"Files included: {len(files)}",
+        "",
+    ]
+    blocks.append("\n".join(header))
+
+    for path in files:
         rel = path.relative_to(root)
-        content = safe_read_text(path)
+        content = safe_read_text(path).rstrip()
 
         block = [
             "=" * 80,
             f"FILE: {rel}",
             "=" * 80,
-            content.rstrip(),
+            content,
             "",
         ]
         blocks.append("\n".join(block))
-    return blocks
+
+    return blocks, files
 
 
-def render_pdf(blocks: list[str], output_file: str) -> tuple[int, int]:
+def render_pdf(blocks, output_path: str):
     page_width, page_height = A4
 
-    # Попытки ужать документ
-    attempts = [
+    configs = [
         {"font_size": 9, "line_gap": 11, "margin": 36},
-        {"font_size": 8, "line_gap": 9, "margin": 28},
-        {"font_size": 7, "line_gap": 8, "margin": 20},
-        {"font_size": 6, "line_gap": 7, "margin": 16},
+        {"font_size": 8, "line_gap": 9, "margin": 26},
+        {"font_size": 7, "line_gap": 8, "margin": 18},
+        {"font_size": 6, "line_gap": 7, "margin": 14},
     ]
 
-    last_pages = None
+    best_result = None
 
-    for cfg in attempts:
-        c = canvas.Canvas(output_file, pagesize=A4)
+    for cfg in configs:
+        c = canvas.Canvas(output_path, pagesize=A4)
         font_name = "Courier"
         font_size = cfg["font_size"]
         line_gap = cfg["line_gap"]
@@ -184,49 +197,52 @@ def render_pdf(blocks: list[str], output_file: str) -> tuple[int, int]:
 
         for block in blocks:
             for raw_line in block.splitlines():
-                wrapped_lines = wrap_line_to_width(
-                    raw_line,
-                    font_name,
-                    font_size,
-                    usable_width,
-                )
-                for line in wrapped_lines:
+                wrapped = wrap_line(raw_line, font_name, font_size, usable_width)
+                for line in wrapped:
                     if y < margin:
                         new_page()
                     c.drawString(margin, y, line)
                     y -= line_gap
 
-            # пустая строка между файлами
             if y < margin:
                 new_page()
             y -= line_gap
 
         c.save()
 
-        file_size = os.path.getsize(output_file)
-        last_pages = pages
+        size_bytes = os.path.getsize(output_path)
+        size_mb = size_bytes / (1024 * 1024)
 
-        if pages <= MAX_PAGES and file_size <= MAX_SIZE_MB * 1024 * 1024:
-            return pages, file_size
+        best_result = {
+            "pages": pages,
+            "size_bytes": size_bytes,
+            "size_mb": size_mb,
+            "config": cfg,
+        }
 
-    return last_pages or 0, os.path.getsize(output_file)
+        if pages <= MAX_PAGES and size_mb <= MAX_SIZE_MB:
+            return best_result
+
+    return best_result
 
 
 def main():
-    blocks = build_text_blocks(PROJECT_ROOT)
-    pages, size_bytes = render_pdf(blocks, OUTPUT_FILE)
+    blocks, files = build_blocks(PROJECT_ROOT)
+    result = render_pdf(blocks, OUTPUT_FILE)
 
-    size_mb = size_bytes / (1024 * 1024)
-
+    print("=" * 60)
     print(f"PDF created: {OUTPUT_FILE}")
-    print(f"Pages: {pages}")
-    print(f"Size: {size_mb:.2f} MB")
+    print(f"Files included: {len(files)}")
+    print(f"Pages: {result['pages']}")
+    print(f"Size: {result['size_mb']:.2f} MB")
+    print(f"Config used: {result['config']}")
+    print("=" * 60)
 
-    if pages > MAX_PAGES:
-        print(f"WARNING: pages exceed limit ({pages} > {MAX_PAGES})")
+    if result["pages"] > MAX_PAGES:
+        print(f"WARNING: PDF exceeds page limit ({result['pages']} > {MAX_PAGES})")
 
-    if size_mb > MAX_SIZE_MB:
-        print(f"WARNING: size exceeds limit ({size_mb:.2f} MB > {MAX_SIZE_MB} MB)")
+    if result["size_mb"] > MAX_SIZE_MB:
+        print(f"WARNING: PDF exceeds size limit ({result['size_mb']:.2f} MB > {MAX_SIZE_MB} MB)")
 
 
 if __name__ == "__main__":

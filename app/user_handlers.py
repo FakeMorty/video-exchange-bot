@@ -1,5 +1,3 @@
-import logging
-import traceback
 from decimal import Decimal
 
 from aiogram import Router, F
@@ -9,41 +7,93 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from app.config import (
-    ADMINS, WATCH_COST, STARS_PACKAGES, STARS_TO_COINS_RATE, REACTION_TYPES,
-    XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
-    XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
+    ADMINS,
+    WATCH_COST,
+    STARS_PACKAGES,
+    STARS_TO_COINS_RATE,
+    REACTION_TYPES,
+    XP_PER_WATCH,
+    XP_PER_UPLOAD,
+    XP_PER_RATING,
+    XP_PER_COMMENT,
+    XP_PER_REACTION,
+    XP_PER_GAME,
 )
 from app.db import async_session
 from app.services import (
-    get_or_create_user, agree_to_rules, get_user,
-    save_video, save_photo,
-    get_random_video_for_user, get_random_photo_for_user,
-    record_view_and_charge, record_photo_view,
-    count_photo_views_last_4h, rate_video,
-    claim_daily_bonus, count_referrals,
-    create_payment, create_custom_payment, create_vip_payment, apply_successful_payment,
-    get_active_offers, get_offer_by_id,
-    start_offer_participation, verify_offer_subscription,
+    get_or_create_user,
+    agree_to_rules,
+    get_user,
+    save_video,
+    save_photo,
+    get_random_video_for_user,
+    get_random_photo_for_user,
+    record_view_and_charge,
+    record_photo_view,
+    count_photo_views_last_4h,
+    rate_video,
+    claim_daily_bonus,
+    count_referrals,
+    create_payment,
+    create_custom_payment,
+    create_vip_payment,
+    apply_successful_payment,
+    get_active_offers,
+    get_offer_by_id,
+    start_offer_participation,
+    verify_offer_subscription,
     FREE_PHOTO_LIMIT_PER_4H,
-    add_xp, calc_level_info, is_vip,
-    ensure_daily_quests, increment_quest, claim_quest_reward,
-    get_top_uploaders, get_top_viewers, get_top_by_level, get_top_richest,
-    play_lootbox, play_dice, play_coinflip, play_guess,
-    add_comment, get_video_comments, add_reaction, get_reaction_counts,
+    add_xp,
+    calc_level_info,
+    is_vip,
+    ensure_daily_quests,
+    increment_quest,
+    claim_quest_reward,
+    get_top_uploaders,
+    get_top_viewers,
+    get_top_by_level,
+    get_top_richest,
+    play_lootbox,
+    play_dice,
+    play_coinflip,
+    play_guess,
+    add_comment,
+    get_video_comments,
+    add_reaction,
+    get_reaction_counts,
 )
 from app.keyboards import (
-    rules_keyboard, main_menu, video_rating_keyboard,
-    photo_actions_keyboard, watch_choice_keyboard,
-    admin_center_keyboard, buy_coins_keyboard, vip_buy_keyboard,
-    offers_list_keyboard, offer_view_keyboard,
-    games_menu_keyboard, tops_menu_keyboard, quests_keyboard,
+    rules_keyboard,
+    main_menu,
+    video_rating_keyboard,
+    photo_actions_keyboard,
+    watch_choice_keyboard,
+    admin_center_keyboard,
+    buy_coins_keyboard,
+    vip_buy_keyboard,
+    offers_list_keyboard,
+    offer_view_keyboard,
+    games_menu_keyboard,
+    tops_menu_keyboard,
+    quests_keyboard,
     reaction_menu_keyboard,
-    BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
-    BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
-    BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
+    BTN_WATCH,
+    BTN_UPLOAD,
+    BTN_PROFILE,
+    BTN_BUY,
+    BTN_OFFERS,
+    BTN_REFERRALS,
+    BTN_BONUS,
+    BTN_ADMIN,
+    BTN_GAMES,
+    BTN_TOPS,
+    BTN_QUESTS,
+    BTN_VIP,
+    BTN_LEVEL,
 )
+from app.logger import get_logger, log_info, log_warning, log_exception
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = Router()
 
 RULES_TEXT = (
@@ -104,6 +154,36 @@ async def safe_edit_or_answer(callback: CallbackQuery, text: str, reply_markup=N
         await callback.message.answer(text, parse_mode="HTML", reply_markup=reply_markup)
 
 
+async def get_user_or_reply(
+    event: Message | CallbackQuery,
+    telegram_id: int,
+    require_rules: bool = True,
+):
+    async with async_session() as session:
+        user = await get_user(session, telegram_id)
+
+    if not user:
+        if isinstance(event, CallbackQuery):
+            await event.answer("/start", show_alert=True)
+        else:
+            await event.answer("/start")
+        return None
+
+    if require_rules and not user.agreed_to_rules:
+        if isinstance(event, CallbackQuery):
+            await event.answer(
+                "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u0438\u043c\u0438\u0442\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430",
+                show_alert=True,
+            )
+        else:
+            await event.answer(
+                "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u0438\u043c\u0438\u0442\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u0447\u0435\u0440\u0435\u0437 /start"
+            )
+        return None
+
+    return user
+
+
 def format_level_text(user) -> str:
     lvl, current_xp, need_xp = calc_level_info(user.xp)
     vip_text = "\n\U0001f48e VIP: \u0430\u043a\u0442\u0438\u0432\u0435\u043d" if is_vip(user) else ""
@@ -119,34 +199,61 @@ def format_level_text(user) -> str:
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
     if not message.from_user:
         return
-    await state.clear()
 
-    referral_code = None
-    if command and command.args:
-        referral_code = command.args.strip()
+    await state.clear()
+    referral_code = command.args.strip() if command and command.args else None
 
     try:
         async with async_session() as session:
-            user, _ = await get_or_create_user(
-                session, message.from_user.id, message.from_user.username,
-                message.from_user.first_name, message.from_user.last_name,
+            user, is_new = await get_or_create_user(
+                session,
+                message.from_user.id,
+                message.from_user.username,
+                message.from_user.first_name,
+                message.from_user.last_name,
                 referral_code,
             )
+
             if not user.agreed_to_rules:
-                await message.answer(RULES_TEXT, parse_mode="HTML", reply_markup=rules_keyboard())
+                log_info(
+                    logger,
+                    "Показ правил пользователю",
+                    tg_id=message.from_user.id,
+                    is_new=is_new,
+                    referral_code=referral_code,
+                )
+                await message.answer(
+                    RULES_TEXT,
+                    parse_mode="HTML",
+                    reply_markup=rules_keyboard(),
+                )
                 return
 
-            await ensure_daily_quests(session, user.id)
-
+            await ensure_daily_quests(session, user.id, user)
             admin_flag = is_any_admin(message.from_user.id, user)
+
+            log_info(
+                logger,
+                "Пользователь вошёл в бота",
+                tg_id=message.from_user.id,
+                username=message.from_user.username,
+                is_new=is_new,
+                balance=str(user.balance),
+                is_admin=admin_flag,
+            )
+
             await message.answer(
-                f"\u0421 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u0438\u0435\u043c!\n\U0001f4b0 \u0411\u0430\u043b\u0430\u043d\u0441: <b>{user.balance}</b>",
+                f"\U0001f44b \u0421 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u0438\u0435\u043c!\n"
+                f"\U0001f4b0 \u0411\u0430\u043b\u0430\u043d\u0441: <b>{user.balance}</b>",
                 parse_mode="HTML",
                 reply_markup=main_menu(is_admin=admin_flag),
             )
-    except Exception as e:
-        logger.error(f"[START] {e}")
-        logger.error(traceback.format_exc())
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка в /start",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -154,12 +261,23 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 async def cb_accept_rules(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         async with async_session() as session:
             await agree_to_rules(session, callback.from_user.id)
             user = await get_user(session, callback.from_user.id)
-            await ensure_daily_quests(session, user.id)
+            if not user:
+                await callback.answer("/start", show_alert=True)
+                return
+
+            await ensure_daily_quests(session, user.id, user)
             admin_flag = is_any_admin(callback.from_user.id, user)
+
+        log_info(
+            logger,
+            "Пользователь принял правила",
+            tg_id=callback.from_user.id,
+        )
 
         await callback.message.edit_text("\u2705 \u041f\u0440\u0430\u0432\u0438\u043b\u0430 \u043f\u0440\u0438\u043d\u044f\u0442\u044b.")
         await callback.message.answer(
@@ -168,23 +286,43 @@ async def cb_accept_rules(callback: CallbackQuery):
             reply_markup=main_menu(is_admin=admin_flag),
         )
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[ACCEPT] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при принятии правил",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
-
-# ===== BASIC =====
 
 @router.message(F.text == BTN_BONUS)
 async def daily_bonus(message: Message):
     if not message.from_user:
         return
+
     try:
+        user = await get_user_or_reply(message, message.from_user.id)
+        if not user:
+            return
+
         async with async_session() as session:
             success, msg = await claim_daily_bonus(session, message.from_user.id)
+
+        log_info(
+            logger,
+            "Запрос ежедневного бонуса",
+            tg_id=message.from_user.id,
+            success=success,
+            result=msg,
+        )
+
         await message.answer(f"\U0001f3c6 {msg}" if success else f"\u23f3 {msg}")
-    except Exception as e:
-        logger.error(f"[BONUS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при получении бонуса",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -192,31 +330,46 @@ async def daily_bonus(message: Message):
 async def show_profile(message: Message):
     if not message.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("/start")
+                return
 
-        if not user:
-            await message.answer("/start")
-            return
+            admin_flag = is_any_admin(message.from_user.id, user)
+            role = "\u0410\u0434\u043c\u0438\u043d" if admin_flag else "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c"
 
-        admin_flag = is_any_admin(message.from_user.id, user)
-        role = "\u0410\u0434\u043c\u0438\u043d" if admin_flag else "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c"
-        vip_text = ""
-        if is_vip(user) and user.vip_until:
-            vip_text = "\n\U0001f48e VIP \u0434\u043e: <b>" + user.vip_until.strftime("%d.%m.%Y") + "</b>"
+            vip_text = ""
+            if is_vip(user) and user.vip_until:
+                vip_text = "\n\U0001f48e VIP \u0434\u043e: <b>" + user.vip_until.strftime("%d.%m.%Y") + "</b>"
 
-        text = (
-            f"\U0001f464 <b>\u041f\u0440\u043e\u0444\u0438\u043b\u044c</b>\n\n"
-            f"ID: <code>{user.telegram_id}</code>\n"
-            f"\U0001f4b0 \u0411\u0430\u043b\u0430\u043d\u0441: <b>{user.balance}</b>\n"
-            f"\U0001f4c8 XP: <b>{user.xp}</b>\n"
-            f"\U0001f3c5 \u0423\u0440\u043e\u0432\u0435\u043d\u044c: <b>{user.level}</b>\n"
-            f"\u0420\u043e\u043b\u044c: {role}{vip_text}"
+            text = (
+                f"\U0001f464 <b>\u041f\u0440\u043e\u0444\u0438\u043b\u044c</b>\n\n"
+                f"ID: <code>{user.telegram_id}</code>\n"
+                f"\U0001f4b0 \u0411\u0430\u043b\u0430\u043d\u0441: <b>{user.balance}</b>\n"
+                f"\U0001f4c8 XP: <b>{user.xp}</b>\n"
+                f"\U0001f3c5 \u0423\u0440\u043e\u0432\u0435\u043d\u044c: <b>{user.level}</b>\n"
+                f"\u0420\u043e\u043b\u044c: {role}{vip_text}"
+            )
+
+        log_info(
+            logger,
+            "Открыт профиль",
+            tg_id=message.from_user.id,
+            balance=str(user.balance),
+            xp=user.xp,
+            level=user.level,
         )
+
         await message.answer(text, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"[PROFILE] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии профиля",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -224,17 +377,29 @@ async def show_profile(message: Message):
 async def level_info(message: Message):
     if not message.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("/start")
+                return
 
-        if not user:
-            await message.answer("/start")
-            return
+        log_info(
+            logger,
+            "Открыта информация об уровне",
+            tg_id=message.from_user.id,
+            xp=user.xp,
+            level=user.level,
+        )
 
         await message.answer(format_level_text(user), parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"[LEVEL] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии уровня",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -242,33 +407,50 @@ async def level_info(message: Message):
 async def referrals_info(message: Message):
     if not message.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if not user:
                 await message.answer("/start")
                 return
+
             referrals_count = await count_referrals(session, user.id)
+            bot_username = (await message.bot.get_me()).username
+            referral_link = f"https://t.me/{bot_username}?start={user.referral_code}"
 
-        bot_username = (await message.bot.get_me()).username
-        referral_link = f"https://t.me/{bot_username}?start={user.referral_code}"
+            text = (
+                f"\U0001f465 <b>\u041f\u0440\u0438\u0433\u043b\u0430\u0441\u0438 \u0434\u0440\u0443\u0433\u0430!</b>\n\n"
+                f"\U0001f517 \u0422\u0432\u043e\u044f \u0441\u0441\u044b\u043b\u043a\u0430:\n<code>{referral_link}</code>\n\n"
+                f"\U0001f464 \u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u043b\u043e\u0441\u044c: <b>{referrals_count}</b>\n"
+                f"\U0001f4b0 \u0417\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e: <b>{user.referral_earnings}</b>"
+            )
 
-        text = (
-            f"\U0001f465 <b>\u041f\u0440\u0438\u0433\u043b\u0430\u0441\u0438 \u0434\u0440\u0443\u0433\u0430!</b>\n\n"
-            f"\U0001f517 \u0422\u0432\u043e\u044f \u0441\u0441\u044b\u043b\u043a\u0430:\n<code>{referral_link}</code>\n\n"
-            f"\U0001f464 \u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u0438\u043b\u043e\u0441\u044c: <b>{referrals_count}</b>\n"
-            f"\U0001f4b0 \u0417\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e: <b>{user.referral_earnings}</b>"
+        log_info(
+            logger,
+            "Открыт раздел рефералов",
+            tg_id=message.from_user.id,
+            referrals_count=referrals_count,
+            referral_earnings=str(user.referral_earnings),
         )
+
         await message.answer(text, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"[REFERRALS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии рефералов",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
-# ===== PAYMENTS =====
-
 @router.message(F.text == BTN_BUY)
 async def buy_coins(message: Message):
+    log_info(
+        logger,
+        "Открыт раздел покупки монет",
+        tg_id=message.from_user.id if message.from_user else None,
+    )
     await message.answer(
         "\U0001f48e <b>\u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u043c\u043e\u043d\u0435\u0442</b>\n\n"
         f"\u041a\u0443\u0440\u0441: 1 Star = {STARS_TO_COINS_RATE} \u043c\u043e\u043d\u0435\u0442\n\n"
@@ -282,27 +464,39 @@ async def buy_coins(message: Message):
 async def vip_info(message: Message):
     if not message.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("/start")
+                return
 
-        if not user:
-            await message.answer("/start")
-            return
+            status = "\u2705 \u0410\u043a\u0442\u0438\u0432\u0435\u043d" if is_vip(user) else "\u274c \u041d\u0435\u0442"
+            text = (
+                "\U0001f48e <b>VIP</b>\n\n"
+                f"\u0421\u0442\u0430\u0442\u0443\u0441: {status}\n"
+                "\u0411\u043e\u043d\u0443\u0441\u044b:\n"
+                "\u2022 x2 \u043a \u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e\u043c\u0443 \u0431\u043e\u043d\u0443\u0441\u0443\n"
+                "\u2022 VIP \u0432 \u043f\u0440\u043e\u0444\u0438\u043b\u0435\n"
+                "\u2022 \u0431\u0435\u0437\u043b\u0438\u043c\u0438\u0442 \u0444\u043e\u0442\u043e\n\n"
+                "\u0426\u0435\u043d\u0430: 50 Stars / 30 \u0434\u043d\u0435\u0439"
+            )
 
-        status = "\u2705 \u0410\u043a\u0442\u0438\u0432\u0435\u043d" if is_vip(user) else "\u274c \u041d\u0435\u0442"
-        text = (
-            "\U0001f48e <b>VIP</b>\n\n"
-            f"\u0421\u0442\u0430\u0442\u0443\u0441: {status}\n"
-            "\u0411\u043e\u043d\u0443\u0441\u044b:\n"
-            "\u2022 x2 \u043a \u0435\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u043e\u043c\u0443 \u0431\u043e\u043d\u0443\u0441\u0443\n"
-            "\u2022 VIP \u0432 \u043f\u0440\u043e\u0444\u0438\u043b\u0435\n"
-            "\u2022 \u0431\u0435\u0437\u043b\u0438\u043c\u0438\u0442 \u0444\u043e\u0442\u043e\n\n"
-            "\u0426\u0435\u043d\u0430: 50 Stars / 30 \u0434\u043d\u0435\u0439"
+        log_info(
+            logger,
+            "Открыт раздел VIP",
+            tg_id=message.from_user.id,
+            vip_active=is_vip(user),
         )
+
         await message.answer(text, parse_mode="HTML", reply_markup=vip_buy_keyboard())
-    except Exception as e:
-        logger.error(f"[VIP] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии VIP",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -310,13 +504,23 @@ async def vip_info(message: Message):
 async def buy_vip(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             if not user:
                 await callback.answer("/start", show_alert=True)
                 return
+
             payment = await create_vip_payment(session, user)
+
+        log_info(
+            logger,
+            "Создан VIP-платёж",
+            tg_id=callback.from_user.id,
+            payload=payment.payload,
+            stars_amount=payment.stars_amount,
+        )
 
         await callback.message.answer_invoice(
             title="VIP 30 \u0434\u043d\u0435\u0439",
@@ -327,8 +531,12 @@ async def buy_vip(callback: CallbackQuery):
             prices=[LabeledPrice(label="VIP 30 \u0434\u043d\u0435\u0439", amount=50)],
         )
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[BUY_VIP] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при создании VIP-платежа",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -336,21 +544,34 @@ async def buy_vip(callback: CallbackQuery):
 async def cb_buy_package(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     package_key = callback.data.split(":", 1)[1]
     package = STARS_PACKAGES.get(package_key)
     if not package:
         await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", show_alert=True)
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             if not user:
                 await callback.answer("/start", show_alert=True)
                 return
+
             payment = await create_payment(session, user, package_key)
             if not payment:
                 await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
                 return
+
+        log_info(
+            logger,
+            "Создан пакетный платёж",
+            tg_id=callback.from_user.id,
+            package_key=package_key,
+            payload=payment.payload,
+            stars_amount=payment.stars_amount,
+            coins_amount=str(payment.coins_amount),
+        )
 
         await callback.message.answer_invoice(
             title=f"{package['coins']} \u043c\u043e\u043d\u0435\u0442",
@@ -361,8 +582,13 @@ async def cb_buy_package(callback: CallbackQuery):
             prices=[LabeledPrice(label=f"{package['coins']} \u043c\u043e\u043d\u0435\u0442", amount=package["stars"])],
         )
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[BUY] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при создании пакетного платежа",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            package_key=package_key,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -370,11 +596,19 @@ async def cb_buy_package(callback: CallbackQuery):
 async def cb_buy_custom(callback: CallbackQuery, state: FSMContext):
     if not callback.from_user:
         return
+
     await state.set_state(CustomPayState.waiting_amount)
+
+    log_info(
+        logger,
+        "Начат ввод кастомной суммы Stars",
+        tg_id=callback.from_user.id,
+    )
+
     await callback.message.answer(
         f"\U0001f4dd \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u043b-\u0432\u043e \u0437\u0432\u0451\u0437\u0434 (Stars).\n"
         f"\u041a\u0443\u0440\u0441: 1 Star = {STARS_TO_COINS_RATE} \u043c\u043e\u043d\u0435\u0442\n\n"
-        "\u041c\u0438\u043d: 1 Star\n/start \u0434\u043b\u044f \u043e\u0442\u043c\u0435\u043d\u044b",
+        "\u041c\u0438\u043d: 1 Star\n/start \u0434\u043b\u044f \u043e\u0442\u043c\u0435\u043d\u044b"
     )
     await callback.answer()
 
@@ -383,6 +617,7 @@ async def cb_buy_custom(callback: CallbackQuery, state: FSMContext):
 async def custom_pay_amount(message: Message, state: FSMContext):
     if not message.from_user:
         return
+
     text = (message.text or "").strip()
     if not text.isdigit() or int(text) < 1:
         await message.answer("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043b\u043e \u043e\u0442 1.")
@@ -398,7 +633,17 @@ async def custom_pay_amount(message: Message, state: FSMContext):
                 await message.answer("/start")
                 await state.clear()
                 return
+
             payment = await create_custom_payment(session, user, stars)
+
+        log_info(
+            logger,
+            "Создан кастомный платёж",
+            tg_id=message.from_user.id,
+            payload=payment.payload,
+            stars_amount=stars,
+            coins_amount=str(coins),
+        )
 
         await message.answer_invoice(
             title=f"{coins} \u043c\u043e\u043d\u0435\u0442",
@@ -408,9 +653,13 @@ async def custom_pay_amount(message: Message, state: FSMContext):
             currency="XTR",
             prices=[LabeledPrice(label=f"{coins} \u043c\u043e\u043d\u0435\u0442", amount=stars)],
         )
-    except Exception as e:
-        logger.error(f"[CUSTOM_PAY] {e}")
-        logger.error(traceback.format_exc())
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при создании кастомного платежа",
+            tg_id=message.from_user.id if message.from_user else None,
+            stars=stars,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
     finally:
         await state.clear()
@@ -425,37 +674,62 @@ async def pre_checkout(pq: PreCheckoutQuery):
 async def successful_payment(message: Message):
     if not message.from_user or not message.successful_payment:
         return
+
     try:
         payload = message.successful_payment.invoice_payload
+
         async with async_session() as session:
             success, msg = await apply_successful_payment(session, payload)
+
+        log_info(
+            logger,
+            "Успешный платёж обработан",
+            tg_id=message.from_user.id,
+            payload=payload,
+            success=success,
+            result=msg,
+        )
+
         await message.answer(f"\u2705 {msg}" if success else f"\u26a0\ufe0f {msg}")
-    except Exception as e:
-        logger.error(f"[PAYMENT] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка обработки successful_payment",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430 \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u0438\u044f.")
 
-
-# ===== OFFERS =====
 
 @router.message(F.text == BTN_OFFERS)
 async def show_offers(message: Message):
     if not message.from_user:
         return
+
     try:
         async with async_session() as session:
             offers = await get_active_offers(session)
+            if not offers:
+                await message.answer("\u041e\u0444\u0444\u0435\u0440\u043e\u0432 \u043d\u0435\u0442.")
+                return
 
-        if not offers:
-            await message.answer("\u041e\u0444\u0444\u0435\u0440\u043e\u0432 \u043d\u0435\u0442.")
-            return
+        log_info(
+            logger,
+            "Открыт список офферов",
+            tg_id=message.from_user.id,
+            offers_count=len(offers),
+        )
 
         await message.answer(
             "\U0001f381 <b>\u041e\u0444\u0444\u0435\u0440\u044b</b>",
             parse_mode="HTML",
             reply_markup=offers_list_keyboard(offers),
         )
-    except Exception as e:
-        logger.error(f"[OFFERS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии списка офферов",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -463,14 +737,15 @@ async def show_offers(message: Message):
 async def offer_open(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         offer_id = int(callback.data.split(":")[1])
+
         async with async_session() as session:
             offer = await get_offer_by_id(session, offer_id)
-
-        if not offer or not offer.is_active:
-            await callback.answer("\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d", show_alert=True)
-            return
+            if not offer or not offer.is_active:
+                await callback.answer("\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d", show_alert=True)
+                return
 
         text = (
             f"\U0001f381 <b>{offer.title}</b>\n\n{offer.description}\n\n"
@@ -478,10 +753,23 @@ async def offer_open(callback: CallbackQuery):
             f"\U0001f4b0 \u0412\u0441\u0435\u0433\u043e: <b>40</b>\n"
             f"\u26a0\ufe0f \u0428\u0442\u0440\u0430\u0444: <b>40</b>"
         )
+
+        log_info(
+            logger,
+            "Открыт конкретный оффер",
+            tg_id=callback.from_user.id,
+            offer_id=offer.id,
+            title=offer.title,
+        )
+
         await safe_edit_or_answer(callback, text, offer_view_keyboard(offer.id, offer.channel_url))
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[OFFER_OPEN] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии оффера",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -489,23 +777,42 @@ async def offer_open(callback: CallbackQuery):
 async def offer_start(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         offer_id = int(callback.data.split(":")[1])
+
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             offer = await get_offer_by_id(session, offer_id)
+
             if not user or not offer:
                 await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", show_alert=True)
                 return
+
             success, msg = await start_offer_participation(session, user, offer)
+
+        log_info(
+            logger,
+            "Попытка старта оффера",
+            tg_id=callback.from_user.id,
+            offer_id=offer_id,
+            success=success,
+            result=msg,
+        )
 
         text = f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}"
         if success:
             text += "\n\n\u041f\u043e\u0434\u043f\u0438\u0448\u0438\u0442\u0435\u0441\u044c \u043d\u0430 \u043a\u0430\u043d\u0430\u043b \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c."
+
         await safe_edit_or_answer(callback, text, offer_view_keyboard(offer_id, offer.channel_url))
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[OFFER_START] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при старте оффера",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            offer_id=offer_id if "offer_id" in locals() else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -513,15 +820,17 @@ async def offer_start(callback: CallbackQuery):
 async def offer_check(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         offer_id = int(callback.data.split(":")[1])
 
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             offer = await get_offer_by_id(session, offer_id)
-            if not user or not offer:
-                await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", show_alert=True)
-                return
+
+        if not user or not offer:
+            await callback.answer("\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e", show_alert=True)
+            return
 
         chat_id = extract_channel_id(offer.channel_url)
         subscribed = False
@@ -530,12 +839,28 @@ async def offer_check(callback: CallbackQuery):
             cm = await callback.bot.get_chat_member(chat_id=chat_id, user_id=callback.from_user.id)
             subscribed = cm.status in ("member", "administrator", "creator")
         except Exception as e:
-            logger.warning(f"[OFFER_CHECK] get_chat_member failed for {chat_id}: {e}")
+            log_warning(
+                logger,
+                "Не удалось проверить подписку через get_chat_member",
+                tg_id=callback.from_user.id,
+                chat_id=chat_id,
+                error=str(e),
+            )
 
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             offer = await get_offer_by_id(session, offer_id)
             success, msg = await verify_offer_subscription(session, user, offer, subscribed)
+
+        log_info(
+            logger,
+            "Проверка оффера завершена",
+            tg_id=callback.from_user.id,
+            offer_id=offer_id,
+            subscribed=subscribed,
+            success=success,
+            result=msg,
+        )
 
         await safe_edit_or_answer(
             callback,
@@ -543,16 +868,23 @@ async def offer_check(callback: CallbackQuery):
             offer_view_keyboard(offer.id, offer.channel_url),
         )
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[OFFER_CHECK] {e}")
-        logger.error(traceback.format_exc())
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при проверке оффера",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            offer_id=offer_id if "offer_id" in locals() else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
-# ===== GAMES =====
-
 @router.message(F.text == BTN_GAMES)
 async def games_menu(message: Message):
+    log_info(
+        logger,
+        "Открыто меню игр",
+        tg_id=message.from_user.id if message.from_user else None,
+    )
     await message.answer(
         "\U0001f3ae <b>\u0418\u0433\u0440\u044b</b>\n\n\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435:",
         parse_mode="HTML",
@@ -564,29 +896,50 @@ async def games_menu(message: Message):
 async def game_lootbox(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
+            if not user:
+                await callback.answer("/start", show_alert=True)
+                return
+
             success, reward, msg = await play_lootbox(session, user)
             if success:
                 await add_xp(session, user, XP_PER_GAME)
 
+        log_info(
+            logger,
+            "Игра lootbox завершена",
+            tg_id=callback.from_user.id,
+            success=success,
+            reward=reward,
+            result=msg,
+        )
+
         text = (
             f"\U0001f4e6 \u0412\u044b \u043e\u0442\u043a\u0440\u044b\u043b\u0438 \u043b\u0443\u0442\u0431\u043e\u043a\u0441 \u0438 \u0432\u044b\u0438\u0433\u0440\u0430\u043b\u0438 <b>{reward}</b> \u043c\u043e\u043d\u0435\u0442!"
-            if success else
-            f"\u26a0\ufe0f {msg}"
+            if success
+            else f"\u26a0\ufe0f {msg}"
         )
         await safe_edit_or_answer(callback, text, games_menu_keyboard())
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[GAME_LOOTBOX] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка в lootbox",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
 @router.callback_query(F.data == "game_dice")
 async def game_dice_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GameState.waiting_dice_bet)
-    await safe_edit_or_answer(callback, "\U0001f3b2 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043a\u043e\u0441\u0442\u0435\u0439 (1-50):")
+    await safe_edit_or_answer(
+        callback,
+        "\U0001f3b2 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043a\u043e\u0441\u0442\u0435\u0439 (1-50):",
+    )
     await callback.answer()
 
 
@@ -594,18 +947,36 @@ async def game_dice_start(callback: CallbackQuery, state: FSMContext):
 async def game_dice_process(message: Message, state: FSMContext):
     if not message.from_user:
         return
+
     text = (message.text or "").strip()
     if not text.isdigit():
         await message.answer("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043b\u043e.")
         return
 
     bet = int(text)
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("/start")
+                await state.clear()
+                return
+
             success, roll, win, msg = await play_dice(session, user, bet)
             if success:
                 await add_xp(session, user, XP_PER_GAME)
+
+        log_info(
+            logger,
+            "Игра dice завершена",
+            tg_id=message.from_user.id,
+            bet=bet,
+            success=success,
+            roll=roll,
+            win=str(win),
+            result=msg,
+        )
 
         if success:
             await message.answer(
@@ -616,8 +987,13 @@ async def game_dice_process(message: Message, state: FSMContext):
             )
         else:
             await message.answer(f"\u26a0\ufe0f {msg}", reply_markup=games_menu_keyboard())
-    except Exception as e:
-        logger.error(f"[GAME_DICE] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка в dice",
+            tg_id=message.from_user.id if message.from_user else None,
+            bet=bet,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
     finally:
         await state.clear()
@@ -626,7 +1002,10 @@ async def game_dice_process(message: Message, state: FSMContext):
 @router.callback_query(F.data == "game_coinflip")
 async def game_coinflip_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GameState.waiting_coin_bet)
-    await safe_edit_or_answer(callback, "\U0001fa99 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043c\u043e\u043d\u0435\u0442\u043a\u0438 (1-50):")
+    await safe_edit_or_answer(
+        callback,
+        "\U0001fa99 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0442\u0430\u0432\u043a\u0443 \u0434\u043b\u044f \u043c\u043e\u043d\u0435\u0442\u043a\u0438 (1-50):",
+    )
     await callback.answer()
 
 
@@ -634,18 +1013,36 @@ async def game_coinflip_start(callback: CallbackQuery, state: FSMContext):
 async def game_coinflip_process(message: Message, state: FSMContext):
     if not message.from_user:
         return
+
     text = (message.text or "").strip()
     if not text.isdigit():
         await message.answer("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043b\u043e.")
         return
 
     bet = int(text)
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("/start")
+                await state.clear()
+                return
+
             success, side, win, msg = await play_coinflip(session, user, bet)
             if success:
                 await add_xp(session, user, XP_PER_GAME)
+
+        log_info(
+            logger,
+            "Игра coinflip завершена",
+            tg_id=message.from_user.id,
+            bet=bet,
+            success=success,
+            side=side,
+            win=str(win),
+            result=msg,
+        )
 
         if success:
             side_text = "\u041e\u0440\u0451\u043b" if side == "heads" else "\u0420\u0435\u0448\u043a\u0430"
@@ -656,8 +1053,13 @@ async def game_coinflip_process(message: Message, state: FSMContext):
             )
         else:
             await message.answer(f"\u26a0\ufe0f {msg}", reply_markup=games_menu_keyboard())
-    except Exception as e:
-        logger.error(f"[GAME_COIN] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка в coinflip",
+            tg_id=message.from_user.id if message.from_user else None,
+            bet=bet,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
     finally:
         await state.clear()
@@ -666,7 +1068,10 @@ async def game_coinflip_process(message: Message, state: FSMContext):
 @router.callback_query(F.data == "game_guess")
 async def game_guess_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GameState.waiting_guess_number)
-    await safe_edit_or_answer(callback, "\U0001f522 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043b\u043e 1-10:")
+    await safe_edit_or_answer(
+        callback,
+        "\U0001f522 \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043b\u043e 1-10:",
+    )
     await callback.answer()
 
 
@@ -697,9 +1102,26 @@ async def game_guess_bet(message: Message, state: FSMContext):
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("/start")
+                await state.clear()
+                return
+
             success, answer, win, msg = await play_guess(session, user, guess, bet)
             if success:
                 await add_xp(session, user, XP_PER_GAME)
+
+        log_info(
+            logger,
+            "Игра guess завершена",
+            tg_id=message.from_user.id,
+            bet=bet,
+            guess=guess,
+            success=success,
+            answer=answer,
+            win=str(win),
+            result=msg,
+        )
 
         if success:
             await message.answer(
@@ -711,18 +1133,30 @@ async def game_guess_bet(message: Message, state: FSMContext):
             )
         else:
             await message.answer(f"\u26a0\ufe0f {msg}", reply_markup=games_menu_keyboard())
-    except Exception as e:
-        logger.error(f"[GAME_GUESS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка в guess",
+            tg_id=message.from_user.id if message.from_user else None,
+            bet=bet,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
     finally:
         await state.clear()
 
 
-# ===== TOPS =====
-
 @router.message(F.text == BTN_TOPS)
 async def tops_menu(message: Message):
-    await message.answer("\U0001f3c6 <b>\u0422\u043e\u043f\u044b</b>", parse_mode="HTML", reply_markup=tops_menu_keyboard())
+    log_info(
+        logger,
+        "Открыто меню топов",
+        tg_id=message.from_user.id if message.from_user else None,
+    )
+    await message.answer(
+        "\U0001f3c6 <b>\u0422\u043e\u043f\u044b</b>",
+        parse_mode="HTML",
+        reply_markup=tops_menu_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "top_uploaders")
@@ -741,10 +1175,21 @@ async def top_uploaders(callback: CallbackQuery):
                 lines.append(f"{i}. {name} \u2014 {cnt}")
             text = "\n".join(lines)
 
+        log_info(
+            logger,
+            "Открыт топ загрузчиков",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            rows_count=len(rows),
+        )
+
         await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[TOP_UPLOADERS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии топа загрузчиков",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -764,10 +1209,21 @@ async def top_viewers(callback: CallbackQuery):
                 lines.append(f"{i}. {name} \u2014 {cnt}")
             text = "\n".join(lines)
 
+        log_info(
+            logger,
+            "Открыт топ зрителей",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            rows_count=len(rows),
+        )
+
         await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[TOP_VIEWERS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии топа зрителей",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -786,10 +1242,21 @@ async def top_levels(callback: CallbackQuery):
                 lines.append(f"{i}. {name} \u2014 lvl {u.level}, XP {u.xp}")
             text = "\n".join(lines)
 
+        log_info(
+            logger,
+            "Открыт топ по XP",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            users_count=len(users),
+        )
+
         await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[TOP_LEVELS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии топа по XP",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -808,34 +1275,56 @@ async def top_richest(callback: CallbackQuery):
                 lines.append(f"{i}. {name} \u2014 {u.balance}")
             text = "\n".join(lines)
 
+        log_info(
+            logger,
+            "Открыт топ богачей",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            users_count=len(users),
+        )
+
         await safe_edit_or_answer(callback, text, tops_menu_keyboard())
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[TOP_RICHEST] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии топа богачей",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
-
-# ===== QUESTS =====
 
 @router.message(F.text == BTN_QUESTS)
 async def quests_menu(message: Message):
     if not message.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if not user:
                 await message.answer("/start")
                 return
-            quests = await ensure_daily_quests(session, user.id)
+
+            quests = await ensure_daily_quests(session, user.id, user)
+
+        log_info(
+            logger,
+            "Открыты квесты",
+            tg_id=message.from_user.id,
+            quests_count=len(quests),
+        )
 
         await message.answer(
             "\U0001f3af <b>\u0415\u0436\u0435\u0434\u043d\u0435\u0432\u043d\u044b\u0435 \u043a\u0432\u0435\u0441\u0442\u044b</b>",
             parse_mode="HTML",
             reply_markup=quests_keyboard(quests),
         )
-    except Exception as e:
-        logger.error(f"[QUESTS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии квестов",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -843,18 +1332,38 @@ async def quests_menu(message: Message):
 async def quest_claim(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         quest_id = int(callback.data.split(":")[1])
+
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
+            if not user:
+                await callback.answer("/start", show_alert=True)
+                return
+
             success, msg = await claim_quest_reward(session, user, quest_id)
-            quests = await ensure_daily_quests(session, user.id)
+            quests = await ensure_daily_quests(session, user.id, user)
+
+        log_info(
+            logger,
+            "Попытка забрать награду за квест",
+            tg_id=callback.from_user.id,
+            quest_id=quest_id,
+            success=success,
+            result=msg,
+        )
 
         text = f"\u2705 {msg}" if success else f"\u2139\ufe0f {msg}"
         await safe_edit_or_answer(callback, text, quests_keyboard(quests))
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[QUEST_CLAIM] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при получении награды за квест",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            quest_id=quest_id if "quest_id" in locals() else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -863,12 +1372,11 @@ async def noop_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-# ===== COMMENTS / REACTIONS =====
-
 @router.callback_query(F.data.startswith("comments:"))
 async def show_comments(callback: CallbackQuery):
     try:
         video_id = int(callback.data.split(":")[1])
+
         async with async_session() as session:
             comments = await get_video_comments(session, video_id, limit=10)
             reactions = await get_reaction_counts(session, video_id)
@@ -890,10 +1398,23 @@ async def show_comments(callback: CallbackQuery):
                 lines.append(f"<b>{c['author']}</b>: {c['text']}")
             text = "\n".join(lines)
 
+        log_info(
+            logger,
+            "Открыты комментарии",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            video_id=video_id,
+            comments_count=len(comments),
+            reactions_count=len(reactions),
+        )
+
         await callback.message.answer(text, parse_mode="HTML")
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[SHOW_COMMENTS] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии комментариев",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -903,12 +1424,24 @@ async def add_comment_start(callback: CallbackQuery, state: FSMContext):
         video_id = int(callback.data.split(":")[1])
         await state.update_data(comment_video_id=video_id)
         await state.set_state(CommentState.waiting_comment_text)
+
+        log_info(
+            logger,
+            "Начато добавление комментария",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            video_id=video_id,
+        )
+
         await callback.message.answer(
             f"\u270d\ufe0f \u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u043a\u043e\u043c\u043c\u0435\u043d\u0442 \u0434\u043b\u044f #{video_id}\n/start \u2014 \u043e\u0442\u043c\u0435\u043d\u0430"
         )
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[COMMENT_START] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при старте комментария",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -937,9 +1470,21 @@ async def add_comment_process(message: Message, state: FSMContext):
             await add_xp(session, user, XP_PER_COMMENT)
             await increment_quest(session, user.id, "comment")
 
+        log_info(
+            logger,
+            "Комментарий добавлен",
+            tg_id=message.from_user.id,
+            video_id=video_id,
+            text_length=len(text),
+        )
+
         await message.answer("\u2705 \u041a\u043e\u043c\u043c\u0435\u043d\u0442 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d.")
-    except Exception as e:
-        logger.error(f"[COMMENT_ADD] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при добавлении комментария",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
     finally:
         await state.clear()
@@ -949,14 +1494,26 @@ async def add_comment_process(message: Message, state: FSMContext):
 async def react_menu(callback: CallbackQuery):
     try:
         video_id = int(callback.data.split(":")[1])
+
+        log_info(
+            logger,
+            "Открыто меню реакций",
+            tg_id=callback.from_user.id if callback.from_user else None,
+            video_id=video_id,
+        )
+
         await callback.message.answer(
             "\u2764\ufe0f <b>\u0420\u0435\u0430\u043a\u0446\u0438\u0438</b>",
             parse_mode="HTML",
             reply_markup=reaction_menu_keyboard(video_id),
         )
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[REACT_MENU] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии меню реакций",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
@@ -964,6 +1521,7 @@ async def react_menu(callback: CallbackQuery):
 async def react_process(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         _, video_id, reaction = callback.data.split(":", 2)
         if reaction not in REACTION_TYPES:
@@ -975,20 +1533,36 @@ async def react_process(callback: CallbackQuery):
             if not user:
                 await callback.answer("/start", show_alert=True)
                 return
+
             await add_reaction(session, user.id, int(video_id), reaction)
             await add_xp(session, user, XP_PER_REACTION)
             await increment_quest(session, user.id, "react")
 
+        log_info(
+            logger,
+            "Реакция сохранена",
+            tg_id=callback.from_user.id,
+            video_id=int(video_id),
+            reaction=reaction,
+        )
+
         await callback.answer(f"{reaction} \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e")
-    except Exception as e:
-        logger.error(f"[REACT] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при сохранении реакции",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
 
-# ===== UPLOAD =====
-
 @router.message(F.text == BTN_UPLOAD)
 async def upload_prompt(message: Message):
+    log_info(
+        logger,
+        "Открыт экран загрузки контента",
+        tg_id=message.from_user.id if message.from_user else None,
+    )
     await message.answer(
         "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0432\u0438\u0434\u0435\u043e, \u043a\u0440\u0443\u0436\u043e\u043a \u0438\u043b\u0438 \u0444\u043e\u0442\u043e.\n\n"
         "\u041d\u0430\u0433\u0440\u0430\u0434\u0430: \u0432\u0438\u0434\u0435\u043e/\u043a\u0440\u0443\u0436\u043e\u043a <b>0.5</b>, \u0444\u043e\u0442\u043e <b>0.1</b>",
@@ -1000,14 +1574,28 @@ async def upload_prompt(message: Message):
 async def handle_video(message: Message):
     if not message.from_user or not message.video:
         return
-    await _upload_video(message, message.video.file_id, message.video.file_unique_id, message.video.duration, message.video.file_size)
+
+    await _upload_video(
+        message,
+        message.video.file_id,
+        message.video.file_unique_id,
+        message.video.duration,
+        message.video.file_size,
+    )
 
 
 @router.message(F.video_note)
 async def handle_vnote(message: Message):
     if not message.from_user or not message.video_note:
         return
-    await _upload_video(message, message.video_note.file_id, message.video_note.file_unique_id, message.video_note.duration, message.video_note.file_size)
+
+    await _upload_video(
+        message,
+        message.video_note.file_id,
+        message.video_note.file_unique_id,
+        message.video_note.duration,
+        message.video_note.file_size,
+    )
 
 
 async def _upload_video(message, file_id, file_unique_id, duration, file_size):
@@ -1019,19 +1607,38 @@ async def _upload_video(message, file_id, file_unique_id, duration, file_size):
                 return
 
             video = await save_video(session, user, file_id, file_unique_id, duration, file_size)
-            if video:
-                await add_xp(session, user, XP_PER_UPLOAD)
-                await increment_quest(session, user.id, "upload")
+            if video is None:
+                log_warning(
+                    logger,
+                    "Попытка загрузить дубликат видео",
+                    tg_id=message.from_user.id,
+                    file_unique_id=file_unique_id,
+                )
+                await message.answer("\u26a0\ufe0f \u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442.")
+                return
 
-        if video is None:
-            await message.answer("\u26a0\ufe0f \u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442.")
-        else:
-            await message.answer(
-                "\u2705 \u041d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u0438. \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>0.5</b>",
-                parse_mode="HTML",
-            )
-    except Exception as e:
-        logger.error(f"[UPLOAD_V] {e}")
+            await add_xp(session, user, XP_PER_UPLOAD)
+            await increment_quest(session, user.id, "upload")
+
+        log_info(
+            logger,
+            "Видео отправлено на модерацию",
+            tg_id=message.from_user.id,
+            video_id=video.id,
+            duration=duration,
+            file_size=file_size,
+        )
+
+        await message.answer(
+            "\u2705 \u041d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u0438. \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>0.5</b>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при загрузке видео",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -1039,6 +1646,7 @@ async def _upload_video(message, file_id, file_unique_id, duration, file_size):
 async def handle_photo(message: Message):
     if not message.from_user or not message.photo:
         return
+
     try:
         largest = message.photo[-1]
 
@@ -1049,26 +1657,47 @@ async def handle_photo(message: Message):
                 return
 
             photo = await save_photo(session, user, largest.file_id, largest.file_unique_id, largest.file_size)
-            if photo:
-                await add_xp(session, user, XP_PER_UPLOAD)
-                await increment_quest(session, user.id, "upload")
+            if photo is None:
+                log_warning(
+                    logger,
+                    "Попытка загрузить дубликат фото",
+                    tg_id=message.from_user.id,
+                    file_unique_id=largest.file_unique_id,
+                )
+                await message.answer("\u26a0\ufe0f \u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442.")
+                return
 
-        if photo is None:
-            await message.answer("\u26a0\ufe0f \u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442.")
-        else:
-            await message.answer(
-                "\u2705 \u041d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u0438. \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>0.1</b>",
-                parse_mode="HTML",
-            )
-    except Exception as e:
-        logger.error(f"[UPLOAD_P] {e}")
+            await add_xp(session, user, XP_PER_UPLOAD)
+            await increment_quest(session, user.id, "upload")
+
+        log_info(
+            logger,
+            "Фото отправлено на модерацию",
+            tg_id=message.from_user.id,
+            photo_id=photo.id,
+            file_size=largest.file_size,
+        )
+
+        await message.answer(
+            "\u2705 \u041d\u0430 \u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u0438. \u041d\u0430\u0433\u0440\u0430\u0434\u0430: <b>0.1</b>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при загрузке фото",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
-# ===== WATCH =====
-
 @router.message(F.text == BTN_WATCH)
 async def watch_menu(message: Message):
+    log_info(
+        logger,
+        "Открыто меню просмотра",
+        tg_id=message.from_user.id if message.from_user else None,
+    )
     await message.answer("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435:", reply_markup=watch_choice_keyboard())
 
 
@@ -1124,10 +1753,19 @@ async def _send_video(message, telegram_id):
 
             await add_xp(session, user, XP_PER_WATCH)
             await increment_quest(session, user.id, "watch")
+            await session.refresh(user)
 
-            bal = user.balance
             fid = video.telegram_file_id
             vid = video.id
+            bal = user.balance
+
+        log_info(
+            logger,
+            "Видео показано пользователю",
+            tg_id=telegram_id,
+            video_id=vid,
+            balance_after=str(bal),
+        )
 
         await message.answer_video(
             video=fid,
@@ -1135,8 +1773,12 @@ async def _send_video(message, telegram_id):
             parse_mode="HTML",
             reply_markup=video_rating_keyboard(vid),
         )
-    except Exception as e:
-        logger.error(f"[SEND_V] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при отправке видео пользователю",
+            tg_id=telegram_id,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -1164,6 +1806,15 @@ async def _send_photo(message, telegram_id):
             await record_photo_view(session, user, photo)
             rem = "\u221e" if is_vip(user) else str(FREE_PHOTO_LIMIT_PER_4H - (vc + 1))
             fid = photo.telegram_file_id
+            pid = photo.id
+
+        log_info(
+            logger,
+            "Фото показано пользователю",
+            tg_id=telegram_id,
+            photo_id=pid,
+            remaining=rem,
+        )
 
         await message.answer_photo(
             photo=fid,
@@ -1171,8 +1822,12 @@ async def _send_photo(message, telegram_id):
             parse_mode="HTML",
             reply_markup=photo_actions_keyboard(),
         )
-    except Exception as e:
-        logger.error(f"[SEND_P] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при отправке фото пользователю",
+            tg_id=telegram_id,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -1180,6 +1835,7 @@ async def _send_photo(message, telegram_id):
 async def cb_rate(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         parts = callback.data.split(":")
         vid = int(parts[1])
@@ -1192,34 +1848,56 @@ async def cb_rate(callback: CallbackQuery):
                 await add_xp(session, user, XP_PER_RATING)
                 await increment_quest(session, user.id, "rate")
 
+        log_info(
+            logger,
+            "Поставлена оценка видео",
+            tg_id=callback.from_user.id,
+            video_id=vid,
+            rating=r,
+        )
+
         await callback.answer("\u041e\u0446\u0435\u043d\u043a\u0430 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0430")
-    except Exception as e:
-        logger.error(f"[RATE] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при оценке видео",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
 
-
-# ===== ADMIN BTN =====
 
 @router.message(F.text == BTN_ADMIN)
 async def open_admin(message: Message):
     if not message.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
+            if not is_any_admin(message.from_user.id, user):
+                await message.answer("\u26d4")
+                return
 
-        if not is_any_admin(message.from_user.id, user):
-            await message.answer("\u26d4")
-            return
+            sa = is_super_admin(message.from_user.id)
 
-        sa = is_super_admin(message.from_user.id)
+        log_info(
+            logger,
+            "Открыта админка из кнопки",
+            tg_id=message.from_user.id,
+            is_super_admin=sa,
+        )
+
         await message.answer(
             "\U0001f6e0 <b>\u0410\u0434\u043c\u0438\u043d</b>",
             parse_mode="HTML",
             reply_markup=admin_center_keyboard(is_super_admin=sa),
         )
-    except Exception as e:
-        logger.error(f"[ADMIN_BTN] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии админки",
+            tg_id=message.from_user.id if message.from_user else None,
+        )
         await message.answer("\u041e\u0448\u0438\u0431\u043a\u0430.")
 
 
@@ -1227,21 +1905,51 @@ async def open_admin(message: Message):
 async def cb_admin_center(callback: CallbackQuery):
     if not callback.from_user:
         return
+
     try:
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
+            if not is_any_admin(callback.from_user.id, user):
+                await callback.answer("\u26d4", show_alert=True)
+                return
 
-        if not is_any_admin(callback.from_user.id, user):
-            await callback.answer("\u26d4", show_alert=True)
-            return
+            sa = is_super_admin(callback.from_user.id)
 
-        sa = is_super_admin(callback.from_user.id)
+        log_info(
+            logger,
+            "Открыт admin_center callback",
+            tg_id=callback.from_user.id,
+            is_super_admin=sa,
+        )
+
         await safe_edit_or_answer(
             callback,
             "\U0001f6e0 <b>\u0410\u0434\u043c\u0438\u043d</b>",
             admin_center_keyboard(is_super_admin=sa),
         )
         await callback.answer()
-    except Exception as e:
-        logger.error(f"[ADMIN_CB] {e}")
+    except Exception:
+        log_exception(
+            logger,
+            "Ошибка при открытии admin_center",
+            tg_id=callback.from_user.id if callback.from_user else None,
+        )
         await callback.answer("\u041e\u0448\u0438\u0431\u043a\u0430", show_alert=True)
+
+
+@router.message()
+async def fallback_unknown_message(message: Message):
+    if not message.from_user:
+        return
+
+    log_warning(
+        logger,
+        "Получено неизвестное сообщение",
+        tg_id=message.from_user.id,
+        text=message.text,
+    )
+
+    await message.answer(
+        "\u2139\ufe0f \u042f \u043d\u0435 \u043f\u043e\u043d\u044f\u043b \u044d\u0442\u0443 \u043a\u043e\u043c\u0430\u043d\u0434\u0443.\n"
+        "\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 /start \u0438\u043b\u0438 \u043a\u043d\u043e\u043f\u043a\u0438 \u043c\u0435\u043d\u044e."
+    )
