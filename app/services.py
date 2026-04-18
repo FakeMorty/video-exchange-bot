@@ -39,8 +39,6 @@ from app.config import (
     VIP_DURATION_DAYS,
     VIP_BONUS_MULTIPLIER,
     VIP_WATCH_DISCOUNT,
-    LOOTBOX_COST,
-    LOOTBOX_REWARDS,
     DICE_MIN_BET,
     DICE_MAX_BET,
     DAILY_QUESTS,
@@ -932,34 +930,6 @@ async def increment_game_session(session, user):
 
 
 # ========== GAMES ==========
-async def play_lootbox(session, user):
-    cost = to_decimal(LOOTBOX_COST)
-    if user.balance < cost:
-        return False, 0, "Недостаточно монет."
-    user.balance -= cost
-    roll = random.random()
-    cumul = 0
-    reward = 1
-    for prob, coins in LOOTBOX_REWARDS:
-        cumul += prob
-        if roll <= cumul:
-            reward = coins
-            break
-    user.balance += to_decimal(reward)
-    session.add(
-        GameHistory(
-            user_id=user.id,
-            game_type="lootbox",
-            bet=cost,
-            result=to_decimal(reward),
-            details=f"won {reward}",
-        )
-    )
-    await session.commit()
-    await session.refresh(user)
-    return True, reward, ""
-
-
 async def play_dice(session, user, bet):
     bet_d = to_decimal(bet)
     if bet < DICE_MIN_BET or bet > DICE_MAX_BET:

@@ -91,17 +91,6 @@ VIP_FREE_PHOTOS = True
 VIP_WATCH_DISCOUNT = _get_float("VIP_WATCH_DISCOUNT", 0.5)
 
 # === GAMES ===
-LOOTBOX_COST = _get_float("LOOTBOX_COST", 5.0)
-LOOTBOX_REWARDS = [
-    (0.30, 1),
-    (0.25, 3),
-    (0.20, 5),
-    (0.12, 10),
-    (0.08, 20),
-    (0.04, 50),
-    (0.01, 100),
-]
-
 DICE_MIN_BET = _get_int("DICE_MIN_BET", 1)
 DICE_MAX_BET = _get_int("DICE_MAX_BET", 50)
 

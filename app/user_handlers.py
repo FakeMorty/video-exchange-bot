@@ -58,7 +58,6 @@ from app.services import (
     get_top_viewers,
     get_top_by_level,
     get_top_richest,
-    play_lootbox,
     play_dice,
     play_coinflip,
     play_guess,
@@ -894,53 +893,8 @@ async def cb_pay_game_session(callback: CallbackQuery):
         await callback.answer("Ошибка", show_alert=True)
 
 
-@router.callback_query(F.data == "game_lootbox")
-async def game_lootbox(callback: CallbackQuery):
-    if not callback.from_user:
-        return
-    try:
-        async with async_session() as session:
-            user = await get_user(session, callback.from_user.id)
-            if not user:
-                await callback.answer("/start", show_alert=True)
-                return
-
-            can_play, limit_msg, gs = await check_game_limit(session, user)
-            if not can_play:
-                await callback.message.answer(limit_msg, parse_mode="HTML", reply_markup=_game_limit_keyboard())
-                await callback.answer()
-                return
-
-            success, reward, msg = await play_lootbox(session, user)
-            if success:
-                await increment_game_session(session, user)
-                await add_xp(session, user, XP_PER_GAME)
-
-            log_info(
-                logger,
-                "Игра lootbox сыграна",
-                tg_id=callback.from_user.id,
-                success=success,
-                reward=reward,
-                result=msg,
-            )
-            text = (
-                f"📦 Вы открыли лутбокс и выиграли <b>{reward}</b> монет!"
-                if success
-                else f"⚠️ {msg}"
-            )
-            await safe_edit_or_answer(callback, text, games_menu_keyboard())
-            await callback.answer()
-    except Exception:
-        log_exception(
-            logger,
-            "Ошибка в lootbox",
-            tg_id=callback.from_user.id if callback.from_user else None,
-        )
-        await callback.answer("Ошибка", show_alert=True)
-
-
 @router.callback_query(F.data == "game_dice")
+
 async def game_dice_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(GameState.waiting_dice_bet)
     await safe_edit_or_answer(
