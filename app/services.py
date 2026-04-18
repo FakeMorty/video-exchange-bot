@@ -2,10 +2,8 @@ import uuid
 import random
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
-
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import (
     User,
     Video,
@@ -18,6 +16,7 @@ from app.models import (
     ContentReaction,
     GameHistory,
     DailyQuestProgress,
+    GameSession,
 )
 from app.config import (
     STARTING_BALANCE,
@@ -63,6 +62,11 @@ FREE_PHOTO_LIMIT_PER_4H = 20
 OFFER_STEP_1_REWARD = Decimal("5.00")
 OFFER_PENALTY = Decimal("40.00")
 
+# ========== GAME SESSION LIMIT ==========
+GAME_SESSION_LIMIT = 10
+GAME_SESSION_HOURS = 4
+GAME_SESSION_COST = Decimal("40.00")
+
 
 def to_decimal(value) -> Decimal:
     if isinstance(value, Decimal):
@@ -75,20 +79,17 @@ def round_coin(v) -> Decimal:
 
 
 # ========== FORMAT ==========
-
 def format_duration(seconds):
     if not seconds:
-        return "0 \u0441\u0435\u043a"
-
+        return "0 сек"
     h = seconds // 3600
     m = (seconds % 3600) // 60
     s = seconds % 60
-
     if h > 0:
-        return f"{h}\u0447 {m:02d}\u043c {s:02d}\u0441"
+        return f"{h}ч {m:02d}м {s:02d}с"
     if m > 0:
-        return f"{m}\u043c {s:02d}\u0441"
-    return f"{s}\u0441"
+        return f"{m}м {s:02d}с"
+    return f"{s}с"
 
 
 def format_file_size(b):
@@ -102,11 +103,9 @@ def format_file_size(b):
 
 
 # ========== LEVELS ==========
-
 def calc_level_info(total_xp):
     level = 1
     xp_rem = total_xp
-
     while True:
         needed = int(LEVEL_XP_BASE * (LEVEL_XP_MULTIPLIER ** (level - 1)))
         if xp_rem < needed:
@@ -125,7 +124,6 @@ async def add_xp(session, user, amount):
 
 
 # ========== VIP ==========
-
 def is_vip(user):
     if not user.vip_until:
         return False
@@ -146,7 +144,6 @@ async def activate_vip(session, user):
         user.vip_until = user.vip_until + timedelta(days=VIP_DURATION_DAYS)
     else:
         user.vip_until = now + timedelta(days=VIP_DURATION_DAYS)
-
     await session.commit()
     await session.refresh(user)
     return user
@@ -168,7 +165,6 @@ async def create_vip_payment(session, user):
 
 
 # ========== ADMINS ==========
-
 async def get_user_by_username(session, username):
     clean = username.strip().lstrip("@").lower()
     stmt = select(User).where(func.lower(User.username) == clean)
@@ -188,7 +184,6 @@ async def get_db_admins(session):
 
 
 # ========== USER ==========
-
 async def get_user(session, telegram_id):
     stmt = select(User).where(User.telegram_id == telegram_id)
     return (await session.execute(stmt)).scalar_one_or_none()
@@ -217,7 +212,6 @@ async def get_or_create_user(
     referral_code=None,
 ):
     user = await get_user(session, telegram_id)
-
     if user:
         user.username = username
         user.first_name = first_name
@@ -228,7 +222,6 @@ async def get_or_create_user(
 
     referred_by = None
     inviter = None
-
     if referral_code:
         inviter = await get_user_by_referral_code(session, referral_code)
         if inviter and inviter.telegram_id != telegram_id:
@@ -272,30 +265,24 @@ async def agree_to_rules(session, telegram_id):
 async def claim_daily_bonus(session, telegram_id):
     user = await get_user(session, telegram_id)
     if not user:
-        return False, "\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
-
+        return False, "Не найден."
     now = datetime.utcnow()
-
     if user.last_bonus_at:
         nxt = user.last_bonus_at + timedelta(hours=BONUS_COOLDOWN_HOURS)
         if now < nxt:
             rem = nxt - now
             h = int(rem.total_seconds()) // 3600
             m = (int(rem.total_seconds()) % 3600) // 60
-            return False, f"\u0427\u0435\u0440\u0435\u0437 {h}\u0447 {m}\u043c."
-
+            return False, f"Через {h}ч {m}м."
     bonus = BONUS_AMOUNT
     if is_vip(user):
         bonus = round_coin(bonus * to_decimal(VIP_BONUS_MULTIPLIER))
-
     user.balance += bonus
     user.last_bonus_at = now
-
     await session.commit()
     await session.refresh(user)
-
     vip_mark = " (VIP bonus)" if is_vip(user) else ""
-    return True, f"+{bonus}{vip_mark}. \u0411\u0430\u043b\u0430\u043d\u0441: {user.balance}"
+    return True, f"+{bonus}{vip_mark}. Баланс: {user.balance}"
 
 
 async def count_referrals(session, user_id):
@@ -307,12 +294,10 @@ async def count_referrals(session, user_id):
 
 
 # ========== PAYMENTS ==========
-
 async def create_payment(session, user, package_key):
     pkg = STARS_PACKAGES.get(package_key)
     if not pkg:
         return None
-
     payload = f"{package_key}:{user.telegram_id}:{uuid.uuid4().hex[:12]}"
     p = Payment(
         user_id=user.id,
@@ -347,7 +332,6 @@ async def create_money_payment(session, user, package_key):
     pkg = MONEY_PACKAGES.get(package_key)
     if not pkg:
         return None
-
     payload = f"money:{package_key}:{user.telegram_id}:{uuid.uuid4().hex[:12]}"
     p = Payment(
         user_id=user.id,
@@ -371,28 +355,23 @@ async def get_payment_by_payload(session, payload):
 async def apply_successful_payment(session, payload):
     payment = await get_payment_by_payload(session, payload)
     if not payment:
-        return False, "\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
+        return False, "Не найден."
     if payment.status == "paid":
-        return True, "\u0423\u0436\u0435 \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u043d."
-
+        return True, "Уже обработан."
     user = await get_user_by_id(session, payment.user_id)
     if not user:
-        return False, "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
-
+        return False, "Пользователь не найден."
     payment.status = "paid"
-
     if payload.startswith("vip:"):
         await activate_vip(session, user)
-        return True, f"VIP \u0434\u043e {user.vip_until.strftime('%d.%m.%Y')}!"
-
+        return True, f"VIP до {user.vip_until.strftime('%d.%m.%Y')}!"
     user.balance += payment.coins_amount
     await session.commit()
     await session.refresh(user)
-    return True, f"+{payment.coins_amount}. \u0411\u0430\u043b\u0430\u043d\u0441: {user.balance}"
+    return True, f"+{payment.coins_amount}. Баланс: {user.balance}"
 
 
 # ========== OFFERS ==========
-
 async def create_offer(session, title, description, channel_url):
     o = Offer(
         title=title,
@@ -435,7 +414,6 @@ async def toggle_offer_active(session, oid):
     o = await get_offer_by_id(session, oid)
     if not o:
         return None
-
     o.is_active = not o.is_active
     await session.commit()
     await session.refresh(o)
@@ -445,16 +423,14 @@ async def toggle_offer_active(session, oid):
 async def pin_offer_for_coins(session, user, offer_id):
     offer = await get_offer_by_id(session, offer_id)
     if not offer:
-        return False, "\u041e\u0444\u0444\u0435\u0440 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d."
-
+        return False, "Оффер не найден."
     cost = to_decimal(PIN_OFFER_COST)
     if user.balance < cost:
-        return False, "\u041d\u0435\u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u043c\u043e\u043d\u0435\u0442."
-
+        return False, "Нехватает монет."
     user.balance -= cost
     offer.created_at = datetime.utcnow()
     await session.commit()
-    return True, f"\u041e\u0444\u0444\u0435\u0440 #{offer.id} \u043f\u043e\u0434\u043d\u044f\u0442 \u0437\u0430 {cost} \u043c\u043e\u043d\u0435\u0442."
+    return True, f"Оффер #{offer.id} поднят за {cost} монет."
 
 
 async def start_offer_participation(session, user, offer):
@@ -466,10 +442,8 @@ async def start_offer_participation(session, user, offer):
             )
         )
     ).scalar_one_or_none()
-
     if existing:
-        return False, "\u0423\u0436\u0435 \u0443\u0447\u0430\u0441\u0442\u0432\u0443\u0435\u0442\u0435."
-
+        return False, "Уже участвуете."
     session.add(
         OfferParticipation(
             user_id=user.id,
@@ -480,7 +454,7 @@ async def start_offer_participation(session, user, offer):
     )
     user.balance += OFFER_STEP_1_REWARD
     await session.commit()
-    return True, f"+{OFFER_STEP_1_REWARD} \u043c\u043e\u043d\u0435\u0442."
+    return True, f"+{OFFER_STEP_1_REWARD} монет."
 
 
 async def verify_offer_subscription(session, user, offer, is_sub):
@@ -492,28 +466,22 @@ async def verify_offer_subscription(session, user, offer, is_sub):
             )
         )
     ).scalar_one_or_none()
-
     if not part:
-        return False, "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u0430\u0447\u043d\u0438\u0442\u0435."
-
+        return False, "Сначала начните."
     part.checked_at = datetime.utcnow()
-
     if is_sub:
         if part.status == "verified":
-            return True, "\u0423\u0436\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e."
-
+            return True, "Уже подтверждено."
         part.status = "verified"
         await session.commit()
-        return True, "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 OK."
-
+        return True, "Подписка OK."
     if part.status == "verified":
         user.balance = max(Decimal("0"), to_decimal(user.balance) - OFFER_PENALTY)
         part.status = "penalized"
         await session.commit()
-        return False, f"\u0428\u0442\u0440\u0430\u0444 {OFFER_PENALTY}."
-
+        return False, f"Штраф {OFFER_PENALTY}."
     await session.commit()
-    return False, "\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e."
+    return False, "Не подтверждено."
 
 
 async def get_users_without_offer(session, offer_id):
@@ -531,7 +499,6 @@ async def get_users_without_offer(session, offer_id):
 
 
 # ========== CONTENT ==========
-
 async def save_video(session, uploader, file_id, file_unique_id, duration, file_size):
     exists = (
         await session.execute(
@@ -540,7 +507,6 @@ async def save_video(session, uploader, file_id, file_unique_id, duration, file_
     ).scalar_one_or_none()
     if exists:
         return None
-
     v = Video(
         uploader_user_id=uploader.id,
         content_type="video",
@@ -564,7 +530,6 @@ async def save_photo(session, uploader, file_id, file_unique_id, file_size):
     ).scalar_one_or_none()
     if exists:
         return None
-
     p = Video(
         uploader_user_id=uploader.id,
         content_type="photo",
@@ -588,22 +553,18 @@ async def bump_video_for_coins(session, user, video_id):
             )
         )
     ).scalar_one_or_none()
-
     if not video:
-        return False, "\u0412\u0438\u0434\u0435\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e."
-
+        return False, "Видео не найдено."
     cost = to_decimal(BUMP_VIDEO_COST)
     if user.balance < cost:
-        return False, "\u041d\u0435\u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u043c\u043e\u043d\u0435\u0442."
-
+        return False, "Нехватает монет."
     user.balance -= cost
     video.created_at = datetime.utcnow()
     await session.commit()
-    return True, f"\u0412\u0438\u0434\u0435\u043e #{video.id} \u043f\u043e\u0434\u043d\u044f\u0442\u043e \u0437\u0430 {cost} \u043c\u043e\u043d\u0435\u0442."
+    return True, f"Видео #{video.id} поднято за {cost} монет."
 
 
 # ========== MODERATION ==========
-
 async def get_next_pending_video(session):
     return (
         await session.execute(
@@ -619,17 +580,14 @@ async def approve_video(session, video_id):
     v = (await session.execute(select(Video).where(Video.id == video_id))).scalar_one_or_none()
     if not v or v.status != "pending":
         return v
-
     v.status = "approved"
     v.rejection_reason = None
-
     up = (
         await session.execute(select(User).where(User.id == v.uploader_user_id))
     ).scalar_one_or_none()
     if up:
         reward = PHOTO_UPLOAD_REWARD if v.content_type == "photo" else to_decimal(UPLOAD_REWARD)
         up.balance += reward
-
     await session.commit()
     await session.refresh(v)
     return v
@@ -639,18 +597,15 @@ async def approve_all_pending(session):
     vids = list(
         (await session.execute(select(Video).where(Video.status == "pending"))).scalars().all()
     )
-
     for v in vids:
         v.status = "approved"
         v.rejection_reason = None
-
         up = (
             await session.execute(select(User).where(User.id == v.uploader_user_id))
         ).scalar_one_or_none()
         if up:
             reward = PHOTO_UPLOAD_REWARD if v.content_type == "photo" else to_decimal(UPLOAD_REWARD)
             up.balance += reward
-
     await session.commit()
     return len(vids)
 
@@ -659,7 +614,6 @@ async def reject_video(session, video_id, reason):
     v = (await session.execute(select(Video).where(Video.id == video_id))).scalar_one_or_none()
     if not v:
         return None
-
     v.status = "rejected"
     v.rejection_reason = reason
     await session.commit()
@@ -686,7 +640,6 @@ async def count_rejected_videos(session):
 
 
 # ========== WATCH VIDEO ==========
-
 async def get_video_stats_for_user(session, user):
     total = (
         await session.execute(
@@ -696,9 +649,7 @@ async def get_video_stats_for_user(session, user):
             )
         )
     ).scalar_one()
-
     wsub = select(VideoView.video_id).where(VideoView.user_id == user.id)
-
     avail = (
         await session.execute(
             select(func.count(Video.id)).where(
@@ -709,7 +660,6 @@ async def get_video_stats_for_user(session, user):
             )
         )
     ).scalar_one()
-
     return {
         "total_approved": total,
         "available": avail,
@@ -732,10 +682,8 @@ async def get_random_video_for_user(session, user):
 
 async def record_view_and_charge(session, user, video):
     cost = get_watch_cost_for_user(user)
-
     if user.balance < cost:
         return False
-
     exists = (
         await session.execute(
             select(VideoView).where(
@@ -744,10 +692,8 @@ async def record_view_and_charge(session, user, video):
             )
         )
     ).scalar_one_or_none()
-
     if exists:
         return False
-
     session.add(VideoView(user_id=user.id, video_id=video.id))
     user.balance -= cost
     await session.commit()
@@ -755,7 +701,6 @@ async def record_view_and_charge(session, user, video):
 
 
 # ========== WATCH PHOTO ==========
-
 async def count_photo_views_last_4h(session, user_id):
     since = datetime.utcnow() - timedelta(hours=4)
     return (
@@ -794,17 +739,14 @@ async def record_photo_view(session, user, photo):
             )
         )
     ).scalar_one_or_none()
-
     if exists:
         return False
-
     session.add(VideoView(user_id=user.id, video_id=photo.id))
     await session.commit()
     return True
 
 
 # ========== RATING ==========
-
 async def rate_video(session, user_id, video_id, rating):
     existing = (
         await session.execute(
@@ -814,21 +756,17 @@ async def rate_video(session, user_id, video_id, rating):
             )
         )
     ).scalar_one_or_none()
-
     if existing:
         existing.rating = rating
     else:
         session.add(VideoRating(user_id=user_id, video_id=video_id, rating=rating))
-
     await session.commit()
 
 
 # ========== COMMENTS ==========
-
 async def can_user_comment(session, user_id):
     now = datetime.utcnow()
     window_start = now - timedelta(minutes=10)
-
     recent_count = (
         await session.execute(
             select(func.count(Comment.id)).where(
@@ -837,7 +775,6 @@ async def can_user_comment(session, user_id):
             )
         )
     ).scalar_one()
-
     last_comment = (
         await session.execute(
             select(Comment)
@@ -846,16 +783,13 @@ async def can_user_comment(session, user_id):
             .limit(1)
         )
     ).scalar_one_or_none()
-
     if recent_count >= COMMENTS_PER_10_MIN:
-        return False, "\u0421\u043b\u0438\u0448\u043a\u043e\u043c \u043c\u043d\u043e\u0433\u043e \u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0435\u0432. \u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435."
-
+        return False, "Слишком много комментариев. Подождите."
     if last_comment:
         delta = (now - last_comment.created_at).total_seconds()
         if delta < COMMENT_MIN_INTERVAL_SEC:
             wait_sec = int(COMMENT_MIN_INTERVAL_SEC - delta)
-            return False, f"\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435 {wait_sec} \u0441\u0435\u043a."
-
+            return False, f"Подождите {wait_sec} сек."
     return True, ""
 
 
@@ -876,7 +810,6 @@ async def get_video_comments(session, video_id, limit=10):
         .limit(limit)
     )
     rows = (await session.execute(stmt)).all()
-
     result = []
     for comment, uname, fname in rows:
         name = f"@{uname}" if uname else (fname or "Anon")
@@ -886,7 +819,6 @@ async def get_video_comments(session, video_id, limit=10):
             "author": name,
             "at": comment.created_at,
         })
-
     return result
 
 
@@ -903,7 +835,6 @@ async def count_user_comments_today(session, user_id):
 
 
 # ========== REACTIONS ==========
-
 async def add_reaction(session, user_id, video_id, reaction_type):
     existing = (
         await session.execute(
@@ -913,7 +844,6 @@ async def add_reaction(session, user_id, video_id, reaction_type):
             )
         )
     ).scalar_one_or_none()
-
     if existing:
         existing.reaction_type = reaction_type
     else:
@@ -924,7 +854,6 @@ async def add_reaction(session, user_id, video_id, reaction_type):
                 reaction_type=reaction_type,
             )
         )
-
     await session.commit()
 
 
@@ -938,27 +867,85 @@ async def get_reaction_counts(session, video_id):
     return {r: c for r, c in rows}
 
 
-# ========== GAMES ==========
+# ========== GAME SESSION LIMIT ==========
+async def get_or_create_game_session(session, user):
+    """Возвращает активную игровую сессию (окно 4 часа)."""
+    now = datetime.utcnow()
+    window = now - timedelta(hours=GAME_SESSION_HOURS)
 
+    gs = (
+        await session.execute(
+            select(GameSession)
+            .where(
+                GameSession.user_id == user.id,
+                GameSession.window_start >= window,
+            )
+            .order_by(GameSession.window_start.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if not gs:
+        gs = GameSession(user_id=user.id, window_start=now, games_played=0)
+        session.add(gs)
+        await session.commit()
+        await session.refresh(gs)
+
+    return gs
+
+
+async def check_game_limit(session, user):
+    """
+    Проверяет лимит игр.
+    Возвращает (can_play: bool, message: str, gs: GameSession)
+    """
+    gs = await get_or_create_game_session(session, user)
+    if gs.games_played < GAME_SESSION_LIMIT:
+        remaining = GAME_SESSION_LIMIT - gs.games_played
+        return True, f"Осталось игр: {remaining}", gs
+    return (
+        False,
+        f"⛔ Лимит {GAME_SESSION_LIMIT} игр за {GAME_SESSION_HOURS}ч исчерпан.\n"
+        f"💰 Заплатите <b>{GAME_SESSION_COST}</b> монет, чтобы сыграть ещё 10.",
+        gs,
+    )
+
+
+async def pay_for_game_session(session, user):
+    """Списывает монеты и сбрасывает счётчик игр."""
+    if user.balance < GAME_SESSION_COST:
+        return False, f"Недостаточно монет. Нужно {GAME_SESSION_COST}."
+    gs = await get_or_create_game_session(session, user)
+    user.balance -= GAME_SESSION_COST
+    gs.games_played = 0
+    gs.paid_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(user)
+    return True, f"✅ Оплачено {GAME_SESSION_COST} монет. Доступно ещё {GAME_SESSION_LIMIT} игр!"
+
+
+async def increment_game_session(session, user):
+    """Увеличивает счётчик сыгранных игр в текущей сессии."""
+    gs = await get_or_create_game_session(session, user)
+    gs.games_played += 1
+    await session.commit()
+
+
+# ========== GAMES ==========
 async def play_lootbox(session, user):
     cost = to_decimal(LOOTBOX_COST)
     if user.balance < cost:
-        return False, 0, "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u043c\u043e\u043d\u0435\u0442."
-
+        return False, 0, "Недостаточно монет."
     user.balance -= cost
-
     roll = random.random()
     cumul = 0
     reward = 1
-
     for prob, coins in LOOTBOX_REWARDS:
         cumul += prob
         if roll <= cumul:
             reward = coins
             break
-
     user.balance += to_decimal(reward)
-
     session.add(
         GameHistory(
             user_id=user.id,
@@ -975,21 +962,17 @@ async def play_lootbox(session, user):
 
 async def play_dice(session, user, bet):
     bet_d = to_decimal(bet)
-
     if bet < DICE_MIN_BET or bet > DICE_MAX_BET:
-        return False, 0, Decimal("0"), f"\u0421\u0442\u0430\u0432\u043a\u0430 {DICE_MIN_BET}-{DICE_MAX_BET}."
+        return False, 0, Decimal("0"), f"Ставка {DICE_MIN_BET}-{DICE_MAX_BET}."
     if user.balance < bet_d:
-        return False, 0, Decimal("0"), "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e."
-
+        return False, 0, Decimal("0"), "Недостаточно."
     user.balance -= bet_d
     roll = random.randint(1, 6)
-
     if roll >= 4:
         win = bet_d * 2
         user.balance += win
     else:
         win = Decimal("0")
-
     session.add(
         GameHistory(
             user_id=user.id,
@@ -1006,21 +989,17 @@ async def play_dice(session, user, bet):
 
 async def play_coinflip(session, user, bet):
     bet_d = to_decimal(bet)
-
     if bet < 1 or bet > DICE_MAX_BET:
-        return False, "", Decimal("0"), "\u0421\u0442\u0430\u0432\u043a\u0430 1-50."
+        return False, "", Decimal("0"), "Ставка 1-50."
     if user.balance < bet_d:
-        return False, "", Decimal("0"), "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e."
-
+        return False, "", Decimal("0"), "Недостаточно."
     user.balance -= bet_d
     side = random.choice(["heads", "tails"])
-
     if side == "heads":
         win = bet_d * 2
         user.balance += win
     else:
         win = Decimal("0")
-
     session.add(
         GameHistory(
             user_id=user.id,
@@ -1037,23 +1016,19 @@ async def play_coinflip(session, user, bet):
 
 async def play_guess(session, user, guess, bet):
     bet_d = to_decimal(bet)
-
     if guess < 1 or guess > 10:
-        return False, 0, Decimal("0"), "\u0427\u0438\u0441\u043b\u043e 1-10."
+        return False, 0, Decimal("0"), "Число 1-10."
     if bet < 1 or bet > DICE_MAX_BET:
-        return False, 0, Decimal("0"), "\u0421\u0442\u0430\u0432\u043a\u0430 1-50."
+        return False, 0, Decimal("0"), "Ставка 1-50."
     if user.balance < bet_d:
-        return False, 0, Decimal("0"), "\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e."
-
+        return False, 0, Decimal("0"), "Недостаточно."
     user.balance -= bet_d
     answer = random.randint(1, 10)
-
     if guess == answer:
         win = bet_d * 5
         user.balance += win
     else:
         win = Decimal("0")
-
     session.add(
         GameHistory(
             user_id=user.id,
@@ -1069,10 +1044,8 @@ async def play_guess(session, user, guess, bet):
 
 
 # ========== QUESTS ==========
-
 async def ensure_daily_quests(session, user_id, user=None):
     today = datetime.utcnow().date()
-
     existing = list(
         (
             await session.execute(
@@ -1085,13 +1058,10 @@ async def ensure_daily_quests(session, user_id, user=None):
     )
     if existing:
         return existing
-
     quests = []
     all_quests = list(DAILY_QUESTS)
-
     if user and is_vip(user):
         all_quests.extend(PREMIUM_DAILY_QUESTS)
-
     for q in all_quests:
         qp = DailyQuestProgress(
             user_id=user_id,
@@ -1105,11 +1075,9 @@ async def ensure_daily_quests(session, user_id, user=None):
         )
         session.add(qp)
         quests.append(qp)
-
     await session.commit()
     for qp in quests:
         await session.refresh(qp)
-
     return quests
 
 
@@ -1127,12 +1095,10 @@ async def increment_quest(session, user_id, quest_type):
             )
         ).scalars().all()
     )
-
     for q in q_all:
         q.progress += 1
         if q.progress >= q.target:
             q.completed = True
-
     await session.commit()
 
 
@@ -1147,19 +1113,16 @@ async def claim_quest_reward(session, user, quest_id):
             )
         )
     ).scalar_one_or_none()
-
     if not q:
-        return False, "\u041d\u0435\u0442 \u043d\u0430\u0433\u0440\u0430\u0434\u044b."
-
+        return False, "Нет награды."
     user.balance += q.reward
     q.reward_claimed = True
     await session.commit()
     await session.refresh(user)
-    return True, f"+{q.reward}. \u0411\u0430\u043b\u0430\u043d\u0441: {user.balance}"
+    return True, f"+{q.reward}. Баланс: {user.balance}"
 
 
 # ========== TOPS ==========
-
 async def get_top_uploaders(session, limit=10):
     stmt = (
         select(
@@ -1204,31 +1167,25 @@ async def get_top_richest(session, limit=10):
 
 
 # ========== WEEKLY REWARDS ==========
-
 async def reward_weekly_top_users(session):
     rewarded = []
     richest = await get_top_richest(session, limit=3)
-
     rewards = [
         to_decimal(WEEKLY_TOP1_REWARD),
         to_decimal(WEEKLY_TOP2_REWARD),
         to_decimal(WEEKLY_TOP3_REWARD),
     ]
-
     for idx, user in enumerate(richest):
         reward = rewards[idx]
         user.balance += reward
         rewarded.append((user, reward))
-
     await session.commit()
     return rewarded
 
 
 # ========== ADMIN STATS ==========
-
 async def get_admin_extended_stats(session):
     users_count = (await session.execute(select(func.count(User.id)))).scalar_one()
-
     vip_count = (
         await session.execute(
             select(func.count(User.id)).where(
@@ -1237,12 +1194,10 @@ async def get_admin_extended_stats(session):
             )
         )
     ).scalar_one()
-
     comments_count = (await session.execute(select(func.count(Comment.id)))).scalar_one()
     reactions_count = (await session.execute(select(func.count(ContentReaction.id)))).scalar_one()
     games_count = (await session.execute(select(func.count(GameHistory.id)))).scalar_one()
     offers_count = (await session.execute(select(func.count(Offer.id)))).scalar_one()
-
     return {
         "users": users_count,
         "vip": vip_count,

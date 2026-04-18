@@ -2,7 +2,6 @@ import asyncio
 from sqlalchemy import text
 from app.db import engine
 
-
 MIGRATIONS = [
     """
     ALTER TABLE offers
@@ -53,6 +52,18 @@ MIGRATIONS = [
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_offers_status ON offers (status);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS game_sessions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        window_start TIMESTAMP NOT NULL,
+        games_played INTEGER DEFAULT 0,
+        paid_at TIMESTAMP NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_game_sessions_user_id ON game_sessions (user_id);
     """,
 ]
 
