@@ -187,12 +187,6 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="\U0001f4e6 \u041b\u0443\u0442\u0431\u043e\u043a\u0441",
-                    callback_data="game_lootbox",
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="\U0001f3b2 \u041a\u043e\u0441\u0442\u0438",
                     callback_data="game_dice",
                 )
