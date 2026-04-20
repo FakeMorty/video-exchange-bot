@@ -44,6 +44,7 @@ def is_any_admin(telegram_id: int, user_obj=None) -> bool:
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
+    print("START COMMAND RECEIVED")
     if not message.from_user: return
     await state.clear()
     referral_code = command.args.strip() if command and command.args else None
