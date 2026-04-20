@@ -184,3 +184,205 @@ async def get_admin_extended_stats(session):
         "games": (await session.execute(select(func.count(GameHistory.id)))).scalar_one(),
         "offers": (await session.execute(select(func.count(Offer.id)))).scalar_one(),
     }
+async def save_video(session: AsyncSession, user_id: int, file_id: str, file_unique_id: str, duration: int = None, file_size: int = None):
+    video = Video(
+        uploader_user_id=user_id,
+        content_type="video",
+        telegram_file_id=file_id,
+        telegram_file_unique_id=file_unique_id,
+        duration_seconds=duration,
+        file_size=file_size,
+        status="pending",
+    )
+    session.add(video)
+    await session.commit()
+    await log_user_action(session, user_id, "upload_video", f"File: {file_unique_id}")
+    return video
+
+async def save_photo(session: AsyncSession, user_id: int, file_id: str, file_unique_id: str, file_size: int = None):
+    photo = Video(
+        uploader_user_id=user_id,
+        content_type="photo",
+        telegram_file_id=file_id,
+        telegram_file_unique_id=file_unique_id,
+        file_size=file_size,
+        status="pending",
+    )
+    session.add(photo)
+    await session.commit()
+    await log_user_action(session, user_id, "upload_photo", f"File: {file_unique_id}")
+    return photo
+
+async def get_random_video_for_user(session: AsyncSession, user_id: int):
+    viewed = select(VideoView.video_id).where(VideoView.user_id == user_id)
+    stmt = select(Video).where(
+        Video.status == "approved",
+        Video.content_type == "video",
+        Video.uploader_user_id != user_id,
+        ~Video.id.in_(viewed)
+    ).order_by(func.random()).limit(1)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+async def get_random_photo_for_user(session: AsyncSession, user_id: int):
+    stmt = select(Video).where(
+        Video.status == "approved",
+        Video.content_type == "photo",
+        Video.uploader_user_id != user_id,
+    ).order_by(func.random()).limit(1)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+async def record_view_and_charge(session: AsyncSession, user_id: int, video_id: int):
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return False
+    cost = to_decimal(WATCH_COST)
+    if user.balance < cost:
+        return False
+    user.balance -= cost
+    user.xp += 5
+    view = VideoView(user_id=user_id, video_id=video_id)
+    session.add(view)
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+    return True
+
+async def record_photo_view(session: AsyncSession, user_id: int, photo_id: int):
+    view = VideoView(user_id=user_id, video_id=photo_id)
+    session.add(view)
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+
+async def count_photo_views_last_4h(session: AsyncSession, user_id: int) -> int:
+    since = datetime.utcnow() - timedelta(hours=4)
+    stmt = select(func.count(VideoView.id)).where(
+        VideoView.user_id == user_id,
+        VideoView.watched_at >= since,
+    )
+    return (await session.execute(stmt)).scalar_one()
+
+async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating: int):
+    existing = (await session.execute(
+        select(VideoRating).where(VideoRating.user_id == user_id, VideoRating.video_id == video_id)
+    )).scalar_one_or_none()
+    if existing:
+        existing.rating = rating
+    else:
+        session.add(VideoRating(user_id=user_id, video_id=video_id, rating=rating))
+    await session.commit()
+
+async def claim_daily_bonus(session: AsyncSession, user_id: int):
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return False, "Пользователь не найден"
+    now = datetime.utcnow()
+    if user.last_bonus_at and (now - user.last_bonus_at).total_seconds() < 86400:
+        remaining = 86400 - (now - user.last_bonus_at).total_seconds()
+        hours = int(remaining // 3600)
+        minutes = int((remaining % 3600) // 60)
+        return False, f"Бонус уже получен. Следующий через {hours}ч {minutes}мин"
+    bonus = to_decimal(1.0)
+    user.balance += bonus
+    user.last_bonus_at = now
+    await session.commit()
+    return True, bonus
+
+async def count_referrals(session: AsyncSession, user_id: int) -> int:
+    stmt = select(func.count(User.id)).where(User.referred_by_user_id == user_id)
+    return (await session.execute(stmt)).scalar_one()
+
+async def create_payment(session: AsyncSession, user_id: int, pack_key: str):
+    pack = STARS_PACKAGES.get(pack_key)
+    if not pack:
+        return None
+    payload = f"{user_id}_{pack_key}_{uuid.uuid4().hex[:8]}"
+    payment = Payment(
+        user_id=user_id,
+        payload=payload,
+        stars_amount=pack["stars"],
+        coins_amount=to_decimal(pack["coins"]),
+        status="pending",
+    )
+    session.add(payment)
+    await session.commit()
+    return payment
+
+async def create_custom_payment(session: AsyncSession, user_id: int, stars: int):
+    coins = to_decimal(stars) * to_decimal(STARS_TO_COINS_RATE)
+    payload = f"{user_id}_custom_{uuid.uuid4().hex[:8]}"
+    payment = Payment(
+        user_id=user_id,
+        payload=payload,
+        stars_amount=stars,
+        coins_amount=coins,
+        status="pending",
+    )
+    session.add(payment)
+    await session.commit()
+    return payment
+
+async def apply_successful_payment(session: AsyncSession, payload: str):
+    payment = (await session.execute(
+        select(Payment).where(Payment.payload == payload)
+    )).scalar_one_or_none()
+    if not payment or payment.status == "completed":
+        return None
+    payment.status = "completed"
+    user = await get_user_by_id(session, payment.user_id)
+    if user:
+        user.balance += payment.coins_amount
+    await session.commit()
+    return payment
+
+async def get_active_offers(session: AsyncSession):
+    stmt = select(Offer).where(Offer.is_active == True, Offer.status == "approved")
+    return (await session.execute(stmt)).scalars().all()
+
+async def get_offer_by_id(session: AsyncSession, offer_id: int):
+    return (await session.execute(select(Offer).where(Offer.id == offer_id))).scalar_one_or_none()
+
+async def start_offer_participation(session: AsyncSession, user_id: int, offer_id: int):
+    existing = (await session.execute(
+        select(OfferParticipation).where(
+            OfferParticipation.user_id == user_id,
+            OfferParticipation.offer_id == offer_id
+        )
+    )).scalar_one_or_none()
+    if existing:
+        return existing, False
+    offer = await get_offer_by_id(session, offer_id)
+    if not offer:
+        return None, False
+    user = await get_user_by_id(session, user_id)
+    if user:
+        user.balance += offer.reward_preview
+    part = OfferParticipation(user_id=user_id, offer_id=offer_id, status="started", reward_given=offer.reward_preview)
+    session.add(part)
+    await session.commit()
+    return part, True
+
+async def verify_offer_subscription(session: AsyncSession, user_id: int, offer_id: int):
+    part = (await session.execute(
+        select(OfferParticipation).where(
+            OfferParticipation.user_id == user_id,
+            OfferParticipation.offer_id == offer_id
+        )
+    )).scalar_one_or_none()
+    if not part:
+        return False
+    if part.status == "completed":
+        return True
+    part.status = "completed"
+    part.checked_at = datetime.utcnow()
+    offer = await get_offer_by_id(session, offer_id)
+    user = await get_user_by_id(session, user_id)
+    if offer and user:
+        additional = offer.reward_final - part.reward_given
+        if additional > 0:
+            user.balance += additional
+            part.reward_given = offer.reward_final
+    await session.commit()
+    return True
