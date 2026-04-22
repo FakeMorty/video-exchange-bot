@@ -65,23 +65,7 @@ class User(Base):
 
 
 # =========================
-# USER ACTION LOG
-# =========================
-
-class UserActionLog(Base):
-    __tablename__ = "user_action_logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    action: Mapped[str] = mapped_column(String(255), nullable=False)
-    details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    user: Mapped["User"] = relationship(back_populates="action_logs")
-
-
-# =========================
-# VIDEO
+# VIDEO SYSTEM
 # =========================
 
 class Video(Base):
@@ -102,7 +86,6 @@ class Video(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     uploader: Mapped["User"] = relationship(back_populates="videos")
-
     views: Mapped[list["VideoView"]] = relationship(back_populates="video")
     ratings: Mapped[list["VideoRating"]] = relationship(back_populates="video")
     comments: Mapped[list["Comment"]] = relationship(back_populates="video")
@@ -142,22 +125,34 @@ class VideoRating(Base):
     video: Mapped["Video"] = relationship(back_populates="ratings")
 
 
-# =========================
-# PAYMENTS
-# =========================
-
-class Payment(Base):
-    __tablename__ = "payments"
+class Comment(Base):
+    __tablename__ = "comments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    payload: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    stars_amount: Mapped[int] = mapped_column(Integer, nullable=False)
-    coins_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="pending")
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    user: Mapped["User"] = relationship(back_populates="payments")
+    user: Mapped["User"] = relationship(back_populates="comments")
+    video: Mapped["Video"] = relationship(back_populates="comments")
+
+
+class ContentReaction(Base):
+    __tablename__ = "content_reactions"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "video_id", name="uq_user_video_reaction"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
+    reaction_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="reactions")
+    video: Mapped["Video"] = relationship(back_populates="reactions")
 
 
 # =========================
@@ -201,3 +196,50 @@ class OfferParticipation(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# =========================
+# GAMES & QUESTS
+# =========================
+
+class GameHistory(Base):
+    __tablename__ = "game_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    game_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    bet: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    result: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="game_history")
+
+
+class DailyQuestProgress(Base):
+    __tablename__ = "daily_quest_progress"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    quest_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    quest_date: Mapped[datetime] = mapped_column(Date, nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    target: Mapped[int] = mapped_column(Integer, nullable=False)
+    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    reward_claimed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="quest_progress")
+
+
+class GameSession(Base):
+    __tablename__ = "game_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    games_played: Mapped[int] = mapped_column(Integer, default=0)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="game_sessions")
