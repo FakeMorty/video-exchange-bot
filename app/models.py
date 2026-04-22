@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+
 from sqlalchemy import (
     BigInteger,
     String,
@@ -19,15 +20,21 @@ class Base(DeclarativeBase):
     pass
 
 
+# =========================
+# USERS
+# =========================
+
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+
     username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     balance: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     status: Mapped[str] = mapped_column(String(50), default="active")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -57,6 +64,10 @@ class User(Base):
     user_offers: Mapped[list["Offer"]] = relationship(back_populates="creator")
 
 
+# =========================
+# USER ACTION LOG
+# =========================
+
 class UserActionLog(Base):
     __tablename__ = "user_action_logs"
 
@@ -68,6 +79,10 @@ class UserActionLog(Base):
 
     user: Mapped["User"] = relationship(back_populates="action_logs")
 
+
+# =========================
+# VIDEO
+# =========================
 
 class Video(Base):
     __tablename__ = "videos"
@@ -88,7 +103,6 @@ class Video(Base):
 
     uploader: Mapped["User"] = relationship(back_populates="videos")
 
-    # ✅ ВАЖНО: правильные back_populates
     views: Mapped[list["VideoView"]] = relationship(back_populates="video")
     ratings: Mapped[list["VideoRating"]] = relationship(back_populates="video")
     comments: Mapped[list["Comment"]] = relationship(back_populates="video")
@@ -97,6 +111,7 @@ class Video(Base):
 
 class VideoView(Base):
     __tablename__ = "video_views"
+
     __table_args__ = (
         UniqueConstraint("user_id", "video_id", name="uq_user_video_view"),
     )
@@ -112,6 +127,7 @@ class VideoView(Base):
 
 class VideoRating(Base):
     __tablename__ = "video_ratings"
+
     __table_args__ = (
         UniqueConstraint("user_id", "video_id", name="uq_user_video_rating"),
     )
@@ -125,6 +141,10 @@ class VideoRating(Base):
     user: Mapped["User"] = relationship(back_populates="ratings")
     video: Mapped["Video"] = relationship(back_populates="ratings")
 
+
+# =========================
+# PAYMENTS
+# =========================
 
 class Payment(Base):
     __tablename__ = "payments"
@@ -140,11 +160,16 @@ class Payment(Base):
     user: Mapped["User"] = relationship(back_populates="payments")
 
 
+# =========================
+# OFFERS
+# =========================
+
 class Offer(Base):
     __tablename__ = "offers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     creator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     channel_url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -158,3 +183,21 @@ class Offer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     creator: Mapped["User"] = relationship(back_populates="user_offers")
+
+
+class OfferParticipation(Base):
+    __tablename__ = "offer_participations"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "offer_id", name="uq_user_offer"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False)
+
+    status: Mapped[str] = mapped_column(String(50), default="started")
+    reward_given: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
