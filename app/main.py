@@ -4,6 +4,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+
 from app.config import BOT_TOKEN, PORT
 from app.db import engine, async_session, init_db
 from app.user_handlers import router as user_router
