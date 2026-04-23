@@ -1,16 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import (
-    BigInteger,
-    String,
-    Numeric,
-    Boolean,
-    Integer,
-    DateTime,
-    ForeignKey,
-    UniqueConstraint,
-    Text,
-    Date,
+    BigInteger, String, Numeric, Boolean,
+    Integer, DateTime, ForeignKey, UniqueConstraint, Text, Date,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -25,18 +17,18 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    display_name: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    balance: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    balance: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     status: Mapped[str] = mapped_column(String(50), default="active")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     agreed_to_rules: Mapped[bool] = mapped_column(Boolean, default=False)
     nickname_set: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_code: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
     referred_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    referral_earnings: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    referral_earnings: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     last_bonus_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     xp: Mapped[int] = mapped_column(Integer, default=0)
     level: Mapped[int] = mapped_column(Integer, default=1)
@@ -53,8 +45,12 @@ class User(Base):
     quest_progress: Mapped[list["DailyQuestProgress"]] = relationship(back_populates="user")
     game_sessions: Mapped[list["GameSession"]] = relationship(back_populates="user")
     action_logs: Mapped[list["UserActionLog"]] = relationship(back_populates="user")
-    user_offers: Mapped[list["Offer"]] = relationship(back_populates="creator")
     balance_logs: Mapped[list["BalanceLog"]] = relationship(back_populates="user")
+    user_offers: Mapped[list["Offer"]] = relationship(back_populates="creator")
+    rentals: Mapped[list["OfferRental"]] = relationship(
+        back_populates="renter",
+        foreign_keys="OfferRental.renter_user_id"
+    )
 
 
 class UserActionLog(Base):
@@ -78,9 +74,9 @@ class BalanceLog(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     balance_before: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     balance_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    source: Mapped[str] = mapped_column(String(100), nullable=False)  # watch, upload, game_dice, admin, referral, etc.
-    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # video_id, game_id и т.д.
-    admin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # если выдано админом
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    admin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
@@ -190,14 +186,20 @@ class Offer(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     channel_url: Mapped[str] = mapped_column(Text, nullable=False)
-    reward_preview: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=5)
-    reward_final: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=35)
-    penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=40)
+    reward_preview: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("5"))
+    reward_final: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("35"))
+    penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("40"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="approved")
+    # Поля для аренды
+    is_rentable: Mapped[bool] = mapped_column(Boolean, default=False)
+    rent_cost_per_day: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    max_simultaneous_rentals: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     creator: Mapped["User"] = relationship(back_populates="user_offers")
+    participations: Mapped[list["OfferParticipation"]] = relationship(back_populates="offer")
+    rentals: Mapped[list["OfferRental"]] = relationship(back_populates="offer")
 
 
 class OfferParticipation(Base):
@@ -210,9 +212,33 @@ class OfferParticipation(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="started")
-    reward_given: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    reward_given: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    offer: Mapped["Offer"] = relationship(back_populates="participations")
+
+
+class OfferRental(Base):
+    """Аренда рекламного слота пользователем."""
+    __tablename__ = "offer_rentals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False, index=True)
+    renter_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    renter_channel_title: Mapped[str] = mapped_column(String(255), nullable=False)
+    renter_channel_url: Mapped[str] = mapped_column(Text, nullable=False)
+    rent_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_paid: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    renter: Mapped["User"] = relationship(
+        back_populates="rentals",
+        foreign_keys=[renter_user_id]
+    )
+    offer: Mapped["Offer"] = relationship(back_populates="rentals")
 
 
 class GameHistory(Base):
@@ -221,8 +247,8 @@ class GameHistory(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     game_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    bet: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
-    result: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    bet: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    result: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
@@ -238,7 +264,7 @@ class DailyQuestProgress(Base):
     quest_date: Mapped[datetime] = mapped_column(Date, nullable=False)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     target: Mapped[int] = mapped_column(Integer, nullable=False)
-    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     reward_claimed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

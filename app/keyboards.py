@@ -1,6 +1,11 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 
-# Buttons
+# =========================
+# КНОПКИ ГЛАВНОГО МЕНЮ
+# =========================
 BTN_WATCH = "🎬 Смотреть"
 BTN_UPLOAD = "📤 Загрузить"
 BTN_PROFILE = "👤 Профиль"
@@ -18,86 +23,127 @@ BTN_LEVEL = "⭐ Уровень"
 
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     kb = [
-        [KeyboardButton(text=BTN_WATCH), KeyboardButton(text=BTN_UPLOAD)],
-        [KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_GAMES)],
-        [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_BUY)],
+        [KeyboardButton(text=BTN_WATCH),     KeyboardButton(text=BTN_UPLOAD)],
+        [KeyboardButton(text=BTN_PROFILE),   KeyboardButton(text=BTN_GAMES)],
+        [KeyboardButton(text=BTN_OFFERS),    KeyboardButton(text=BTN_BUY)],
         [KeyboardButton(text=BTN_REFERRALS), KeyboardButton(text=BTN_BONUS)],
-        [KeyboardButton(text=BTN_QUESTS), KeyboardButton(text=BTN_TOPS)],
-        [KeyboardButton(text=BTN_LEVEL), KeyboardButton(text=BTN_VIP)],
+        [KeyboardButton(text=BTN_QUESTS),    KeyboardButton(text=BTN_TOPS)],
+        [KeyboardButton(text=BTN_LEVEL),     KeyboardButton(text=BTN_VIP)],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=BTN_ADMIN)])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-def admin_center_keyboard(is_super_admin: bool = False) -> InlineKeyboardMarkup:
+# =========================
+# АДМИН КЛАВИАТУРЫ
+# =========================
+def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text="📊 Очередь", callback_data="admin_queue_info")],
-        [InlineKeyboardButton(text="📈 Статистика+", callback_data="admin_extended_stats")],
-        [InlineKeyboardButton(text="👥 Управление пользователями", callback_data="admin_manage_users")],
-        [InlineKeyboardButton(text="🎬 Взять на модерацию", callback_data="admin_get_pending")],
-        [InlineKeyboardButton(text="✅ Одобрить все", callback_data="admin_approve_all")],
-        [InlineKeyboardButton(text="📢 Офферы", callback_data="admin_offers_menu")],
+        [InlineKeyboardButton(text="📊 Очередь",        callback_data="admin_queue_info")],
+        [InlineKeyboardButton(text="📈 Статистика+",    callback_data="admin_extended_stats")],
+        [InlineKeyboardButton(text="👥 Пользователи",   callback_data="admin_manage_users")],
+        [InlineKeyboardButton(text="🎬 Модерация",      callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text="✅ Одобрить все",   callback_data="admin_approve_all")],
+        [InlineKeyboardButton(text="📢 Офферы",         callback_data="admin_offers_menu")],
+        [InlineKeyboardButton(text="🔍 Расследование",  callback_data="admin_investigation")],
     ]
-    if is_super_admin:
-        buttons.append([InlineKeyboardButton(text="⚙️ Управление админами", callback_data="admin_manage_admins")])
+    if is_super:
+        buttons.append([
+            InlineKeyboardButton(
+                text="⚙️ Управление админами",
+                callback_data="admin_manage_admins"
+            )
+        ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_offers_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать оффер",   callback_data="admin_create_offer")],
+        [InlineKeyboardButton(text="⏳ На проверке",     callback_data="admin_offers_pending")],
+        [InlineKeyboardButton(text="📋 Все офферы",      callback_data="admin_offers_all")],
+        [InlineKeyboardButton(text="✅ Активные",        callback_data="admin_offers_active")],
+        [InlineKeyboardButton(text="📣 Аренды",          callback_data="admin_rentals_menu")],
+        [InlineKeyboardButton(text="◀️ Назад",           callback_data="admin_center")],
+    ])
 
 
 def moderation_keyboard(video_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"mod_approve:{video_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod_reject:{video_id}"),
+            InlineKeyboardButton(
+                text="✅ Одобрить",
+                callback_data=f"mod_approve:{video_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Отклонить",
+                callback_data=f"mod_reject:{video_id}"
+            ),
         ],
-        [InlineKeyboardButton(text="⏭ Следующее", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(
+            text="⏭ Следующее",
+            callback_data="admin_get_pending"
+        )],
     ])
 
 
 def rejection_reason_keyboard(video_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔁 Дубликат", callback_data=f"reject_reason:{video_id}:duplicate")],
-        [InlineKeyboardButton(text="🚫 Не по теме", callback_data=f"reject_reason:{video_id}:off_topic")],
-        [InlineKeyboardButton(text="❓ Другое", callback_data=f"reject_reason:{video_id}:other")],
+        [InlineKeyboardButton(
+            text="🔁 Дубликат",
+            callback_data=f"reject_reason:{video_id}:duplicate"
+        )],
+        [InlineKeyboardButton(
+            text="🚫 Не по теме",
+            callback_data=f"reject_reason:{video_id}:off_topic"
+        )],
+        [InlineKeyboardButton(
+            text="🔞 Запрещённый контент",
+            callback_data=f"reject_reason:{video_id}:forbidden"
+        )],
+        [InlineKeyboardButton(
+            text="❓ Другое",
+            callback_data=f"reject_reason:{video_id}:other"
+        )],
     ])
 
 
 def admin_after_action_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏭ Следующее", callback_data="admin_get_pending")],
-        [InlineKeyboardButton(text="🛡 Админ-панель", callback_data="admin_center")],
+        [InlineKeyboardButton(
+            text="⏭ Следующее",
+            callback_data="admin_get_pending"
+        )],
+        [InlineKeyboardButton(
+            text="🛡 Админ-панель",
+            callback_data="admin_center"
+        )],
     ])
 
 
-def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup:
+# =========================
+# ПОЛЬЗОВАТЕЛЬСКИЕ КЛАВИАТУРЫ
+# =========================
+def rules_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Перейти в канал", url=channel_url)],
-        [InlineKeyboardButton(text="▶️ Начать", callback_data=f"offer_start:{offer_id}")],
-        [InlineKeyboardButton(text="✅ Проверить", callback_data=f"offer_check:{offer_id}")],
-    ])
-
-
-def games_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎲 Кости", callback_data="game_dice")],
-        [InlineKeyboardButton(text="🪙 Орёл/Решка", callback_data="game_coinflip")],
-        [InlineKeyboardButton(text="🎯 Угадай число", callback_data="game_guess")],
-    ])
-
-
-def tops_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎬 Топ загрузчиков", callback_data="top_uploaders")],
-        [InlineKeyboardButton(text="👁 Топ зрителей", callback_data="top_viewers")],
-        [InlineKeyboardButton(text="⭐ Топ по XP", callback_data="top_levels")],
-        [InlineKeyboardButton(text="💰 Топ богатых", callback_data="top_richest")],
+        [InlineKeyboardButton(
+            text="✅ Принять правила",
+            callback_data="accept_rules"
+        )],
     ])
 
 
 def watch_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎬 Видео", callback_data="watch_video_content")],
-        [InlineKeyboardButton(text="🖼 Фото", callback_data="watch_photo_content")],
+        [InlineKeyboardButton(
+            text="🎬 Видео",
+            callback_data="watch_video_content"
+        )],
+        [InlineKeyboardButton(
+            text="🖼 Фото",
+            callback_data="watch_photo_content"
+        )],
     ])
 
 
@@ -110,73 +156,182 @@ def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⭐ 4", callback_data=f"rate:{video_id}:4"),
             InlineKeyboardButton(text="⭐ 5", callback_data=f"rate:{video_id}:5"),
         ],
-        [InlineKeyboardButton(text="💬 Комментарии", callback_data=f"comments:{video_id}")],
-        [InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{video_id}")],
-        [InlineKeyboardButton(text="⏭ Следующее", callback_data="watch_next")],
+        [InlineKeyboardButton(
+            text="💬 Комментарии",
+            callback_data=f"comments:{video_id}"
+        )],
+        [InlineKeyboardButton(
+            text="😀 Реакции",
+            callback_data=f"reactions:{video_id}"
+        )],
+        [InlineKeyboardButton(
+            text="⏭ Следующее",
+            callback_data="watch_next"
+        )],
     ])
 
 
 def photo_actions_keyboard(photo_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{photo_id}")],
-        [InlineKeyboardButton(text="⏭ Следующее фото", callback_data="watch_next_photo")],
-    ])
-
-
-def rules_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Принять правила", callback_data="accept_rules")],
+        [InlineKeyboardButton(
+            text="😀 Реакции",
+            callback_data=f"reactions:{photo_id}"
+        )],
+        [InlineKeyboardButton(
+            text="⏭ Следующее фото",
+            callback_data="watch_next_photo"
+        )],
     ])
 
 
 def buy_coins_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🪙 2 монеты (1 Star)", callback_data="buy:pack_1")],
-        [InlineKeyboardButton(text="🪙 10 монет (5 Stars)", callback_data="buy:pack_5")],
-        [InlineKeyboardButton(text="🪙 20 монет (10 Stars)", callback_data="buy:pack_10")],
-        [InlineKeyboardButton(text="🪙 50 монет (25 Stars)", callback_data="buy:pack_25")],
-        [InlineKeyboardButton(text="🪙 100 монет (50 Stars)", callback_data="buy:pack_50")],
-        [InlineKeyboardButton(text="✏️ Своя сумма", callback_data="buy_custom")],
+        [InlineKeyboardButton(
+            text="🪙 2 монеты (1 Star)",
+            callback_data="buy:pack_1"
+        )],
+        [InlineKeyboardButton(
+            text="🪙 10 монет (5 Stars)",
+            callback_data="buy:pack_5"
+        )],
+        [InlineKeyboardButton(
+            text="🪙 20 монет (10 Stars)",
+            callback_data="buy:pack_10"
+        )],
+        [InlineKeyboardButton(
+            text="🪙 50 монет (25 Stars)",
+            callback_data="buy:pack_25"
+        )],
+        [InlineKeyboardButton(
+            text="🪙 100 монет (50 Stars)",
+            callback_data="buy:pack_50"
+        )],
+        [InlineKeyboardButton(
+            text="✏️ Своя сумма",
+            callback_data="buy_custom"
+        )],
     ])
 
 
 def vip_buy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👑 Купить VIP", callback_data="buy_vip")],
+        [InlineKeyboardButton(
+            text="👑 Купить VIP",
+            callback_data="buy_vip"
+        )],
     ])
 
 
-def offers_list_keyboard(offers) -> InlineKeyboardMarkup:
+def offers_list_keyboard(offers: list) -> InlineKeyboardMarkup:
     buttons = []
     for o in offers:
         icon = "✅" if o.is_active else "⏸"
+        rent_icon = " 📣" if getattr(o, "is_rentable", False) else ""
         buttons.append([InlineKeyboardButton(
-            text=f"{icon} {o.title}",
+            text=f"{icon}{rent_icon} {o.title[:35]}",
             callback_data=f"offer_open:{o.id}"
         )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def quests_keyboard(quests) -> InlineKeyboardMarkup:
+def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📢 Перейти в канал",
+            url=channel_url
+        )],
+        [InlineKeyboardButton(
+            text="▶️ Участвовать",
+            callback_data=f"offer_start:{offer_id}"
+        )],
+        [InlineKeyboardButton(
+            text="✅ Проверить подписку",
+            callback_data=f"offer_check:{offer_id}"
+        )],
+    ])
+
+
+def offer_rent_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для аренды рекламного слота."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📣 Арендовать слот",
+            callback_data=f"rent_offer:{offer_id}"
+        )],
+        [InlineKeyboardButton(
+            text="◀️ Назад к офферам",
+            callback_data="back_to_offers"
+        )],
+    ])
+
+
+def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+    """Выбор количества дней аренды."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="1 день",
+                callback_data=f"rent_days:{offer_id}:1"
+            ),
+            InlineKeyboardButton(
+                text="3 дня",
+                callback_data=f"rent_days:{offer_id}:3"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="7 дней",
+                callback_data=f"rent_days:{offer_id}:7"
+            ),
+            InlineKeyboardButton(
+                text="14 дней",
+                callback_data=f"rent_days:{offer_id}:14"
+            ),
+        ],
+        [InlineKeyboardButton(
+            text="30 дней",
+            callback_data=f"rent_days:{offer_id}:30"
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена",
+            callback_data=f"offer_open:{offer_id}"
+        )],
+    ])
+
+
+def games_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎲 Кости",       callback_data="game_dice")],
+        [InlineKeyboardButton(text="🪙 Орёл/Решка",  callback_data="game_coinflip")],
+        [InlineKeyboardButton(text="🎯 Угадай число", callback_data="game_guess")],
+    ])
+
+
+def tops_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎬 Топ загрузчиков", callback_data="top_uploaders")],
+        [InlineKeyboardButton(text="👁 Топ зрителей",    callback_data="top_viewers")],
+        [InlineKeyboardButton(text="⭐ Топ по XP",        callback_data="top_levels")],
+        [InlineKeyboardButton(text="💰 Топ богатых",      callback_data="top_richest")],
+    ])
+
+
+def quests_keyboard(quests: list) -> InlineKeyboardMarkup:
     buttons = []
     for q in quests:
         if q.completed and not q.reward_claimed:
-            status = "🎁"
-            text = f"{status} Получить награду: {q.quest_type} ({q.reward} монет)"
             buttons.append([InlineKeyboardButton(
-                text=text,
+                text=f"🎁 Забрать награду: {q.quest_type} ({q.reward} монет)",
                 callback_data=f"quest_claim:{q.id}"
             )])
         elif q.completed:
-            status = "✅"
             buttons.append([InlineKeyboardButton(
-                text=f"{status} {q.quest_type}: {q.progress}/{q.target} — выполнено",
+                text=f"✅ {q.quest_type}: {q.progress}/{q.target} — выполнено",
                 callback_data=f"quest_done:{q.id}"
             )])
         else:
-            status = "⏳"
             buttons.append([InlineKeyboardButton(
-                text=f"{status} {q.quest_type}: {q.progress}/{q.target}",
+                text=f"⏳ {q.quest_type}: {q.progress}/{q.target}",
                 callback_data=f"quest_info:{q.id}"
             )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

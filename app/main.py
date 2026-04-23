@@ -1,12 +1,11 @@
 import asyncio
-import logging
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from app.config import BOT_TOKEN, PORT
-from app.db import engine, async_session, init_db
+from app.db import engine, init_db
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
 from app.logger import setup_logging, get_logger, log_info
@@ -22,7 +21,7 @@ async def on_startup(app):
         await run_migrations()
     except Exception as e:
         log_info(logger, f"Migrations warning: {e}")
-    log_info(logger, "Bot starting up... DB initialized")
+    log_info(logger, "Bot started, DB initialized")
 
 
 async def main():
@@ -33,14 +32,12 @@ async def main():
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-
     dp = Dispatcher()
     dp.include_router(user_router)
     dp.include_router(admin_router)
 
     app = web.Application()
     app.on_startup.append(on_startup)
-
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
