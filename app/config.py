@@ -57,17 +57,17 @@ REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 1.0)
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 2.0)
 
 STARS_PACKAGES = {
-    "pack_1": {"stars": 1, "coins": 2, "title": "2 \u043c\u043e\u043d\u0435\u0442\u044b"},
-    "pack_5": {"stars": 5, "coins": 10, "title": "10 \u043c\u043e\u043d\u0435\u0442"},
-    "pack_10": {"stars": 10, "coins": 20, "title": "20 \u043c\u043e\u043d\u0435\u0442"},
-    "pack_25": {"stars": 25, "coins": 50, "title": "50 \u043c\u043e\u043d\u0435\u0442"},
-    "pack_50": {"stars": 50, "coins": 100, "title": "100 \u043c\u043e\u043d\u0435\u0442"},
+    "pack_1": {"stars": 1, "coins": 2, "title": "2 монеты"},
+    "pack_5": {"stars": 5, "coins": 10, "title": "10 монет"},
+    "pack_10": {"stars": 10, "coins": 20, "title": "20 монет"},
+    "pack_25": {"stars": 25, "coins": 50, "title": "50 монет"},
+    "pack_50": {"stars": 50, "coins": 100, "title": "100 монет"},
 }
 
 MONEY_PACKAGES = {
-    "money_99": {"amount": 9900, "coins": 250, "title": "250 \u043c\u043e\u043d\u0435\u0442"},
-    "money_199": {"amount": 19900, "coins": 600, "title": "600 \u043c\u043e\u043d\u0435\u0442"},
-    "money_499": {"amount": 49900, "coins": 1800, "title": "1800 \u043c\u043e\u043d\u0435\u0442"},
+    "money_99": {"amount": 9900, "coins": 250, "title": "250 монет"},
+    "money_199": {"amount": 19900, "coins": 600, "title": "600 монет"},
+    "money_499": {"amount": 49900, "coins": 1800, "title": "1800 монет"},
 }
 
 OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.5)
@@ -75,7 +75,6 @@ OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.
 # === LEVELS ===
 LEVEL_XP_BASE = _get_int("LEVEL_XP_BASE", 100)
 LEVEL_XP_MULTIPLIER = _get_float("LEVEL_XP_MULTIPLIER", 1.5)
-
 XP_PER_WATCH = _get_int("XP_PER_WATCH", 5)
 XP_PER_UPLOAD = _get_int("XP_PER_UPLOAD", 20)
 XP_PER_RATING = _get_int("XP_PER_RATING", 2)
@@ -96,19 +95,19 @@ DICE_MAX_BET = _get_int("DICE_MAX_BET", 50)
 
 # === QUESTS ===
 DAILY_QUESTS = [
-    {"type": "watch", "target": 3, "reward": 2, "desc": "\u041f\u043e\u0441\u043c\u043e\u0442\u0440\u0438 3 \u0432\u0438\u0434\u0435\u043e"},
-    {"type": "upload", "target": 1, "reward": 3, "desc": "\u0417\u0430\u0433\u0440\u0443\u0437\u0438 1 \u043a\u043e\u043d\u0442\u0435\u043d\u0442"},
-    {"type": "rate", "target": 3, "reward": 1, "desc": "\u041e\u0446\u0435\u043d\u0438 3 \u0432\u0438\u0434\u0435\u043e"},
-    {"type": "comment", "target": 2, "reward": 2, "desc": "\u041e\u0441\u0442\u0430\u0432\u044c 2 \u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u044f"},
-    {"type": "react", "target": 5, "reward": 1, "desc": "\u041f\u043e\u0441\u0442\u0430\u0432\u044c 5 \u0440\u0435\u0430\u043a\u0446\u0438\u0439"},
+    {"type": "watch", "target": 3, "reward": 2, "desc": "Посмотри 3 видео"},
+    {"type": "upload", "target": 1, "reward": 3, "desc": "Загрузи 1 контент"},
+    {"type": "rate", "target": 3, "reward": 1, "desc": "Оцени 3 видео"},
+    {"type": "comment", "target": 2, "reward": 2, "desc": "Оставь 2 комментария"},
+    {"type": "react", "target": 5, "reward": 1, "desc": "Поставь 5 реакций"},
 ]
 
 PREMIUM_DAILY_QUESTS = [
-    {"type": "watch", "target": 10, "reward": 8, "desc": "VIP: \u041f\u043e\u0441\u043c\u043e\u0442\u0440\u0438 10 \u0432\u0438\u0434\u0435\u043e"},
-    {"type": "comment", "target": 5, "reward": 5, "desc": "VIP: \u041e\u0441\u0442\u0430\u0432\u044c 5 \u043a\u043e\u043c\u043c\u0435\u043d\u0442\u043e\u0432"},
+    {"type": "watch", "target": 10, "reward": 8, "desc": "VIP: Посмотри 10 видео"},
+    {"type": "comment", "target": 5, "reward": 5, "desc": "VIP: Оставь 5 комментов"},
 ]
 
-REACTION_TYPES = ["\U0001f525", "\u2764\ufe0f", "\U0001f602", "\U0001f44d", "\U0001f4af"]
+REACTION_TYPES = ["🔥", "❤️", "😂", "👍", "💯"]
 
 # === ANTI-SPAM COMMENTS ===
 COMMENTS_PER_10_MIN = _get_int("COMMENTS_PER_10_MIN", 5)
@@ -122,3 +121,9 @@ WEEKLY_TOP3_REWARD = _get_float("WEEKLY_TOP3_REWARD", 10.0)
 # === MONETIZATION ===
 PIN_OFFER_COST = _get_float("PIN_OFFER_COST", 100.0)
 BUMP_VIDEO_COST = _get_float("BUMP_VIDEO_COST", 25.0)
+
+# === NICKNAME ===
+NICKNAME_FIRST_FREE = True          # Первый ник бесплатно
+NICKNAME_CHANGE_COST = _get_float("NICKNAME_CHANGE_COST", 50.0)  # Смена ника стоит 50 монет
+NICKNAME_MIN_LENGTH = 3
+NICKNAME_MAX_LENGTH = 24

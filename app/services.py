@@ -19,6 +19,7 @@ from app.models import (
     DailyQuestProgress,
     GameSession,
     UserActionLog,
+    BalanceLog,
 )
 from app.config import (
     STARTING_BALANCE,
@@ -36,6 +37,8 @@ from app.config import (
     PREMIUM_DAILY_QUESTS,
     BUMP_VIDEO_COST,
     PIN_OFFER_COST,
+    NICKNAME_CHANGE_COST,
+    NICKNAME_FIRST_FREE,
 )
 
 PHOTO_UPLOAD_REWARD = Decimal("0.1")
@@ -54,8 +57,43 @@ def round_coin(val: Decimal) -> Decimal:
     return val.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
 
+def get_display_name(user: User) -> str:
+    """Получить отображаемое имя пользователя для топов и т.д."""
+    if user.display_name:
+        return user.display_name
+    if user.first_name:
+        return user.first_name
+    if user.username:
+        return f"@{user.username}"
+    return f"User#{user.telegram_id}"
+
+
+async def log_balance_change(
+    session: AsyncSession,
+    user: User,
+    amount: Decimal,
+    source: str,
+    source_id: int = None,
+    admin_id: int = None,
+    details: str = None,
+):
+    """Логирует каждое изменение баланса для расследований."""
+    balance_before = user.balance
+    balance_after = user.balance + amount
+    log = BalanceLog(
+        user_id=user.id,
+        amount=amount,
+        balance_before=balance_before,
+        balance_after=balance_after,
+        source=source,
+        source_id=source_id,
+        admin_id=admin_id,
+        details=details,
+    )
+    session.add(log)
+
+
 async def log_user_action(session: AsyncSession, user_id: int, action: str, details: str = None):
-    """Логирует действие пользователя в таблицу action_logs."""
     log = UserActionLog(user_id=user_id, action=action, details=details)
     session.add(log)
     await session.commit()
@@ -76,6 +114,12 @@ async def get_user_by_username(session: AsyncSession, username: str):
     return (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
 
 
+async def get_user_by_display_name(session: AsyncSession, display_name: str):
+    return (await session.execute(
+        select(User).where(User.display_name == display_name)
+    )).scalar_one_or_none()
+
+
 async def get_or_create_user(session, telegram_id, username=None, first_name=None, last_name=None, referral_code=None):
     user = await get_user(session, telegram_id)
     if user:
@@ -94,25 +138,93 @@ async def get_or_create_user(session, telegram_id, username=None, first_name=Non
             referred_by = inviter.id
             inviter.balance += to_decimal(REFERRAL_REWARD_INVITER)
             inviter.referral_earnings += to_decimal(REFERRAL_REWARD_INVITER)
+            await log_balance_change(
+                session, inviter, to_decimal(REFERRAL_REWARD_INVITER),
+                "referral_inviter", details=f"New user tg_id: {telegram_id}"
+            )
+
+    starting_balance = to_decimal(STARTING_BALANCE) + (to_decimal(REFERRAL_REWARD_NEW_USER) if referred_by else 0)
 
     user = User(
         telegram_id=telegram_id,
         username=username,
         first_name=first_name,
         last_name=last_name,
-        balance=to_decimal(STARTING_BALANCE) + (to_decimal(REFERRAL_REWARD_NEW_USER) if referred_by else 0),
+        balance=starting_balance,
         referral_code=uuid.uuid4().hex[:8],
         referred_by_user_id=referred_by,
         is_admin=False,
+        nickname_set=False,
     )
     session.add(user)
+    await session.flush()  # чтобы получить user.id
+
+    await log_balance_change(
+        session, user, starting_balance,
+        "registration", details=f"Starting balance. Referred by: {referred_by}"
+    )
     await session.commit()
     await log_user_action(session, user.id, "registration", f"Referred by: {referred_by}")
     return user, True
 
 
+async def set_display_name(session: AsyncSession, user: User, name: str) -> tuple[bool, str]:
+    """
+    Установить ник пользователю.
+    Возвращает (успех, сообщение).
+    """
+    from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
+
+    # Проверка длины
+    if len(name) < NICKNAME_MIN_LENGTH:
+        return False, f"❌ Ник слишком короткий. Минимум {NICKNAME_MIN_LENGTH} символа."
+    if len(name) > NICKNAME_MAX_LENGTH:
+        return False, f"❌ Ник слишком длинный. Максимум {NICKNAME_MAX_LENGTH} символов."
+
+    # Проверка символов — только буквы, цифры, _, -
+    import re
+    if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9_\-]+$', name):
+        return False, (
+            "❌ Ник может содержать только буквы (рус/лат), цифры, _ и -\n"
+            "Нельзя использовать: точки, пробелы, спецсимволы."
+        )
+
+    # Проверка на «пустышки» — только из одинаковых символов
+    if len(set(name.lower())) < 2:
+        return False, "❌ Ник должен содержать хотя бы 2 разных символа."
+
+    # Проверка уникальности
+    existing = await get_user_by_display_name(session, name)
+    if existing and existing.id != user.id:
+        return False, "❌ Этот ник уже занят. Придумайте другой."
+
+    is_first = not user.nickname_set
+
+    if not is_first:
+        # Проверяем баланс за смену
+        cost = to_decimal(NICKNAME_CHANGE_COST)
+        if user.balance < cost:
+            return False, f"❌ Недостаточно монет для смены ника.\nНужно: {cost}, у вас: {user.balance}"
+        old_name = user.display_name
+        user.balance -= cost
+        await log_balance_change(
+            session, user, -cost,
+            "nickname_change", details=f"Old: {old_name} -> New: {name}"
+        )
+
+    old_name = user.display_name
+    user.display_name = name
+    user.nickname_set = True
+    await session.commit()
+    await log_user_action(session, user.id, "set_nickname", f"Old: {old_name} -> New: {name}")
+
+    if is_first:
+        return True, f"✅ Ник <b>{name}</b> установлен бесплатно!"
+    else:
+        return True, f"✅ Ник изменён на <b>{name}</b>! Списано {NICKNAME_CHANGE_COST} монет."
+
+
 async def approve_video(session: AsyncSession, video_id: int):
-    """Одобряет видео и начисляет награду загрузчику."""
     v = (await session.execute(select(Video).where(Video.id == video_id))).scalar_one_or_none()
     if not v or v.status != "pending":
         return v
@@ -120,6 +232,7 @@ async def approve_video(session: AsyncSession, video_id: int):
     up = await get_user_by_id(session, v.uploader_user_id)
     if up:
         reward = PHOTO_UPLOAD_REWARD if v.content_type == "photo" else to_decimal(UPLOAD_REWARD)
+        await log_balance_change(session, up, reward, "upload_approved", source_id=v.id)
         up.balance += reward
         await log_user_action(session, up.id, "video_approved", f"Video ID: {v.id}, Reward: {reward}")
     await session.commit()
@@ -138,7 +251,6 @@ async def reject_video(session: AsyncSession, video_id: int, reason: str):
 
 
 async def get_user_dossier(session: AsyncSession, user_id: int):
-    """Собирает полное досье пользователя по его внутреннему user_id."""
     user = await get_user_by_id(session, user_id)
     if not user:
         return None
@@ -146,23 +258,77 @@ async def get_user_dossier(session: AsyncSession, user_id: int):
     games_count = (await session.execute(
         select(func.count(GameHistory.id)).where(GameHistory.user_id == user_id)
     )).scalar_one()
+
+    # Сумма выигрышей и проигрышей в играх
+    game_profit = (await session.execute(
+        select(func.sum(GameHistory.result)).where(GameHistory.user_id == user_id)
+    )).scalar_one() or Decimal("0")
+
+    # Подозрительные игры (очень быстрый профит)
+    suspicious_games = (await session.execute(
+        select(GameHistory).where(
+            GameHistory.user_id == user_id,
+            GameHistory.result > to_decimal(50)
+        ).order_by(desc(GameHistory.created_at))
+    )).scalars().all()
+
     videos_uploaded = (await session.execute(
         select(func.count(Video.id)).where(Video.uploader_user_id == user_id)
     )).scalar_one()
+
     videos_watched = (await session.execute(
         select(func.count(VideoView.id)).where(VideoView.user_id == user_id)
     )).scalar_one()
 
+    # Баланс-логи
+    balance_logs = (await session.execute(
+        select(BalanceLog).where(BalanceLog.user_id == user_id)
+        .order_by(desc(BalanceLog.created_at))
+        .limit(50)
+    )).scalars().all()
+
+    # Общая сумма начислений
+    total_earned = (await session.execute(
+        select(func.sum(BalanceLog.amount)).where(
+            BalanceLog.user_id == user_id,
+            BalanceLog.amount > 0
+        )
+    )).scalar_one() or Decimal("0")
+
+    # Общая сумма списаний
+    total_spent = (await session.execute(
+        select(func.sum(BalanceLog.amount)).where(
+            BalanceLog.user_id == user_id,
+            BalanceLog.amount < 0
+        )
+    )).scalar_one() or Decimal("0")
+
+    # Начислений от админа
+    admin_given = (await session.execute(
+        select(func.sum(BalanceLog.amount)).where(
+            BalanceLog.user_id == user_id,
+            BalanceLog.source == "admin_balance",
+            BalanceLog.amount > 0
+        )
+    )).scalar_one() or Decimal("0")
+
     logs = (await session.execute(
         select(UserActionLog).where(UserActionLog.user_id == user_id)
         .order_by(desc(UserActionLog.created_at))
+        .limit(20)
     )).scalars().all()
 
     return {
         "user": user,
         "games_count": games_count,
+        "game_profit": game_profit,
+        "suspicious_games": suspicious_games,
         "videos_uploaded": videos_uploaded,
         "videos_watched": videos_watched,
+        "balance_logs": balance_logs,
+        "total_earned": total_earned,
+        "total_spent": total_spent,
+        "admin_given": admin_given,
         "logs": logs,
     }
 
@@ -170,6 +336,11 @@ async def get_user_dossier(session: AsyncSession, user_id: int):
 async def update_user_balance(session: AsyncSession, user_id: int, amount: Decimal, admin_id: int):
     user = await get_user_by_id(session, user_id)
     if user:
+        await log_balance_change(
+            session, user, amount,
+            "admin_balance", admin_id=admin_id,
+            details=f"Manual by admin {admin_id}"
+        )
         user.balance += amount
         await log_user_action(session, user_id, "balance_update", f"By admin {admin_id}, Amount: {amount}")
         await session.commit()
@@ -187,7 +358,6 @@ async def set_user_ban_status(session: AsyncSession, user_id: int, is_banned: bo
     return False
 
 
-# Moderation helpers
 async def get_next_pending_video(session):
     return (await session.execute(
         select(Video).where(Video.status == "pending").order_by(Video.created_at).limit(1)
@@ -218,10 +388,25 @@ async def get_admin_extended_stats(session):
         "vip": (await session.execute(
             select(func.count(User.id)).where(User.vip_until > datetime.utcnow())
         )).scalar_one(),
+        "with_nickname": (await session.execute(
+            select(func.count(User.id)).where(User.nickname_set == True)
+        )).scalar_one(),
         "comments": (await session.execute(select(func.count(Comment.id)))).scalar_one(),
         "reactions": (await session.execute(select(func.count(ContentReaction.id)))).scalar_one(),
         "games": (await session.execute(select(func.count(GameHistory.id)))).scalar_one(),
         "offers": (await session.execute(select(func.count(Offer.id)))).scalar_one(),
+        "total_balance_in_system": (await session.execute(
+            select(func.sum(User.balance))
+        )).scalar_one() or Decimal("0"),
+        "total_admin_given": (await session.execute(
+            select(func.sum(BalanceLog.amount)).where(
+                BalanceLog.source == "admin_balance",
+                BalanceLog.amount > 0
+            )
+        )).scalar_one() or Decimal("0"),
+        "total_game_profit": (await session.execute(
+            select(func.sum(GameHistory.result))
+        )).scalar_one() or Decimal("0"),
     }
 
 
@@ -270,8 +455,6 @@ async def get_random_video_for_user(session: AsyncSession, user_id: int):
 
 
 async def get_random_photo_for_user(session: AsyncSession, user_id: int):
-    # BUG FIX #7: фото не фильтровалось по uploader_user_id != user_id,
-    # пользователь мог получить собственное фото.
     stmt = select(Video).where(
         Video.status == "approved",
         Video.content_type == "photo",
@@ -287,9 +470,8 @@ async def record_view_and_charge(session: AsyncSession, user_id: int, video_id: 
     cost = to_decimal(WATCH_COST)
     if user.balance < cost:
         return False
+    await log_balance_change(session, user, -cost, "watch", source_id=video_id)
     user.balance -= cost
-    # BUG FIX #8: XP начислялся хардкодом (+=5), игнорируя константу XP_PER_WATCH из конфига.
-    # Импортируем и используем значение из конфига.
     from app.config import XP_PER_WATCH
     user.xp += XP_PER_WATCH
     view = VideoView(user_id=user_id, video_id=video_id)
@@ -343,8 +525,9 @@ async def claim_daily_bonus(session: AsyncSession, user_id: int):
         remaining = 86400 - (now - user.last_bonus_at).total_seconds()
         hours = int(remaining // 3600)
         minutes = int((remaining % 3600) // 60)
-        return False, f"Бонус уже получен. Следующий через {hours}ч {minutes}мин"
+        return False, f"⏳ Бонус уже получен. Следующий через {hours}ч {minutes}мин"
     bonus = to_decimal(1.0)
+    await log_balance_change(session, user, bonus, "daily_bonus")
     user.balance += bonus
     user.last_bonus_at = now
     await session.commit()
@@ -397,6 +580,11 @@ async def apply_successful_payment(session: AsyncSession, payload: str):
     payment.status = "completed"
     user = await get_user_by_id(session, payment.user_id)
     if user:
+        await log_balance_change(
+            session, user, payment.coins_amount,
+            "stars_payment", source_id=payment.id,
+            details=f"Stars: {payment.stars_amount}, Payload: {payload}"
+        )
         user.balance += payment.coins_amount
     await session.commit()
     return payment
@@ -427,6 +615,10 @@ async def start_offer_participation(session: AsyncSession, user_id: int, offer_i
         return None, False
     user = await get_user_by_id(session, user_id)
     if user:
+        await log_balance_change(
+            session, user, offer.reward_preview,
+            "offer_start", source_id=offer_id
+        )
         user.balance += offer.reward_preview
     part = OfferParticipation(
         user_id=user_id,
@@ -457,7 +649,11 @@ async def verify_offer_subscription(session: AsyncSession, user_id: int, offer_i
     if offer and user:
         additional = offer.reward_final - part.reward_given
         if additional > 0:
+            await log_balance_change(
+                session, user, additional,
+                "offer_complete", source_id=offer_id
+            )
             user.balance += additional
-        part.reward_given = offer.reward_final
+            part.reward_given = offer.reward_final
     await session.commit()
     return True

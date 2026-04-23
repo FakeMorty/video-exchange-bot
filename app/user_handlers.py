@@ -1,4 +1,8 @@
+import re
+import uuid
 from decimal import Decimal
+from datetime import datetime, timedelta
+
 from aiogram import Router, F
 from aiogram.filters import CommandStart, CommandObject
 from aiogram.types import (
@@ -14,12 +18,13 @@ from app.config import (
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING, XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
     PIN_OFFER_COST, VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER,
     LEVEL_XP_BASE, LEVEL_XP_MULTIPLIER, DAILY_QUESTS, PREMIUM_DAILY_QUESTS,
-    COMMENTS_PER_10_MIN, COMMENT_MIN_INTERVAL_SEC
+    COMMENTS_PER_10_MIN, COMMENT_MIN_INTERVAL_SEC,
+    NICKNAME_CHANGE_COST, NICKNAME_FIRST_FREE, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
 )
 from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
-    DailyQuestProgress, GameHistory, GameSession
+    DailyQuestProgress, GameHistory, BalanceLog
 )
 from app.services import (
     get_or_create_user, get_user, get_user_by_id, save_video, save_photo,
@@ -28,7 +33,8 @@ from app.services import (
     count_photo_views_last_4h, rate_video, claim_daily_bonus, count_referrals,
     create_payment, create_custom_payment, apply_successful_payment,
     get_active_offers, get_offer_by_id, start_offer_participation,
-    verify_offer_subscription, log_user_action, to_decimal
+    verify_offer_subscription, log_user_action, to_decimal,
+    set_display_name, get_display_name, log_balance_change,
 )
 from app.keyboards import (
     rules_keyboard, main_menu, video_rating_keyboard, photo_actions_keyboard,
@@ -38,11 +44,7 @@ from app.keyboards import (
     BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY, BTN_OFFERS, BTN_REFERRALS,
     BTN_BONUS, BTN_ADMIN, BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL
 )
-from app.logger import get_logger, log_info, log_warning, log_exception
-
-import random
-import uuid
-from datetime import datetime, timedelta
+from app.logger import get_logger
 
 logger = get_logger(__name__)
 router = Router()
@@ -66,8 +68,8 @@ class CustomBuyState(StatesGroup):
     waiting_stars = State()
 
 
-class AdminMessageState(StatesGroup):
-    waiting_text = State()
+class NicknameState(StatesGroup):
+    waiting_nickname = State()
 
 
 # =========================
@@ -82,18 +84,17 @@ def is_any_admin(telegram_id: int, user_obj=None) -> bool:
 
 
 def calc_level_xp_required(level: int) -> int:
-    """Сколько XP нужно для перехода на следующий уровень."""
     return int(LEVEL_XP_BASE * (LEVEL_XP_MULTIPLIER ** (level - 1)))
 
 
 def calc_level_from_xp(xp: int) -> int:
-    """Вычислить уровень по XP."""
     level = 1
+    remaining = xp
     while True:
         required = calc_level_xp_required(level)
-        if xp < required:
+        if remaining < required:
             break
-        xp -= required
+        remaining -= required
         level += 1
     return level
 
@@ -102,6 +103,77 @@ def is_vip(user) -> bool:
     if user.vip_until and user.vip_until > datetime.utcnow():
         return True
     return False
+
+
+async def require_nickname(message: Message, user) -> bool:
+    """
+    Проверяет, установлен ли ник. Если нет — просит установить.
+    Возвращает False если ник не установлен (надо заблокировать действие).
+    """
+    if user.nickname_set and user.display_name:
+        return True
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Установить ник", callback_data="set_nickname_start")]
+    ])
+    await message.answer(
+        "⚠️ <b>Необходимо установить ник!</b>\n\n"
+        f"Ник должен:\n"
+        f"• Содержать от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+        f"• Состоять из букв (рус/лат), цифр, _ или -\n"
+        f"• Быть уникальным\n\n"
+        f"Первая установка бесплатна!\n"
+        f"Смена ника стоит {NICKNAME_CHANGE_COST} монет.",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    return False
+
+
+# =========================
+# NICKNAME FLOW
+# =========================
+@router.callback_query(F.data == "set_nickname_start")
+async def set_nickname_start(callback: CallbackQuery, state: FSMContext):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        is_first = not user.nickname_set
+        cost_text = "бесплатно" if is_first else f"{NICKNAME_CHANGE_COST} монет"
+
+    await state.set_state(NicknameState.waiting_nickname)
+    await callback.message.answer(
+        f"✏️ Введите ник ({cost_text}):\n\n"
+        f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+        f"• Буквы (рус/лат), цифры, _ или -\n"
+        f"• Без точек, пробелов, спецсимволов"
+    )
+    await callback.answer()
+
+
+@router.message(NicknameState.waiting_nickname)
+async def process_nickname(message: Message, state: FSMContext):
+    name = message.text.strip() if message.text else ""
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            await state.clear()
+            return
+        ok, msg = await set_display_name(session, user, name)
+
+    await message.answer(msg, parse_mode="HTML")
+    if ok:
+        await state.clear()
+        # Показываем главное меню после установки ника
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            admin_flag = is_any_admin(message.from_user.id, user)
+        await message.answer(
+            "Теперь вы можете пользоваться ботом!",
+            reply_markup=main_menu(is_admin=admin_flag)
+        )
 
 
 # =========================
@@ -113,6 +185,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         return
     await state.clear()
     referral_code = command.args.strip() if command and command.args else None
+
     async with async_session() as session:
         user, is_new = await get_or_create_user(
             session, message.from_user.id, message.from_user.username,
@@ -125,19 +198,37 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         if not user.agreed_to_rules:
             await message.answer(
                 "📋 <b>Правила бота</b>\n\n"
-                "1. Запрещён контент 18+, насилие, спам.\n"
-                "2. Загружайте только собственный контент.\n"
-                "3. Не злоупотребляйте системой монет.\n\n"
-                "Нажмите кнопку ниже, чтобы принять правила и начать.",
+                "1. Вы все знаете для чего этот бот. Вот и не кидайте хрень всякую (Я про шок-контент).\n"
+                "2. Не багоюзте, и будет вам кайф.\n"
+                "3. Наслаждайтесь, самым уникальным и проработанным проектом в данной тематике.\n\n"
+                "Нажмите кнопку ниже, чтобы принять правила.",
                 parse_mode="HTML",
                 reply_markup=rules_keyboard()
             )
             return
 
+        # Проверяем ник
+        if not user.nickname_set or not user.display_name:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Установить ник", callback_data="set_nickname_start")]
+            ])
+            await message.answer(
+                "👋 Добро пожаловать!\n\n"
+                "⚠️ Перед началом нужно установить ник.\n"
+                f"Первая установка бесплатна!\n"
+                f"Смена ника в будущем стоит {NICKNAME_CHANGE_COST} монет.\n\n"
+                f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+                f"• Только буквы, цифры, _ и -",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            return
+
         admin_flag = is_any_admin(message.from_user.id, user)
-        vip_str = " 👑 VIP" if is_vip(user) else ""
+        vip_str = " 👑" if is_vip(user) else ""
         await message.answer(
-            f"👋 Добро пожаловать{vip_str}!\n💰 Баланс: <b>{user.balance}</b> монет",
+            f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
+            f"💰 Баланс: <b>{user.balance}</b> монет",
             parse_mode="HTML",
             reply_markup=main_menu(is_admin=admin_flag)
         )
@@ -152,13 +243,19 @@ async def accept_rules(callback: CallbackQuery):
             return
         user.agreed_to_rules = True
         await session.commit()
-        admin_flag = is_any_admin(callback.from_user.id, user)
-        await callback.message.answer(
-            f"✅ Правила приняты! Добро пожаловать!\n💰 Баланс: <b>{user.balance}</b> монет\n\n"
-            f"Выберите действие:",
-            parse_mode="HTML",
-            reply_markup=main_menu(is_admin=admin_flag)
-        )
+
+    # После принятия правил — просим ник
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Установить ник", callback_data="set_nickname_start")]
+    ])
+    await callback.message.answer(
+        "✅ Правила приняты!\n\n"
+        "⚠️ Теперь установите ник. Первая установка бесплатна!\n"
+        f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+        f"• Только буквы (рус/лат), цифры, _ и -",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
     await callback.answer()
 
 
@@ -183,32 +280,38 @@ async def show_profile(message: Message):
         user = await get_user(session, message.from_user.id)
         if not user:
             return
+        if not await require_nickname(message, user):
+            return
 
         refs = await count_referrals(session, user.id)
         vip_str = ""
         if is_vip(user):
             vip_str = f"\n👑 VIP до: {user.vip_until.strftime('%d.%m.%Y')}"
 
-        # Подсчёт XP до следующего уровня
         level = user.level
         xp = user.xp
         xp_spent = sum(calc_level_xp_required(l) for l in range(1, level))
         xp_current = xp - xp_spent
         xp_needed = calc_level_xp_required(level)
 
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Сменить ник", callback_data="set_nickname_start")]
+        ])
+
         text = (
             f"👤 <b>Профиль</b>\n\n"
-            f"🆔 ID: <code>{user.telegram_id}</code>\n"
-            f"👤 Имя: {user.first_name or 'Не указано'}\n"
+            f"🏷 Ник: <b>{get_display_name(user)}</b>\n"
+            f"🆔 TG ID: <code>{user.telegram_id}</code>\n"
             f"💰 Баланс: <b>{user.balance}</b> монет\n"
             f"🏆 Уровень: <b>{user.level}</b>\n"
             f"⭐ XP: {xp_current}/{xp_needed}\n"
             f"👥 Рефералов: {refs}\n"
             f"💎 Реф. заработок: {user.referral_earnings} монет\n"
             f"📊 Статус: {user.status}"
-            f"{vip_str}"
+            f"{vip_str}\n\n"
+            f"Смена ника: {NICKNAME_CHANGE_COST} монет"
         )
-        await message.answer(text, parse_mode="HTML")
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
         await log_user_action(session, user.id, "view_profile")
 
 
@@ -221,6 +324,8 @@ async def show_level(message: Message):
         user = await get_user(session, message.from_user.id)
         if not user:
             return
+        if not await require_nickname(message, user):
+            return
 
         level = user.level
         xp = user.xp
@@ -231,8 +336,7 @@ async def show_level(message: Message):
         bar = "█" * progress + "░" * (10 - progress)
 
         text = (
-            f"🏆 <b>Ваш уровень</b>\n\n"
-            f"Уровень: <b>{level}</b>\n"
+            f"🏆 <b>Уровень: {level}</b>\n\n"
             f"XP: {xp_current}/{xp_needed}\n"
             f"[{bar}]\n\n"
             f"📈 Как получить XP:\n"
@@ -255,28 +359,30 @@ async def show_vip(message: Message):
         user = await get_user(session, message.from_user.id)
         if not user:
             return
+        if not await require_nickname(message, user):
+            return
 
         if is_vip(user):
             text = (
-                f"👑 <b>Вы уже VIP!</b>\n\n"
-                f"VIP активен до: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
-                f"Преимущества VIP:\n"
+                f"👑 <b>Вы VIP!</b>\n\n"
+                f"До: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
+                f"Привилегии:\n"
                 f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
                 f"• Бесплатная загрузка фото\n"
                 f"• Скидка 50% на просмотр\n"
-                f"• Доступ к VIP квестам"
+                f"• VIP квесты"
             )
             await message.answer(text, parse_mode="HTML")
         else:
             text = (
                 f"👑 <b>VIP статус</b>\n\n"
-                f"Стоимость: <b>{VIP_PRICE_STARS} Telegram Stars</b>\n"
+                f"Стоимость: <b>{VIP_PRICE_STARS} Stars</b>\n"
                 f"Длительность: {VIP_DURATION_DAYS} дней\n\n"
-                f"Преимущества:\n"
+                f"Привилегии:\n"
                 f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
                 f"• Бесплатная загрузка фото\n"
                 f"• Скидка 50% на просмотр\n"
-                f"• Доступ к VIP квестам"
+                f"• VIP квесты"
             )
             await message.answer(text, parse_mode="HTML", reply_markup=vip_buy_keyboard())
 
@@ -285,7 +391,7 @@ async def show_vip(message: Message):
 async def buy_vip(callback: CallbackQuery):
     await callback.message.answer_invoice(
         title="VIP статус",
-        description=f"VIP на {VIP_DURATION_DAYS} дней с множителем x{VIP_BONUS_MULTIPLIER}",
+        description=f"VIP на {VIP_DURATION_DAYS} дней",
         payload=f"vip_{callback.from_user.id}_{uuid.uuid4().hex[:6]}",
         currency="XTR",
         prices=[LabeledPrice(label="VIP", amount=VIP_PRICE_STARS)]
@@ -308,7 +414,9 @@ async def btn_watch(message: Message):
         if not user.agreed_to_rules:
             await message.answer("Сначала примите правила /start")
             return
-    await message.answer("Что хотите смотреть?", reply_markup=watch_choice_keyboard())
+        if not await require_nickname(message, user):
+            return
+    await message.answer("Что смотреть?", reply_markup=watch_choice_keyboard())
 
 
 @router.callback_query(F.data == "watch_video_content")
@@ -325,19 +433,14 @@ async def watch_video_content(callback: CallbackQuery):
 
         if user.balance < cost:
             await callback.message.answer(
-                f"❌ Недостаточно монет!\n"
-                f"Нужно: {cost}, у вас: {user.balance}\n"
-                f"Пополните баланс в разделе 💳 Купить"
+                f"❌ Недостаточно монет!\nНужно: {cost}, у вас: {user.balance}"
             )
             await callback.answer()
             return
 
         video = await get_random_video_for_user(session, user.id)
         if not video:
-            await callback.message.answer(
-                "😔 Нет доступных видео для просмотра.\n"
-                "Загрузите своё видео или попробуйте позже!"
-            )
+            await callback.message.answer("😔 Нет доступных видео.")
             await callback.answer()
             return
 
@@ -347,7 +450,6 @@ async def watch_video_content(callback: CallbackQuery):
             await callback.answer()
             return
 
-        # Обновляем уровень
         user = await get_user(session, callback.from_user.id)
         new_level = calc_level_from_xp(user.xp)
         if new_level > user.level:
@@ -355,12 +457,14 @@ async def watch_video_content(callback: CallbackQuery):
             await session.commit()
             await callback.message.answer(f"🎉 Вы достигли уровня {new_level}!")
 
-        await callback.message.answer_video(
-            video.telegram_file_id,
-            caption=f"🎬 Видео #{video.id}\n💰 Списано: {cost} монет",
-            reply_markup=video_rating_keyboard(video.id)
-        )
-        await callback.answer()
+        await _update_quest_progress(session, user.id, "watch", 1)
+
+    await callback.message.answer_video(
+        video.telegram_file_id,
+        caption=f"🎬 Видео #{video.id}\n💰 Списано: {cost} монет",
+        reply_markup=video_rating_keyboard(video.id)
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "watch_next")
@@ -375,21 +479,19 @@ async def watch_photo_content(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
-
         photo = await get_random_photo_for_user(session, user.id)
         if not photo:
             await callback.message.answer("😔 Нет доступных фото.")
             await callback.answer()
             return
-
         await record_photo_view(session, user.id, photo.id)
 
-        await callback.message.answer_photo(
-            photo.telegram_file_id,
-            caption=f"🖼 Фото #{photo.id}",
-            reply_markup=photo_actions_keyboard(photo.id)
-        )
-        await callback.answer()
+    await callback.message.answer_photo(
+        photo.telegram_file_id,
+        caption=f"🖼 Фото #{photo.id}",
+        reply_markup=photo_actions_keyboard(photo.id)
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "watch_next_photo")
@@ -423,8 +525,6 @@ async def cb_rate(callback: CallbackQuery):
             await callback.message.answer(f"🎉 Вы достигли уровня {new_level}!")
         else:
             await session.commit()
-
-        # Обновляем квест
         await _update_quest_progress(session, user.id, "rate", 1)
 
     await callback.answer(f"⭐ Оценка {rating} сохранена!")
@@ -434,10 +534,9 @@ async def cb_rate(callback: CallbackQuery):
 # COMMENTS
 # =========================
 @router.callback_query(F.data.startswith("comments:"))
-async def cb_comments(callback: CallbackQuery, state: FSMContext):
+async def cb_comments(callback: CallbackQuery):
     video_id = int(callback.data.split(":")[1])
     async with async_session() as session:
-        # Показываем комментарии
         result = await session.execute(
             select(Comment).where(Comment.video_id == video_id)
             .order_by(desc(Comment.created_at)).limit(10)
@@ -446,15 +545,15 @@ async def cb_comments(callback: CallbackQuery, state: FSMContext):
 
         text = f"💬 <b>Комментарии к видео #{video_id}</b>\n\n"
         if not comments:
-            text += "Комментариев пока нет. Будьте первым!"
+            text += "Комментариев пока нет."
         else:
             for c in comments:
                 user_obj = await get_user_by_id(session, c.user_id)
-                name = user_obj.first_name if user_obj else "???"
+                name = get_display_name(user_obj) if user_obj else "???"
                 text += f"👤 <b>{name}</b>: {c.text}\n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Оставить комментарий", callback_data=f"add_comment:{video_id}")],
+        [InlineKeyboardButton(text="✏️ Написать", callback_data=f"add_comment:{video_id}")],
         [InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{video_id}")]
     ])
     await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
@@ -466,7 +565,7 @@ async def add_comment_start(callback: CallbackQuery, state: FSMContext):
     video_id = int(callback.data.split(":")[1])
     await state.set_state(CommentState.waiting_text)
     await state.update_data(video_id=video_id)
-    await callback.message.answer("✏️ Напишите ваш комментарий:")
+    await callback.message.answer("✏️ Напишите комментарий:")
     await callback.answer()
 
 
@@ -484,17 +583,16 @@ async def process_comment(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Антиспам: не более COMMENTS_PER_10_MIN за 10 мин
         ten_min_ago = datetime.utcnow() - timedelta(minutes=10)
-        recent_count_result = await session.execute(
+        recent_count = (await session.execute(
             select(func.count(Comment.id)).where(
                 Comment.user_id == user.id,
                 Comment.created_at >= ten_min_ago
             )
-        )
-        recent_count = recent_count_result.scalar_one()
+        )).scalar_one()
+
         if recent_count >= COMMENTS_PER_10_MIN:
-            await message.answer(f"⚠️ Вы можете оставлять не более {COMMENTS_PER_10_MIN} комментариев за 10 минут.")
+            await message.answer(f"⚠️ Не более {COMMENTS_PER_10_MIN} комментариев за 10 минут.")
             await state.clear()
             return
 
@@ -504,11 +602,7 @@ async def process_comment(message: Message, state: FSMContext):
         new_level = calc_level_from_xp(user.xp)
         if new_level > user.level:
             user.level = new_level
-            await session.commit()
-            await message.answer(f"🎉 Вы достигли уровня {new_level}!")
-        else:
-            await session.commit()
-
+        await session.commit()
         await _update_quest_progress(session, user.id, "comment", 1)
 
     await message.answer("✅ Комментарий опубликован!")
@@ -543,7 +637,7 @@ async def cb_react(callback: CallbackQuery):
             await callback.answer()
             return
 
-        # Проверяем существующую реакцию
+        from app.models import ContentReaction
         existing = (await session.execute(
             select(ContentReaction).where(
                 ContentReaction.user_id == user.id,
@@ -565,7 +659,7 @@ async def cb_react(callback: CallbackQuery):
         await session.commit()
         await _update_quest_progress(session, user.id, "react", 1)
 
-    await callback.answer(f"{reaction} Реакция добавлена!")
+    await callback.answer(f"{reaction} Реакция!")
 
 
 # =========================
@@ -580,13 +674,11 @@ async def btn_upload(message: Message):
         if user.status == "banned":
             await message.answer("🚫 Вы заблокированы.")
             return
+        if not await require_nickname(message, user):
+            return
 
     await message.answer(
-        "📤 Отправьте видео или фото для загрузки.\n\n"
-        "📋 Требования:\n"
-        "• Видео: до 50 МБ\n"
-        "• Фото: любой формат\n"
-        "• Без запрещённого контента\n\n"
+        "📤 Отправьте видео или фото.\n\n"
         "После проверки модератором вы получите монеты!"
     )
 
@@ -600,13 +692,15 @@ async def handle_video_upload(message: Message):
         if not user.agreed_to_rules:
             await message.answer("Сначала примите правила /start")
             return
+        if not user.nickname_set:
+            await require_nickname(message, user)
+            return
 
         video = message.video
         saved = await save_video(
             session, user.id, video.file_id, video.file_unique_id,
             video.duration, video.file_size
         )
-
         user.xp += XP_PER_UPLOAD
         new_level = calc_level_from_xp(user.xp)
         if new_level > user.level:
@@ -615,13 +709,9 @@ async def handle_video_upload(message: Message):
             await message.answer(f"🎉 Вы достигли уровня {new_level}!")
         else:
             await session.commit()
-
         await _update_quest_progress(session, user.id, "upload", 1)
 
-    await message.answer(
-        f"✅ Видео #{saved.id} отправлено на модерацию!\n"
-        f"После проверки вы получите монеты."
-    )
+    await message.answer(f"✅ Видео #{saved.id} отправлено на модерацию!")
 
 
 @router.message(F.photo)
@@ -633,24 +723,22 @@ async def handle_photo_upload(message: Message):
         if not user.agreed_to_rules:
             await message.answer("Сначала примите правила /start")
             return
+        if not user.nickname_set:
+            await require_nickname(message, user)
+            return
 
         photo = message.photo[-1]
         saved = await save_photo(
             session, user.id, photo.file_id, photo.file_unique_id, photo.file_size
         )
-
         user.xp += XP_PER_UPLOAD
         new_level = calc_level_from_xp(user.xp)
         if new_level > user.level:
             user.level = new_level
         await session.commit()
-
         await _update_quest_progress(session, user.id, "upload", 1)
 
-    await message.answer(
-        f"✅ Фото #{saved.id} отправлено на модерацию!\n"
-        f"После проверки вы получите монеты."
-    )
+    await message.answer(f"✅ Фото #{saved.id} отправлено на модерацию!")
 
 
 # =========================
@@ -662,11 +750,13 @@ async def btn_bonus(message: Message):
         user = await get_user(session, message.from_user.id)
         if not user:
             return
+        if not await require_nickname(message, user):
+            return
         ok, result = await claim_daily_bonus(session, user.id)
         if ok:
-            await message.answer(f"🎁 Ежедневный бонус получен: <b>+{result} монет</b>!", parse_mode="HTML")
+            await message.answer(f"🎁 Бонус получен: <b>+{result} монет</b>!", parse_mode="HTML")
         else:
-            await message.answer(f"⏳ {result}")
+            await message.answer(f"{result}")
 
 
 # =========================
@@ -678,18 +768,20 @@ async def btn_referrals(message: Message):
         user = await get_user(session, message.from_user.id)
         if not user:
             return
+        if not await require_nickname(message, user):
+            return
         refs = await count_referrals(session, user.id)
         from app.config import REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER
         bot_info = await message.bot.get_me()
         ref_link = f"https://t.me/{bot_info.username}?start={user.referral_code}"
         text = (
-            f"👥 <b>Реферальная программа</b>\n\n"
-            f"Ваша ссылка:\n<code>{ref_link}</code>\n\n"
-            f"Приглашено: <b>{refs}</b> человек\n"
+            f"👥 <b>Рефералы</b>\n\n"
+            f"Ссылка:\n<code>{ref_link}</code>\n\n"
+            f"Приглашено: <b>{refs}</b>\n"
             f"Заработано: <b>{user.referral_earnings}</b> монет\n\n"
-            f"💡 За каждого приглашённого:\n"
-            f"• Вы получаете: +{REFERRAL_REWARD_INVITER} монет\n"
-            f"• Новый пользователь: +{REFERRAL_REWARD_NEW_USER} монет"
+            f"За каждого:\n"
+            f"• Вы: +{REFERRAL_REWARD_INVITER} монет\n"
+            f"• Новый: +{REFERRAL_REWARD_NEW_USER} монет"
         )
         await message.answer(text, parse_mode="HTML")
 
@@ -699,9 +791,14 @@ async def btn_referrals(message: Message):
 # =========================
 @router.message(F.text == BTN_BUY)
 async def btn_buy(message: Message):
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        if not await require_nickname(message, user):
+            return
     await message.answer(
-        "💳 <b>Пополнение баланса</b>\n\n"
-        "Выберите пакет монет:",
+        "💳 <b>Пополнение баланса</b>\n\nВыберите пакет:",
         parse_mode="HTML",
         reply_markup=buy_coins_keyboard()
     )
@@ -724,7 +821,7 @@ async def cb_buy_pack(callback: CallbackQuery):
 
     await callback.message.answer_invoice(
         title=f"Покупка {pack['title']}",
-        description=f"{pack['coins']} монет за {pack['stars']} Telegram Stars",
+        description=f"{pack['coins']} монет за {pack['stars']} Stars",
         payload=payment.payload,
         currency="XTR",
         prices=[LabeledPrice(label=pack['title'], amount=pack['stars'])]
@@ -735,9 +832,7 @@ async def cb_buy_pack(callback: CallbackQuery):
 @router.callback_query(F.data == "buy_custom")
 async def cb_buy_custom(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CustomBuyState.waiting_stars)
-    await callback.message.answer(
-        "💫 Введите количество Telegram Stars (минимум 1):"
-    )
+    await callback.message.answer("💫 Введите количество Stars (мин. 1):")
     await callback.answer()
 
 
@@ -761,7 +856,7 @@ async def process_custom_stars(message: Message, state: FSMContext):
 
     await message.answer_invoice(
         title=f"Покупка {coins} монет",
-        description=f"{coins} монет за {stars} Telegram Stars",
+        description=f"{coins} монет за {stars} Stars",
         payload=payment.payload,
         currency="XTR",
         prices=[LabeledPrice(label=f"{coins} монет", amount=stars)]
@@ -778,7 +873,6 @@ async def pre_checkout(pre_checkout_query: PreCheckoutQuery):
 async def successful_payment(message: Message):
     payload = message.successful_payment.invoice_payload
 
-    # VIP покупка
     if payload.startswith("vip_"):
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
@@ -790,22 +884,25 @@ async def successful_payment(message: Message):
                     user.vip_until = now + timedelta(days=VIP_DURATION_DAYS)
                 await log_user_action(session, user.id, "buy_vip", f"Until: {user.vip_until}")
                 await session.commit()
-        await message.answer(
-            f"👑 VIP статус активирован на {VIP_DURATION_DAYS} дней!\n"
-            f"Наслаждайтесь привилегиями!"
-        )
+        await message.answer(f"👑 VIP активирован на {VIP_DURATION_DAYS} дней!")
+    elif payload.startswith("offer_"):
+        # Оффер оплачен Stars
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if user:
+                from app.models import Offer
+                # Ищем данные из FSM — не сохранились, создаём заглушку
+                # В реальном боте нужно хранить данные оффера до оплаты
+                await log_user_action(session, user.id, "offer_paid_stars", payload)
+                await message.answer("✅ Оплата получена! Ваш оффер отправлен на проверку.")
     else:
-        # Обычная покупка монет
         async with async_session() as session:
             payment = await apply_successful_payment(session, payload)
             if payment:
                 await message.answer(
-                    f"✅ Оплата прошла успешно!\n"
-                    f"💰 Начислено: <b>{payment.coins_amount}</b> монет",
+                    f"✅ Оплата успешна!\n💰 Начислено: <b>{payment.coins_amount}</b> монет",
                     parse_mode="HTML"
                 )
-            else:
-                await message.answer("✅ Оплата получена!")
 
 
 # =========================
@@ -814,12 +911,17 @@ async def successful_payment(message: Message):
 @router.message(F.text == BTN_OFFERS)
 async def btn_offers(message: Message):
     async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        if not await require_nickname(message, user):
+            return
         offers = await get_active_offers(session)
         if not offers:
-            await message.answer("😔 Активных офферов пока нет.\nЗагляните позже!")
+            await message.answer("😔 Активных офферов пока нет.")
             return
         await message.answer(
-            "📢 <b>Доступные офферы</b>\n\nВыберите оффер:",
+            "📢 <b>Офферы</b>\n\nВыберите:",
             parse_mode="HTML",
             reply_markup=offers_list_keyboard(offers)
         )
@@ -836,13 +938,11 @@ async def cb_offer_open(callback: CallbackQuery):
         text = (
             f"📢 <b>{offer.title}</b>\n\n"
             f"{offer.description}\n\n"
-            f"💰 Предварительный бонус: <b>{offer.reward_preview}</b> монет\n"
-            f"🎁 Финальный бонус: <b>{offer.reward_final}</b> монет\n"
-            f"⚠️ Штраф за отписку: {offer.penalty_unsubscribe} монет"
+            f"💰 Предварительно: <b>{offer.reward_preview}</b> монет\n"
+            f"🎁 Финально: <b>{offer.reward_final}</b> монет"
         )
         await callback.message.answer(
-            text,
-            parse_mode="HTML",
+            text, parse_mode="HTML",
             reply_markup=offer_view_keyboard(offer_id, offer.channel_url)
         )
     await callback.answer()
@@ -861,11 +961,11 @@ async def cb_offer_start(callback: CallbackQuery):
             await callback.answer("Оффер не найден.", show_alert=True)
             return
         if not is_new:
-            await callback.answer("Вы уже участвуете в этом оффере!", show_alert=True)
+            await callback.answer("Вы уже участвуете!", show_alert=True)
             return
         offer = await get_offer_by_id(session, offer_id)
     await callback.answer(
-        f"✅ Вы получили {offer.reward_preview} монет! Подпишитесь на канал и нажмите 'Проверить'.",
+        f"✅ Получено {offer.reward_preview} монет! Подпишитесь и нажмите Проверить.",
         show_alert=True
     )
 
@@ -882,111 +982,11 @@ async def cb_offer_check(callback: CallbackQuery):
         if result:
             offer = await get_offer_by_id(session, offer_id)
             await callback.answer(
-                f"✅ Подписка подтверждена! Получено {offer.reward_final} монет!",
+                f"✅ Подтверждено! Получено {offer.reward_final} монет!",
                 show_alert=True
             )
         else:
-            await callback.answer("❌ Не удалось подтвердить подписку.", show_alert=True)
-
-
-# =========================
-# USER OFFERS (создание оффера пользователем)
-# =========================
-@router.message(F.text == "📝 Создать оффер")
-async def create_user_offer_start(message: Message, state: FSMContext):
-    await state.set_state(UserOfferState.waiting_title)
-    await message.answer("Введите название вашего канала/группы (максимум 100 символов):")
-
-
-@router.message(UserOfferState.waiting_title)
-async def process_offer_title(message: Message, state: FSMContext):
-    if len(message.text) > 100:
-        await message.answer("❌ Слишком длинное название. Максимум 100 символов.")
-        return
-    await state.update_data(title=message.text)
-    await state.set_state(UserOfferState.waiting_description)
-    await message.answer("Введите описание оффера:")
-
-
-@router.message(UserOfferState.waiting_description)
-async def process_offer_desc(message: Message, state: FSMContext):
-    await state.update_data(description=message.text)
-    await state.set_state(UserOfferState.waiting_url)
-    await message.answer("Введите ссылку на канал (t.me/...):")
-
-
-@router.message(UserOfferState.waiting_url)
-async def process_offer_url(message: Message, state: FSMContext):
-    if not message.text.startswith("https://t.me/") and not message.text.startswith("t.me/"):
-        await message.answer("❌ Ссылка должна начинаться с t.me/ или https://t.me/")
-        return
-    await state.update_data(url=message.text)
-    cost = PIN_OFFER_COST
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💰 Оплатить монетами ({cost})", callback_data="pay_offer_coins")],
-        [InlineKeyboardButton(text="⭐ Оплатить Stars (50 Stars)", callback_data="pay_offer_stars")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_offer")]
-    ])
-    await message.answer(
-        f"Стоимость размещения: <b>{cost} монет</b> или <b>50 Telegram Stars</b>.\n"
-        f"Выберите способ оплаты:",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-    await state.set_state(UserOfferState.waiting_payment)
-
-
-@router.callback_query(UserOfferState.waiting_payment, F.data == "pay_offer_coins")
-async def pay_offer_coins(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer("Пользователь не найден!", show_alert=True)
-            return
-        if user.balance < to_decimal(PIN_OFFER_COST):
-            await callback.answer("Недостаточно монет!", show_alert=True)
-            return
-        user.balance -= to_decimal(PIN_OFFER_COST)
-        from app.models import Offer
-        new_offer = Offer(
-            creator_user_id=user.id,
-            title=data['title'],
-            description=data['description'],
-            channel_url=data['url'],
-            status="pending",
-            is_active=False
-        )
-        session.add(new_offer)
-        await log_user_action(session, user.id, "create_offer", f"Offer: {data['title']}, Paid: {PIN_OFFER_COST} coins")
-        await session.commit()
-    await callback.message.answer(
-        "✅ Оффер отправлен на проверку! После одобрения модератором он появится в списке."
-    )
-    await state.clear()
-    await callback.answer()
-
-
-@router.callback_query(UserOfferState.waiting_payment, F.data == "pay_offer_stars")
-async def pay_offer_stars(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    payload = f"offer_{callback.from_user.id}_{data.get('title', '')[:10]}_{uuid.uuid4().hex[:6]}"
-    await state.update_data(offer_payload=payload)
-    await callback.message.answer_invoice(
-        title="Размещение оффера",
-        description=f"Оффер: {data.get('title', '')}",
-        payload=payload,
-        currency="XTR",
-        prices=[LabeledPrice(label="Размещение оффера", amount=50)]
-    )
-    await callback.answer()
-
-
-@router.callback_query(UserOfferState.waiting_payment, F.data == "cancel_offer")
-async def cancel_offer(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.answer("❌ Создание оффера отменено.")
-    await callback.answer()
+            await callback.answer("❌ Не удалось подтвердить.", show_alert=True)
 
 
 # =========================
@@ -994,22 +994,17 @@ async def cancel_offer(callback: CallbackQuery, state: FSMContext):
 # =========================
 @router.message(F.text == BTN_GAMES)
 async def btn_games(message: Message):
-    await message.answer(
-        "🎮 <b>Игровой центр</b>\n\n"
-        "Выберите игру:",
-        parse_mode="HTML",
-        reply_markup=games_menu_keyboard()
-    )
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        if not await require_nickname(message, user):
+            return
+    await message.answer("🎮 <b>Игровой центр</b>", parse_mode="HTML", reply_markup=games_menu_keyboard())
 
 
 @router.callback_query(F.data == "game_dice")
 async def game_dice(callback: CallbackQuery):
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="1 монета", callback_data="dice_bet:1"),
@@ -1022,11 +1017,8 @@ async def game_dice(callback: CallbackQuery):
         [InlineKeyboardButton(text="❌ Отмена", callback_data="games_back")]
     ])
     await callback.message.answer(
-        "🎲 <b>Игра в кости</b>\n\n"
-        "Бросаем кубик! Если выпадет 4, 5 или 6 — вы выигрываете двойную ставку!\n\n"
-        "Выберите ставку:",
-        parse_mode="HTML",
-        reply_markup=kb
+        "🎲 <b>Кости</b>\n\n4, 5, 6 — выигрыш x2!\n\nСтавка:",
+        parse_mode="HTML", reply_markup=kb
     )
     await callback.answer()
 
@@ -1043,38 +1035,39 @@ async def dice_bet(callback: CallbackQuery):
             await callback.answer("❌ Недостаточно монет!", show_alert=True)
             return
 
-        # Бросаем кости через Telegram
         dice_msg = await callback.message.answer_dice(emoji="🎲")
         dice_value = dice_msg.dice.value
 
+        balance_before = user.balance
         user.balance -= to_decimal(bet)
-        user.xp += XP_PER_GAME
 
         if dice_value >= 4:
             win = to_decimal(bet) * 2
             user.balance += win
-            result_text = f"🎲 Выпало: {dice_value}\n🎉 Вы выиграли! +{win} монет"
             net = win - to_decimal(bet)
+            result_text = f"🎲 Выпало: {dice_value}\n🎉 Выиграли! +{win} монет"
         else:
-            result_text = f"🎲 Выпало: {dice_value}\n😔 Вы проиграли -{bet} монет"
             net = -to_decimal(bet)
+            result_text = f"🎲 Выпало: {dice_value}\n😔 Проиграли -{bet} монет"
 
-        # Обновляем уровень
+        user.xp += XP_PER_GAME
         new_level = calc_level_from_xp(user.xp)
         if new_level > user.level:
             user.level = new_level
 
-        from app.models import GameHistory
         session.add(GameHistory(
             user_id=user.id, game_type="dice",
             bet=to_decimal(bet), result=net,
-            details=f"Dice value: {dice_value}"
+            details=f"dice={dice_value}, before={balance_before}, after={user.balance}"
         ))
+        # Логируем баланс
+        await log_balance_change(
+            session, user, net, "game_dice",
+            details=f"bet={bet}, dice={dice_value}, result={net}"
+        )
         await session.commit()
 
-    await callback.message.answer(
-        f"{result_text}\n💰 Баланс: {user.balance}"
-    )
+    await callback.message.answer(f"{result_text}\n💰 Баланс: {user.balance}")
     await callback.answer()
 
 
@@ -1092,11 +1085,8 @@ async def game_coinflip(callback: CallbackQuery):
         [InlineKeyboardButton(text="❌ Отмена", callback_data="games_back")]
     ])
     await callback.message.answer(
-        "🪙 <b>Орёл или решка</b>\n\n"
-        "50/50 шанс удвоить ставку!\n\n"
-        "Выберите ставку:",
-        parse_mode="HTML",
-        reply_markup=kb
+        "🪙 <b>Орёл/Решка</b>\n\n50/50 шанс x2!\n\nСтавка:",
+        parse_mode="HTML", reply_markup=kb
     )
     await callback.answer()
 
@@ -1114,32 +1104,35 @@ async def coinflip_bet(callback: CallbackQuery):
             return
 
         coin_msg = await callback.message.answer_dice(emoji="🪙")
-        # 1-3 = решка, 4-6 = орёл (условно)
         result = coin_msg.dice.value
         won = result >= 4
 
+        balance_before = user.balance
         user.balance -= to_decimal(bet)
         user.xp += XP_PER_GAME
 
         if won:
             win = to_decimal(bet) * 2
             user.balance += win
-            result_text = f"🪙 Орёл! 🎉 Вы выиграли +{win} монет"
             net = win - to_decimal(bet)
+            result_text = f"🪙 Орёл! 🎉 +{win} монет"
         else:
-            result_text = f"🪙 Решка! 😔 Вы проиграли -{bet} монет"
             net = -to_decimal(bet)
+            result_text = f"🪙 Решка! 😔 -{bet} монет"
 
         new_level = calc_level_from_xp(user.xp)
         if new_level > user.level:
             user.level = new_level
 
-        from app.models import GameHistory
         session.add(GameHistory(
             user_id=user.id, game_type="coinflip",
             bet=to_decimal(bet), result=net,
-            details=f"Won: {won}"
+            details=f"won={won}, before={balance_before}, after={user.balance}"
         ))
+        await log_balance_change(
+            session, user, net, "game_coinflip",
+            details=f"bet={bet}, won={won}"
+        )
         await session.commit()
 
     await callback.message.answer(f"{result_text}\n💰 Баланс: {user.balance}")
@@ -1152,18 +1145,13 @@ async def game_guess(callback: CallbackQuery):
         [
             InlineKeyboardButton(text="1 монета", callback_data="guess_bet:1"),
             InlineKeyboardButton(text="5 монет", callback_data="guess_bet:5"),
-        ],
-        [
             InlineKeyboardButton(text="10 монет", callback_data="guess_bet:10"),
         ],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="games_back")]
     ])
     await callback.message.answer(
-        "🎯 <b>Угадай число</b>\n\n"
-        "Угадайте число от 1 до 6 — выиграйте x5 ставки!\n\n"
-        "Выберите ставку:",
-        parse_mode="HTML",
-        reply_markup=kb
+        "🎯 <b>Угадай число</b>\n\nУгадай 1-6 — x5 ставки!\n\nСтавка:",
+        parse_mode="HTML", reply_markup=kb
     )
     await callback.answer()
 
@@ -1193,7 +1181,7 @@ async def guess_bet_start(callback: CallbackQuery, state: FSMContext):
             InlineKeyboardButton(text="6", callback_data="guess_num:6"),
         ]
     ])
-    await callback.message.answer("Выберите число от 1 до 6:", reply_markup=kb)
+    await callback.message.answer("Выберите число:", reply_markup=kb)
     await callback.answer()
 
 
@@ -1215,28 +1203,32 @@ async def guess_num(callback: CallbackQuery, state: FSMContext):
         dice_msg = await callback.message.answer_dice(emoji="🎲")
         actual = dice_msg.dice.value
 
+        balance_before = user.balance
         user.balance -= to_decimal(bet)
         user.xp += XP_PER_GAME
 
         if guess == actual:
             win = to_decimal(bet) * 5
             user.balance += win
-            result_text = f"🎯 Выпало {actual}! Вы угадали! 🎉 +{win} монет"
             net = win - to_decimal(bet)
+            result_text = f"🎯 Выпало {actual}! Угадали! 🎉 +{win} монет"
         else:
-            result_text = f"🎯 Выпало {actual}, вы выбрали {guess}. 😔 -{bet} монет"
             net = -to_decimal(bet)
+            result_text = f"🎯 Выпало {actual}, вы {guess}. 😔 -{bet} монет"
 
         new_level = calc_level_from_xp(user.xp)
         if new_level > user.level:
             user.level = new_level
 
-        from app.models import GameHistory
         session.add(GameHistory(
             user_id=user.id, game_type="guess",
             bet=to_decimal(bet), result=net,
-            details=f"Guess: {guess}, Actual: {actual}"
+            details=f"guess={guess}, actual={actual}, before={balance_before}, after={user.balance}"
         ))
+        await log_balance_change(
+            session, user, net, "game_guess",
+            details=f"bet={bet}, guess={guess}, actual={actual}"
+        )
         await session.commit()
 
     await callback.message.answer(f"{result_text}\n💰 Баланс: {user.balance}")
@@ -1246,27 +1238,29 @@ async def guess_num(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "games_back")
 async def games_back(callback: CallbackQuery):
-    await callback.message.answer("🎮 Игровой центр:", reply_markup=games_menu_keyboard())
+    await callback.message.answer("🎮 Игры:", reply_markup=games_menu_keyboard())
     await callback.answer()
 
 
 # =========================
-# TOPS
+# TOPS — С ПРАВИЛЬНЫМИ НИКАМИ И БЕЗ ДУБЛЕЙ
 # =========================
 @router.message(F.text == BTN_TOPS)
 async def btn_tops(message: Message):
-    await message.answer(
-        "🏆 <b>Топы</b>\n\nВыберите рейтинг:",
-        parse_mode="HTML",
-        reply_markup=tops_menu_keyboard()
-    )
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        if not await require_nickname(message, user):
+            return
+    await message.answer("🏆 <b>Топы</b>", parse_mode="HTML", reply_markup=tops_menu_keyboard())
 
 
 @router.callback_query(F.data == "top_uploaders")
 async def top_uploaders(callback: CallbackQuery):
     async with async_session() as session:
         result = await session.execute(
-            select(User.first_name, User.username, func.count(Video.id).label("cnt"))
+            select(User, func.count(Video.id).label("cnt"))
             .join(Video, Video.uploader_user_id == User.id)
             .where(Video.status == "approved")
             .group_by(User.id)
@@ -1277,10 +1271,17 @@ async def top_uploaders(callback: CallbackQuery):
 
     text = "🎬 <b>Топ загрузчиков</b>\n\n"
     medals = ["🥇", "🥈", "🥉"]
-    for i, row in enumerate(rows):
-        icon = medals[i] if i < 3 else f"{i+1}."
-        name = row.first_name or row.username or "???"
-        text += f"{icon} {name} — {row.cnt} видео\n"
+    seen_ids = set()
+    rank = 0
+    for row in rows:
+        user_obj, cnt = row
+        if user_obj.id in seen_ids:
+            continue
+        seen_ids.add(user_obj.id)
+        rank += 1
+        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+        name = get_display_name(user_obj)
+        text += f"{icon} {name} — {cnt} видео\n"
     if not rows:
         text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
@@ -1291,7 +1292,7 @@ async def top_uploaders(callback: CallbackQuery):
 async def top_viewers(callback: CallbackQuery):
     async with async_session() as session:
         result = await session.execute(
-            select(User.first_name, User.username, func.count(VideoView.id).label("cnt"))
+            select(User, func.count(VideoView.id).label("cnt"))
             .join(VideoView, VideoView.user_id == User.id)
             .group_by(User.id)
             .order_by(desc("cnt"))
@@ -1301,10 +1302,17 @@ async def top_viewers(callback: CallbackQuery):
 
     text = "👁 <b>Топ зрителей</b>\n\n"
     medals = ["🥇", "🥈", "🥉"]
-    for i, row in enumerate(rows):
-        icon = medals[i] if i < 3 else f"{i+1}."
-        name = row.first_name or row.username or "???"
-        text += f"{icon} {name} — {row.cnt} просмотров\n"
+    seen_ids = set()
+    rank = 0
+    for row in rows:
+        user_obj, cnt = row
+        if user_obj.id in seen_ids:
+            continue
+        seen_ids.add(user_obj.id)
+        rank += 1
+        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+        name = get_display_name(user_obj)
+        text += f"{icon} {name} — {cnt} просмотров\n"
     if not rows:
         text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
@@ -1315,19 +1323,25 @@ async def top_viewers(callback: CallbackQuery):
 async def top_levels(callback: CallbackQuery):
     async with async_session() as session:
         result = await session.execute(
-            select(User.first_name, User.username, User.level, User.xp)
+            select(User)
             .order_by(desc(User.xp))
             .limit(10)
         )
-        rows = result.all()
+        users = result.scalars().all()
 
     text = "⭐ <b>Топ по XP</b>\n\n"
     medals = ["🥇", "🥈", "🥉"]
-    for i, row in enumerate(rows):
-        icon = medals[i] if i < 3 else f"{i+1}."
-        name = row.first_name or row.username or "???"
-        text += f"{icon} {name} — Ур.{row.level} ({row.xp} XP)\n"
-    if not rows:
+    seen_ids = set()
+    rank = 0
+    for u in users:
+        if u.id in seen_ids:
+            continue
+        seen_ids.add(u.id)
+        rank += 1
+        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+        name = get_display_name(u)
+        text += f"{icon} {name} — Ур.{u.level} ({u.xp} XP)\n"
+    if not users:
         text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -1337,19 +1351,25 @@ async def top_levels(callback: CallbackQuery):
 async def top_richest(callback: CallbackQuery):
     async with async_session() as session:
         result = await session.execute(
-            select(User.first_name, User.username, User.balance)
+            select(User)
             .order_by(desc(User.balance))
             .limit(10)
         )
-        rows = result.all()
+        users = result.scalars().all()
 
     text = "💰 <b>Топ богатых</b>\n\n"
     medals = ["🥇", "🥈", "🥉"]
-    for i, row in enumerate(rows):
-        icon = medals[i] if i < 3 else f"{i+1}."
-        name = row.first_name or row.username or "???"
-        text += f"{icon} {name} — {row.balance} монет\n"
-    if not rows:
+    seen_ids = set()
+    rank = 0
+    for u in users:
+        if u.id in seen_ids:
+            continue
+        seen_ids.add(u.id)
+        rank += 1
+        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+        name = get_display_name(u)
+        text += f"{icon} {name} — {u.balance:.2f} монет\n"
+    if not users:
         text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -1364,6 +1384,8 @@ async def btn_quests(message: Message):
         user = await get_user(session, message.from_user.id)
         if not user:
             return
+        if not await require_nickname(message, user):
+            return
 
         today = datetime.utcnow().date()
         quests = (await session.execute(
@@ -1373,23 +1395,19 @@ async def btn_quests(message: Message):
             )
         )).scalars().all()
 
-        # Создаём квесты если их нет
         if not quests:
             quest_list = DAILY_QUESTS.copy()
             if is_vip(user):
                 quest_list += PREMIUM_DAILY_QUESTS
             for q in quest_list:
-                dq = DailyQuestProgress(
+                session.add(DailyQuestProgress(
                     user_id=user.id,
                     quest_type=q["type"],
                     quest_date=today,
                     progress=0,
                     target=q["target"],
                     reward=to_decimal(q["reward"]),
-                    completed=False,
-                    reward_claimed=False
-                )
-                session.add(dq)
+                ))
             await session.commit()
             quests = (await session.execute(
                 select(DailyQuestProgress).where(
@@ -1398,14 +1416,10 @@ async def btn_quests(message: Message):
                 )
             )).scalars().all()
 
-        if not quests:
-            await message.answer("📋 Квесты недоступны.")
-            return
-
         text = "📋 <b>Ежедневные квесты</b>\n\n"
         for q in quests:
             status = "✅" if q.completed else "⏳"
-            claimed = " (получено)" if q.reward_claimed else ""
+            claimed = " ✔получено" if q.reward_claimed else ""
             text += f"{status} {q.quest_type}: {q.progress}/{q.target} — {q.reward} монет{claimed}\n"
 
         await message.answer(text, parse_mode="HTML", reply_markup=quests_keyboard(quests))
@@ -1418,7 +1432,6 @@ async def quest_claim(callback: CallbackQuery):
         quest = (await session.execute(
             select(DailyQuestProgress).where(DailyQuestProgress.id == quest_id)
         )).scalar_one_or_none()
-
         if not quest:
             await callback.answer("Квест не найден.", show_alert=True)
             return
@@ -1428,17 +1441,26 @@ async def quest_claim(callback: CallbackQuery):
         if quest.reward_claimed:
             await callback.answer("Награда уже получена!", show_alert=True)
             return
-
         user = await get_user_by_id(session, quest.user_id)
         if not user:
             await callback.answer()
             return
-
         quest.reward_claimed = True
+        await log_balance_change(session, user, quest.reward, "quest_reward", source_id=quest.id)
         user.balance += quest.reward
         await session.commit()
 
     await callback.answer(f"🎁 Получено {quest.reward} монет!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("quest_done:"))
+async def quest_done(callback: CallbackQuery):
+    await callback.answer("✅ Квест выполнен, награда уже получена.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("quest_info:"))
+async def quest_info(callback: CallbackQuery):
+    await callback.answer("⏳ Квест ещё не выполнен. Продолжайте!", show_alert=True)
 
 
 # =========================

@@ -1,6 +1,5 @@
 from datetime import datetime
 from decimal import Decimal
-
 from sqlalchemy import (
     BigInteger,
     String,
@@ -26,6 +25,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -33,6 +33,7 @@ class User(Base):
     status: Mapped[str] = mapped_column(String(50), default="active")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     agreed_to_rules: Mapped[bool] = mapped_column(Boolean, default=False)
+    nickname_set: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_code: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
     referred_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     referral_earnings: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
@@ -53,6 +54,7 @@ class User(Base):
     game_sessions: Mapped[list["GameSession"]] = relationship(back_populates="user")
     action_logs: Mapped[list["UserActionLog"]] = relationship(back_populates="user")
     user_offers: Mapped[list["Offer"]] = relationship(back_populates="creator")
+    balance_logs: Mapped[list["BalanceLog"]] = relationship(back_populates="user")
 
 
 class UserActionLog(Base):
@@ -65,6 +67,24 @@ class UserActionLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="action_logs")
+
+
+class BalanceLog(Base):
+    """Подробный лог каждого изменения баланса — для расследований."""
+    __tablename__ = "balance_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    balance_before: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)  # watch, upload, game_dice, admin, referral, etc.
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # video_id, game_id и т.д.
+    admin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # если выдано админом
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    user: Mapped["User"] = relationship(back_populates="balance_logs")
 
 
 class Video(Base):
@@ -90,7 +110,6 @@ class Video(Base):
 
 class VideoView(Base):
     __tablename__ = "video_views"
-
     __table_args__ = (
         UniqueConstraint("user_id", "video_id", name="uq_user_video_view"),
     )
@@ -106,7 +125,6 @@ class VideoView(Base):
 
 class VideoRating(Base):
     __tablename__ = "video_ratings"
-
     __table_args__ = (
         UniqueConstraint("user_id", "video_id", name="uq_user_video_rating"),
     )
@@ -136,7 +154,6 @@ class Comment(Base):
 
 class ContentReaction(Base):
     __tablename__ = "content_reactions"
-
     __table_args__ = (
         UniqueConstraint("user_id", "video_id", name="uq_user_video_reaction"),
     )
@@ -185,7 +202,6 @@ class Offer(Base):
 
 class OfferParticipation(Base):
     __tablename__ = "offer_participations"
-
     __table_args__ = (
         UniqueConstraint("user_id", "offer_id", name="uq_user_offer"),
     )
@@ -203,12 +219,12 @@ class GameHistory(Base):
     __tablename__ = "game_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     game_type: Mapped[str] = mapped_column(String(50), nullable=False)
     bet: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     result: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     user: Mapped["User"] = relationship(back_populates="game_history")
 
