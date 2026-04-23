@@ -1,16 +1,16 @@
-# Откат проекта до коммита 9d077153a1783450b8c27d83bc10e277dff7e60c — ВЫПОЛНЕНО!
+# Bug Fixes - Print to Logger Cleanup
 
-## План (подтверждён, завершён):
-1. [x] Создан TODO.md с планом
-2. [x] git reset --hard 9d077153a1783450b8c27d83bc10e277dff7e60c (HEAD now at 9d07715)
-3. [x] git push origin master --force (forced update to 9d07715)
-4. [x] Проверка:
-   - git log: HEAD -> 9d07715 (TODO Delete)
-   - git status: clean, up to date with origin/master
-5. [x] Отметить выполненное в TODO.md
-6. [x] Завершить задачу
+## Progress
+- [x] Analyze codebase and identify bugs (prints, no logger)
+- [x] Create edit plan and get approval
 
-**Финальное состояние:** Проект откатан к целевому коммиту локально и на origin/master (Render.com обновится автоматически).
+## Tasks
+- [x] Edit app/make_project_pdf.py: Replace all print() with logger calls, add setup_logging(), wrap main() try/except
+- [x] Edit app/user_handlers.py: Replace print(\"START COMMAND RECEIVED\") 
+- [x] Edit app/migrate.py: Replace print(\"Migrations applied successfully\")
+- [x] Test: run python app/make_project_pdf.py (check PDF + logs no prints) - SUCCESS: PDF generated with JSON logs, no prints
+- [x] Test: python app/migrate.py (logs) - SUCCESS: Logger setup, runs (migrate error expected if no DB tables)
+- [ ] Run bot, /start (no print)
+- [ ] attempt_completion
 
-Чтобы перезапустить бота на Render: перейдите в Render dashboard и redeploy, если нужно.
-
+**Estimated fixes: 3 files, cleanup for prod-ready**

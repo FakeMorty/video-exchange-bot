@@ -1,6 +1,11 @@
 import asyncio
+import sys
+sys.path.insert(0, '..')
+from app.logger import setup_logging, get_logger, log_info
 from sqlalchemy import text
 from app.db import engine
+
+setup_logging()
 
 MIGRATIONS = [
     """
@@ -68,12 +73,14 @@ MIGRATIONS = [
 ]
 
 
+logger = get_logger(__name__)
+
 async def main():
     async with engine.begin() as conn:
         for sql in MIGRATIONS:
             await conn.execute(text(sql))
     await engine.dispose()
-    print("Migrations applied successfully")
+    log_info(logger, "Migrations applied successfully")
 
 
 if __name__ == "__main__":

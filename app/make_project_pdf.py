@@ -1,10 +1,16 @@
 import os
+import logging
 from pathlib import Path
 from datetime import datetime
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from app.logger import setup_logging, get_logger, log_info, log_warning, log_exception
+from pathlib import Path
 
 
 PROJECT_ROOT = Path(".")
@@ -227,22 +233,28 @@ def render_pdf(blocks, output_path: str):
 
 
 def main():
-    blocks, files = build_blocks(PROJECT_ROOT)
-    result = render_pdf(blocks, OUTPUT_FILE)
+    setup_logging()
+    logger = get_logger(__name__)
+    
+    try:
+        blocks, files = build_blocks(PROJECT_ROOT)
+        result = render_pdf(blocks, OUTPUT_FILE)
 
-    print("=" * 60)
-    print(f"PDF created: {OUTPUT_FILE}")
-    print(f"Files included: {len(files)}")
-    print(f"Pages: {result['pages']}")
-    print(f"Size: {result['size_mb']:.2f} MB")
-    print(f"Config used: {result['config']}")
-    print("=" * 60)
+        logger.info("=" * 60)
+        logger.info(f"PDF created: {OUTPUT_FILE}")
+        logger.info(f"Files included: {len(files)}")
+        logger.info(f"Pages: {result['pages']}")
+        logger.info(f"Size: {result['size_mb']:.2f} MB")
+        logger.info(f"Config used: {result['config']}")
+        logger.info("=" * 60)
 
-    if result["pages"] > MAX_PAGES:
-        print(f"WARNING: PDF exceeds page limit ({result['pages']} > {MAX_PAGES})")
+        if result["pages"] > MAX_PAGES:
+            logger.warning(f"PDF exceeds page limit ({result['pages']} > {MAX_PAGES})")
 
-    if result["size_mb"] > MAX_SIZE_MB:
-        print(f"WARNING: PDF exceeds size limit ({result['size_mb']:.2f} MB > {MAX_SIZE_MB} MB)")
+        if result["size_mb"] > MAX_SIZE_MB:
+            logger.warning(f"PDF exceeds size limit ({result['size_mb']:.2f} MB > {MAX_SIZE_MB} MB)")
+    except Exception:
+        log_exception(logger, "Error during PDF generation")
 
 
 if __name__ == "__main__":
