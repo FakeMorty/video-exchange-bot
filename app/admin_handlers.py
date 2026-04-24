@@ -2028,10 +2028,11 @@ async def reject_rental_cb(callback: CallbackQuery):
             if renter and rental.cost_paid > 0:
                 from app.services import log_balance_change
                 await log_balance_change(
-                    session, renter, rental.cost_paid,
-                    "rental_refund", source_id=rental_id,
-                    details="Возврат за отклонённую аренду"
-                )
+    session, renter, rental.cost_paid,
+    "rental_refund", source_id=rental_id,
+    details="Возврат за отклонённую аренду"
+)
+# ручное увеличение убрано
                 renter.balance += rental.cost_paid
             await session.commit()
 
