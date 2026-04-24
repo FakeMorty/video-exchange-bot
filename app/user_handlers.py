@@ -2461,6 +2461,17 @@ async def _send_lottery_menu(message_or_callback_message: Message) -> None:
     async with async_session() as session:
         round_obj = await ensure_current_lottery_round(session)
         state_data = get_lottery_state_dict(round_obj)
+    base = (WEBHOOK_BASE or "").rstrip("/")
+    live_url = f"{base}/lottery/live" if base else ""
+    # UX: show both UTC and MSK (UTC+3) without timezone guessing
+    try:
+        start_utc = round_obj.draw_starts_at.strftime("%H:%M")
+        end_utc = round_obj.draw_ends_at.strftime("%H:%M")
+        start_msk = (round_obj.draw_starts_at + timedelta(hours=3)).strftime("%H:%M")
+        end_msk = (round_obj.draw_ends_at + timedelta(hours=3)).strftime("%H:%M")
+        draw_line = f"Розыгрыш: <b>воскресенье</b> {start_utc}–{end_utc} UTC ( {start_msk}–{end_msk} МСК )"
+    except Exception:
+        draw_line = "Розыгрыш: <b>воскресенье</b> (в live-режиме)"
     await message_or_callback_message.answer(
         "🎰 <b>Лотерея-лото</b>\n\n"
         f"Раунд: <b>{state_data.get('week_key')}</b>\n"
@@ -2468,7 +2479,9 @@ async def _send_lottery_menu(message_or_callback_message: Message) -> None:
         f"Цена билета: <b>{state_data.get('ticket_price')}</b> монет\n"
         f"Призовой фонд: <b>{state_data.get('prize_pool')}</b> монет\n"
         f"Уже выпало: {', '.join(map(str, state_data.get('drawn_numbers', []))) or '—'}\n\n"
-        "Розыгрыш проходит в конце недели в live-режиме.",
+        + (f"🔴 Live-ссылка: <a href=\"{live_url}\">{live_url}</a>\n" if live_url else "")
+        + f"{draw_line}\n\n"
+        "Нажмите «🔴 Открыть Live», чтобы посмотреть колесо/розыгрыш.",
         parse_mode="HTML",
         reply_markup=_lottery_menu_kb(),
     )
@@ -2490,19 +2503,7 @@ async def lottery_menu(callback: CallbackQuery):
     if not ENABLE_LOTTERY:
         await callback.answer("Лотерея отключена.", show_alert=True)
         return
-    async with async_session() as session:
-        round_obj = await ensure_current_lottery_round(session)
-        state_data = get_lottery_state_dict(round_obj)
-    await callback.message.answer(
-        "🎰 <b>Лотерея-лото</b>\n\n"
-        f"Раунд: <b>{state_data.get('week_key')}</b>\n"
-        f"Статус: <b>{state_data.get('status')}</b>\n"
-        f"Цена билета: <b>{state_data.get('ticket_price')}</b> монет\n"
-        f"Призовой фонд: <b>{state_data.get('prize_pool')}</b> монет\n"
-        f"Уже выпало: {', '.join(map(str, state_data.get('drawn_numbers', []))) or '—'}",
-        parse_mode="HTML",
-        reply_markup=_lottery_menu_kb(),
-    )
+    await _send_lottery_menu(callback.message)
     await callback.answer()
 
 
