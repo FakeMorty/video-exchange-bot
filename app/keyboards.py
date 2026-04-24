@@ -347,3 +347,39 @@ def reaction_menu_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="💯", callback_data=f"react:{video_id}:💯"),
         ]
     ])
+def forced_offer_keyboard(offer_id: int, channel_url: str, seconds: int = 5) -> InlineKeyboardMarkup:
+    """Клавиатура для принудительного показа оффера (заблокирована на N секунд)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"📢 Подписаться на канал",
+            url=channel_url
+        )],
+        [InlineKeyboardButton(
+            text=f"⏳ Подождите {seconds} сек...",
+            callback_data="forced_offer_wait"
+        )],
+    ])
+
+
+def forced_offer_done_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура после истечения 5 секунд — можно продолжить."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="▶️ Продолжить просмотр",
+            callback_data=f"forced_offer_continue:{offer_id}"
+        )],
+    ])
+
+
+def low_balance_offer_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка-намёк при низком балансе."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="💰 Заработать монеты через офферы",
+            callback_data="offers_participation"
+        )],
+        [InlineKeyboardButton(
+            text="❌ Закрыть",
+            callback_data="dismiss_low_balance_hint"
+        )],
+    ])

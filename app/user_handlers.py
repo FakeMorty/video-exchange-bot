@@ -24,7 +24,7 @@ from app.config import (
     COMMENTS_PER_10_MIN,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_DEFAULT_RENT_COST_PER_DAY, OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
-    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
+    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, SMART_AD_FORCED_WATCH_SECONDS,
 )
 from app.db import async_session
 from app.models import (
@@ -461,19 +461,76 @@ async def watch_video_content(callback: CallbackQuery):
             cost = round(cost * to_decimal(0.5), 2)
 
         if user.balance < cost:
-            await callback.message.answer(
-                f"❌ Недостаточно монет!\n"
-                f"Нужно: {cost}, у вас: {user.balance}\n"
-                f"Пополните баланс в разделе 💳 Купить"
-            )
+            # --- Умная реклама: намёк при низком балансе ---
+            if await should_show_low_balance_hint(session, user):
+                await mark_low_balance_hint_shown(session, user.id)
+                await callback.message.answer(
+                    f"💸 <b>Монеток маловато!</b>\n\n"
+                    f"На счету: <b>{user.balance}</b> монет, "
+                    f"а нужно <b>{cost}</b> для просмотра.\n\n"
+                    f"💡 <i>Знаешь ли ты, что можно бесплатно заработать монеты, "
+                    f"подписываясь на каналы в разделе «Офферы»? "
+                    f"Это быстро и просто!</i>",
+                    parse_mode="HTML",
+                    reply_markup=low_balance_offer_keyboard()
+                )
+            else:
+                await callback.message.answer(
+                    f"❌ Недостаточно монет!\n"
+                    f"Нужно: {cost}, у вас: {user.balance}\n"
+                    f"Пополните баланс или заработайте через офферы"
+                )
             await callback.answer()
             return
 
+        # --- Умная реклама: 35% шанс принудительного оффера ---
+        if should_inject_ad_in_video() and await can_show_offer_to_user(session, user.id):
+            offer = await get_random_active_offer(session)
+            if offer:
+                await mark_offer_shown(session, user.id, offer.id, forced=True)
+                await callback.message.answer(
+                    f"📢 <b>Небольшая реклама</b>\n\n"
+                    f"<b>{offer.title}</b>\n"
+                    f"{offer.description}\n\n"
+                    f"⏳ Посмотрите {SMART_AD_FORCED_WATCH_SECONDS} секунд, "
+                    f"затем сможете продолжить просмотр видео.\n"
+                    f"💰 За подписку получите <b>{offer.reward_preview} монет</b>!",
+                    parse_mode="HTML",
+                    reply_markup=forced_offer_keyboard(
+                        offer.id,
+                        offer.channel_url,
+                        SMART_AD_FORCED_WATCH_SECONDS
+                    )
+                )
+                # Запускаем таймер — через N секунд отправим кнопку "Продолжить"
+                import asyncio
+                async def send_continue_button(chat_id: int, o_id: int, bot):
+                    await asyncio.sleep(SMART_AD_FORCED_WATCH_SECONDS)
+                    try:
+                        await bot.send_message(
+                            chat_id,
+                            f"✅ Спасибо за просмотр! Теперь можно продолжить.",
+                            reply_markup=forced_offer_done_keyboard(o_id)
+                        )
+                    except Exception:
+                        pass
+
+                asyncio.create_task(
+                    send_continue_button(
+                        callback.message.chat.id,
+                        offer.id,
+                        callback.bot
+                    )
+                )
+                await callback.answer()
+                return  # Не показываем видео до истечения 5 секунд
+
+        # --- Обычный показ видео ---
         video = await get_random_video_for_user(session, user.id)
         if not video:
             await callback.message.answer(
                 "😔 Нет доступных видео.\n"
-                "Загрузите своё видео или попробуйте позже!"
+                "Загрузите своё видео, чтобы другие смотрели!"
             )
             await callback.answer()
             return
@@ -488,16 +545,18 @@ async def watch_video_content(callback: CallbackQuery):
         await _level_up_check(session, user, callback)
         await _update_quest_progress(session, user.id, "watch", 1)
 
-    await callback.message.answer_video(
-        video.telegram_file_id,
-        caption=(
-            f"🎬 Видео #{video.id}\n"
-            f"💰 Списано: {cost} монет"
-        ),
-        reply_markup=video_rating_keyboard(video.id)
-    )
-    await callback.answer()
+        # --- Умная реклама: обновляем время показа если показывали ---
+        # (только обычный флоу, forced уже обработан выше)
 
+        await callback.message.answer_video(
+            video.telegram_file_id,
+            caption=(
+                f"🎬 Видео #{video.id}\n"
+                f"💰 Списано: {cost} монет"
+            ),
+            reply_markup=video_rating_keyboard(video.id)
+        )
+        await callback.answer()
 
 @router.callback_query(F.data == "watch_next")
 async def watch_next(callback: CallbackQuery):
@@ -1914,3 +1973,58 @@ async def _update_quest_progress(
         await session.commit()
     except Exception:
         await session.rollback()
+        # =========================
+# УМНАЯ РЕКЛАМА — FORCED OFFER
+# =========================
+
+@router.callback_query(F.data == "forced_offer_wait")
+async def forced_offer_wait(callback: CallbackQuery):
+    """Пользователь нажал до истечения 5 секунд."""
+    await callback.answer(
+        f"⏳ Подождите ещё немного...",
+        show_alert=False
+    )
+
+
+@router.callback_query(F.data.startswith("forced_offer_continue:"))
+async def forced_offer_continue(callback: CallbackQuery):
+    """После 5 секунд — продолжаем показ видео."""
+    offer_id = int(callback.data.split(":")[1])
+
+    # Предлагаем подписаться (необязательно)
+    async with async_session() as session:
+        offer = await get_offer_by_id(session, offer_id)
+        if offer:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Я подписался — получить монеты",
+                    callback_data=f"offer_start:{offer_id}"
+                )],
+                [InlineKeyboardButton(
+                    text="▶️ Смотреть видео",
+                    callback_data="watch_video_content"
+                )],
+            ])
+            await callback.message.answer(
+                f"💡 Кстати, за подписку на <b>{offer.title}</b> "
+                f"можно получить <b>{offer.reward_preview} монет</b>!\n"
+                f"Хотите заработать?",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        else:
+            # Просто продолжаем просмотр
+            await watch_video_content(callback)
+            return
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "dismiss_low_balance_hint")
+async def dismiss_low_balance_hint(callback: CallbackQuery):
+    """Пользователь закрыл подсказку о низком балансе."""
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer("Хорошо! Офферы всегда доступны в меню 💰")

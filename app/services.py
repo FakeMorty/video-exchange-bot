@@ -1027,3 +1027,101 @@ async def get_user_dossier(session: AsyncSession, user_id: int) -> dict | None:
         "admin_given": admin_given,
         "logs": logs,
     }
+# =========================
+# УМНАЯ РЕКЛАМА
+# =========================
+from app.config import (
+    SMART_AD_MIN_INTERVAL_MINUTES,
+    SMART_AD_LOW_BALANCE_THRESHOLD,
+    SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES,
+    SMART_AD_VIDEO_CHANCE,
+    SMART_AD_FORCED_WATCH_SECONDS,
+)
+
+
+async def get_or_create_user_ad_state(
+    session: AsyncSession,
+    user_id: int,
+) -> "UserAdState":
+    from app.models import UserAdState
+    state = (await session.execute(
+        select(UserAdState).where(UserAdState.user_id == user_id)
+    )).scalar_one_or_none()
+    if not state:
+        state = UserAdState(user_id=user_id)
+        session.add(state)
+        await session.flush()
+    return state
+
+
+async def can_show_offer_to_user(
+    session: AsyncSession,
+    user_id: int,
+) -> bool:
+    """Проверяет, прошло ли достаточно времени с последнего показа оффера."""
+    from app.models import UserAdState
+    state = await get_or_create_user_ad_state(session, user_id)
+    if state.last_offer_shown_at is None:
+        return True
+    elapsed = (datetime.utcnow() - state.last_offer_shown_at).total_seconds() / 60
+    return elapsed >= SMART_AD_MIN_INTERVAL_MINUTES
+
+
+async def mark_offer_shown(
+    session: AsyncSession,
+    user_id: int,
+    offer_id: int | None = None,
+    forced: bool = False,
+) -> None:
+    """Обновляет время последнего показа оффера."""
+    state = await get_or_create_user_ad_state(session, user_id)
+    state.last_offer_shown_at = datetime.utcnow()
+    state.updated_at = datetime.utcnow()
+    if forced and offer_id:
+        state.forced_offer_id = offer_id
+        state.forced_offer_shown_at = datetime.utcnow()
+    await session.commit()
+
+
+async def should_show_low_balance_hint(
+    session: AsyncSession,
+    user: "User",
+) -> bool:
+    """
+    Возвращает True если:
+    - баланс ниже порога
+    - прошло достаточно времени с последней подсказки
+    """
+    if float(user.balance) > SMART_AD_LOW_BALANCE_THRESHOLD:
+        return False
+    state = await get_or_create_user_ad_state(session, user.id)
+    if state.last_low_balance_hint_at is None:
+        return True
+    elapsed = (datetime.utcnow() - state.last_low_balance_hint_at).total_seconds() / 60
+    return elapsed >= SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES
+
+
+async def mark_low_balance_hint_shown(
+    session: AsyncSession,
+    user_id: int,
+) -> None:
+    state = await get_or_create_user_ad_state(session, user_id)
+    state.last_low_balance_hint_at = datetime.utcnow()
+    state.updated_at = datetime.utcnow()
+    await session.commit()
+
+
+async def get_random_active_offer(session: AsyncSession) -> "Offer | None":
+    """Возвращает случайный активный оффер для принудительного показа."""
+    return (await session.execute(
+        select(Offer).where(
+            Offer.is_active == True,
+            Offer.status == "approved",
+        ).order_by(func.random()).limit(1)
+    )).scalar_one_or_none()
+
+
+def should_inject_ad_in_video() -> bool:
+    """35% шанс показа рекламы во время просмотра видео."""
+    import random
+    return random.random() < SMART_AD_VIDEO_CHANCE

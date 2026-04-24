@@ -282,3 +282,17 @@ class GameSession(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="game_sessions")
+    
+    
+    class UserAdState(Base):
+    __tablename__ = "user_ad_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, unique=True, index=True
+    )
+    last_offer_shown_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_low_balance_hint_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    forced_offer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    forced_offer_shown_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

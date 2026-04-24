@@ -67,6 +67,22 @@ MIGRATIONS = [
     ALTER TABLE offers
     ADD COLUMN IF NOT EXISTS max_simultaneous_rentals INTEGER DEFAULT 1;
     """,
+        # --- user_ad_states ---
+    """
+    CREATE TABLE IF NOT EXISTS user_ad_states (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+        last_offer_shown_at TIMESTAMP NULL,
+        last_low_balance_hint_at TIMESTAMP NULL,
+        forced_offer_id INTEGER NULL,
+        forced_offer_shown_at TIMESTAMP NULL,
+        updated_at TIMESTAMP DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_user_ad_states_user_id
+    ON user_ad_states (user_id);
+    """,
     # --- users ---
     """
     ALTER TABLE users
