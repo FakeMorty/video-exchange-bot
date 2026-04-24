@@ -1,5 +1,7 @@
 import asyncio
 from datetime import datetime
+import os
+import subprocess
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -13,6 +15,7 @@ from app.config import (
     ENABLE_SUBSCRIPTION_AUDIT,
     ENABLE_LOTTERY,
     LOTTERY_DRAW_SECRET,
+    ADMINS,
 )
 from app.db import engine, init_db, async_session
 from app.user_handlers import router as user_router
@@ -32,6 +35,66 @@ from app.services import (
 
 setup_logging()
 logger = get_logger(__name__)
+
+def _git_meta() -> tuple[str, str] | tuple[None, None]:
+    """
+    Returns (version_str, subject) best-effort.
+    version_str: commit count or short hash
+    subject: last commit subject
+    """
+    # Prefer Render env vars if present
+    render_commit = (os.getenv("RENDER_GIT_COMMIT") or "").strip()
+    if render_commit:
+        short_hash = render_commit[:7]
+        return short_hash, "deploy"
+
+    try:
+        # commit count
+        count = subprocess.check_output(
+            ["git", "rev-list", "--count", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            text=True,
+        ).strip()
+        subject = subprocess.check_output(
+            ["git", "log", "-1", "--pretty=%s"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            text=True,
+        ).strip()
+        return count, subject
+    except Exception:
+        try:
+            short_hash = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                text=True,
+            ).strip()
+            subject = subprocess.check_output(
+                ["git", "log", "-1", "--pretty=%s"],
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                text=True,
+            ).strip()
+            return short_hash, subject
+        except Exception:
+            return None, None
+
+
+async def _notify_admins_started(bot: Bot) -> None:
+    version, subject = _git_meta()
+    if not version:
+        return
+    subj = (subject or "").strip()
+    if len(subj) > 120:
+        subj = subj[:120] + "…"
+    text = f'✅ Бот работает на версии <b>{version}</b>\n<code>{subj}</code>'
+    for admin_id in ADMINS:
+        try:
+            await bot.send_message(admin_id, text, parse_mode="HTML")
+        except Exception:
+            pass
 
 
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
@@ -786,6 +849,12 @@ async def on_startup(app):
         await run_migrations()
     except Exception as e:
         log_info(logger, f"Migrations warning: {e}")
+    bot: Bot | None = app.get("bot")
+    if bot:
+        try:
+            await _notify_admins_started(bot)
+        except Exception as e:
+            log_info(logger, f"Admin notify warning: {e}")
     print("=" * 40)
     print("  BOT STARTED")
     print("=" * 40)
@@ -805,6 +874,7 @@ async def main():
     dp.include_router(admin_router)
 
     app = web.Application()
+    app["bot"] = bot
     app.on_startup.append(on_startup)
     app.router.add_get("/lottery/state", lottery_state_handler)
     app.router.add_post("/lottery/draw-next", lottery_draw_next_handler)
