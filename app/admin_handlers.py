@@ -13,10 +13,6 @@ from aiogram.types import (
 )
 from sqlalchemy import select, func, desc, text
 
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 
 from app.config import ADMINS, OFFER_DEFAULT_RENT_COST_PER_DAY, ENABLE_ADMIN_BROADCAST
 from app.db import async_session
@@ -75,14 +71,14 @@ class AdminOfferCreateState(StatesGroup):
     waiting_url = State()
     waiting_reward_preview = State()
     waiting_reward_final = State()
-
-
-class TrustedUploaderState(StatesGroup):
-    waiting_add = State()
     waiting_penalty_unsubscribe = State()
     waiting_rentable = State()
     waiting_rent_cost = State()
     waiting_max_rentals = State()
+
+
+class TrustedUploaderState(StatesGroup):
+    waiting_add = State()
 
 
 # =========================
@@ -519,6 +515,14 @@ def _find_cyrillic_font_path() -> str | None:
 
 
 def _text_to_pdf_bytes(title: str, text: str) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+    except Exception as e:
+        raise RuntimeError(f"reportlab_missing: {e}")
+
     buf = BytesIO()
     page_w, page_h = A4
     margin = 36
