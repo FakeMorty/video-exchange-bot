@@ -6,6 +6,13 @@
 - Run migrations: `venv\Scripts\python -m app.migrate`
 - Start bot: `venv\Scripts\python -m app.main`
 
+## Render deploy (recommended)
+
+- Build command:
+  - `python -m pip install --upgrade pip && python -m pip install -r requirements.txt`
+- Start command:
+  - `bash start_render.sh`
+
 ## Health Checks
 
 - In Telegram as admin: `/health`

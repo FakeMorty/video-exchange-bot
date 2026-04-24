@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
+import os
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -12,12 +13,18 @@ from aiogram.types import (
 )
 from sqlalchemy import select, func, desc, text
 
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
 from app.config import ADMINS, OFFER_DEFAULT_RENT_COST_PER_DAY, ENABLE_ADMIN_BROADCAST
 from app.db import async_session
 from app.models import (
     Base,
     User, Video, Offer, BalanceLog, GameHistory,
     UserActionLog, OfferRental, OfferParticipation
+    , TrustedUploader
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
@@ -68,6 +75,10 @@ class AdminOfferCreateState(StatesGroup):
     waiting_url = State()
     waiting_reward_preview = State()
     waiting_reward_final = State()
+
+
+class TrustedUploaderState(StatesGroup):
+    waiting_add = State()
     waiting_penalty_unsubscribe = State()
     waiting_rentable = State()
     waiting_rent_cost = State()
@@ -197,7 +208,32 @@ async def admin_db_menu(callback: CallbackQuery):
     if not is_super_admin(callback.from_user.id):
         await callback.answer()
         return
-    tables = sorted(Base.metadata.tables.keys())
+
+    table_labels: dict[str, str] = {
+        "users": "Пользователи",
+        "videos": "Контент (видео/фото)",
+        "video_views": "Просмотры",
+        "video_ratings": "Оценки",
+        "comments": "Комментарии",
+        "content_reactions": "Реакции",
+        "balance_logs": "Лог баланса",
+        "user_action_logs": "Лог действий",
+        "offers": "Офферы",
+        "offer_participations": "Участия в офферах",
+        "offer_rentals": "Аренда офферов",
+        "payments": "Платежи",
+        "feedback": "Обращения",
+        "games_history": "История игр",
+        "game_sessions": "Игровые сессии",
+        "daily_quest_progress": "Прогресс квестов",
+        "promocodes": "Промокоды",
+        "promocode_activations": "Активации промокодов",
+        "lottery_rounds": "Лотерея: раунды",
+        "lottery_tickets": "Лотерея: билеты",
+    }
+
+    all_tables = sorted(Base.metadata.tables.keys())
+    tables = [(t, table_labels.get(t, t)) for t in all_tables]
     await _safe_edit(
         callback,
         "🗄 <b>База данных</b>\n\nВыберите таблицу для просмотра:",
@@ -207,15 +243,40 @@ async def admin_db_menu(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("db_table:"))
-async def db_table(callback: CallbackQuery):
+def _format_db_value(v) -> str:
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return "Да" if v else "Нет"
+    if isinstance(v, datetime):
+        return v.strftime("%d.%m.%Y %H:%M")
+    if isinstance(v, Decimal):
+        return f"{v:.2f}"
+    s = str(v)
+    s = s.replace("\n", " ").strip()
+    if len(s) > 80:
+        s = s[:80] + "…"
+    return s
+
+
+@router.callback_query(F.data.startswith("db_open:"))
+async def db_open(callback: CallbackQuery):
     if not is_super_admin(callback.from_user.id):
         await callback.answer()
         return
-    table_name = callback.data.split(":", 1)[1]
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    table_name = parts[1]
+    try:
+        offset = max(0, int(parts[2]))
+    except Exception:
+        offset = 0
     if table_name not in Base.metadata.tables:
         await callback.answer("Таблица не найдена.", show_alert=True)
         return
+    page_size = 8
 
     async with async_session() as session:
         try:
@@ -223,7 +284,7 @@ async def db_table(callback: CallbackQuery):
                 text(f'SELECT COUNT(*) FROM "{table_name}"')
             )).scalar_one()
             rows = (await session.execute(
-                text(f'SELECT * FROM "{table_name}" LIMIT 10')
+                text(f'SELECT * FROM "{table_name}" ORDER BY 1 DESC LIMIT {page_size} OFFSET {offset}')
             )).mappings().all()
         except Exception as e:
             await callback.answer(f"Ошибка чтения таблицы: {e}", show_alert=True)
@@ -236,29 +297,40 @@ async def db_table(callback: CallbackQuery):
     else:
         lines = []
         for i, row in enumerate(rows, 1):
-            fields = []
+            lines.append(f"<b>{offset + i}.</b>")
             for key, value in row.items():
-                sval = "NULL" if value is None else str(value)
-                if len(sval) > 60:
-                    sval = sval[:60] + "…"
-                fields.append(f"{escape(str(key))}={escape(sval)}")
-            lines.append(f"{i}. " + "; ".join(fields))
-        body = "\n".join(lines)
+                lines.append(f"  <b>{escape(str(key))}</b>: {escape(_format_db_value(value))}")
+            lines.append("")
+        body = "\n".join(lines).rstrip()
 
     text_out = (
         f"🗄 <b>{escape(table_name)}</b>\n"
         f"Всего строк: <b>{total}</b>\n"
+        f"Страница: <b>{(offset // page_size) + 1}</b>\n"
         f"Показано: <b>{len(rows)}</b>\n\n"
         f"{body}"
     )
     if len(text_out) > 3900:
         text_out = text_out[:3900] + "\n..."
 
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"db_open:{table_name}:{max(0, offset - page_size)}"))
+    if offset + page_size < total:
+        nav.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"db_open:{table_name}:{offset + page_size}"))
+
+    kb_rows = []
+    if nav:
+        kb_rows.append(nav)
+    kb_rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"db_open:{table_name}:{offset}")])
+    kb_rows.append([InlineKeyboardButton(text="📋 К списку таблиц", callback_data="admin_db_menu")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
     await _safe_edit(
         callback,
         text_out,
         parse_mode="HTML",
-        reply_markup=admin_db_keyboard(list(Base.metadata.tables.keys()))
+        reply_markup=kb,
     )
     await callback.answer()
 
@@ -353,8 +425,8 @@ async def admin_investigation(callback: CallbackQuery):
             callback_data="admin_user_dossier"
         )],
         [InlineKeyboardButton(
-            text="📁 Экспорт для анализа",
-            callback_data="inv_export_ai"
+            text="📁 Экспорт (PDF / TXT)",
+            callback_data="inv_export_menu"
         )],
         [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
     ])
@@ -409,6 +481,98 @@ async def inv_suspicious_games(callback: CallbackQuery):
     ])
     await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data == "inv_export_menu")
+async def inv_export_menu(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 PDF", callback_data="inv_export_ai_pdf")],
+        [InlineKeyboardButton(text="📄 TXT", callback_data="inv_export_ai")],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_investigation")],
+    ])
+    await callback.message.answer(
+        "📁 <b>Экспорт для анализа</b>\n\nВыберите формат:",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+def _find_cyrillic_font_path() -> str | None:
+    candidates = [
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\calibri.ttf",
+        r"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        r"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        r"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for p in candidates:
+        try:
+            if os.path.exists(p):
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _text_to_pdf_bytes(title: str, text: str) -> bytes:
+    buf = BytesIO()
+    page_w, page_h = A4
+    margin = 36
+    y = page_h - margin
+    line_gap = 12
+
+    font_name = "Helvetica"
+    font_path = _find_cyrillic_font_path()
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont("BotFont", font_path))
+            font_name = "BotFont"
+        except Exception:
+            font_name = "Helvetica"
+
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setTitle(title)
+    c.setFont(font_name, 11)
+
+    def new_page():
+        nonlocal y
+        c.showPage()
+        c.setFont(font_name, 11)
+        y = page_h - margin
+
+    for line in title.splitlines():
+        if y < margin:
+            new_page()
+        c.drawString(margin, y, line)
+        y -= line_gap
+    y -= line_gap
+
+    c.setFont(font_name, 9)
+    max_chars = 120
+    for raw in (text or "").splitlines():
+        line = raw.rstrip("\n")
+        if not line:
+            if y < margin:
+                new_page()
+            y -= line_gap
+            continue
+        while len(line) > max_chars:
+            chunk, line = line[:max_chars], line[max_chars:]
+            if y < margin:
+                new_page()
+            c.drawString(margin, y, chunk)
+            y -= line_gap
+        if y < margin:
+            new_page()
+        c.drawString(margin, y, line)
+        y -= line_gap
+
+    c.save()
+    return buf.getvalue()
 
 
 @router.callback_query(F.data == "inv_rich_detail")
@@ -587,7 +751,120 @@ async def inv_export_ai(callback: CallbackQuery):
     buf.name = f"report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
     await callback.message.answer_document(
         buf,
-        caption="📁 Отчёт для анализа."
+        caption="📁 Экспорт готов (TXT)."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "inv_export_ai_pdf")
+async def inv_export_ai_pdf(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    # Build same report as TXT version
+    async with async_session() as session:
+        rich_users = (await session.execute(
+            select(User).order_by(desc(User.balance)).limit(10)
+        )).scalars().all()
+
+        sus_rows = (await session.execute(
+            select(
+                User,
+                func.sum(GameHistory.result).label("profit"),
+                func.count(GameHistory.id).label("games")
+            )
+            .join(GameHistory, GameHistory.user_id == User.id)
+            .group_by(User.id)
+            .having(func.sum(GameHistory.result) > 30)
+            .order_by(desc("profit"))
+            .limit(10)
+        )).all()
+
+        admin_rows = (await session.execute(
+            select(BalanceLog, User)
+            .join(User, User.id == BalanceLog.user_id)
+            .where(BalanceLog.source == "admin_balance")
+            .order_by(desc(BalanceLog.created_at))
+            .limit(20)
+        )).all()
+
+        try:
+            rental_rows = (await session.execute(
+                select(OfferRental, User)
+                .join(User, User.id == OfferRental.renter_user_id)
+                .order_by(desc(OfferRental.created_at))
+                .limit(20)
+            )).all()
+        except Exception:
+            rental_rows = []
+
+    report = "=== ОТЧЁТ ДЛЯ АНАЛИЗА ===\n"
+    report += f"Дата: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+
+    report += "--- ТОП 10 БОГАЧЕЙ ---\n"
+    for i, u in enumerate(rich_users, 1):
+        report += (
+            f"{i}. nick={get_display_name(u)} "
+            f"tg_id={u.telegram_id} "
+            f"balance={u.balance} "
+            f"level={u.level} "
+            f"created={u.created_at.strftime('%Y-%m-%d')}\n"
+        )
+
+    report += "\n--- ПОДОЗРИТЕЛЬНЫЕ ИГРОКИ ---\n"
+    for u, profit, games in sus_rows:
+        report += (
+            f"nick={get_display_name(u)} "
+            f"tg_id={u.telegram_id} "
+            f"game_profit={profit:.2f} "
+            f"games={games} "
+            f"balance={u.balance}\n"
+        )
+
+    report += "\n--- ВЫДАЧИ МОНЕТ АДМИНАМИ ---\n"
+    for log, u in admin_rows:
+        report += (
+            f"date={log.created_at.strftime('%Y-%m-%d %H:%M')} "
+            f"admin_id={log.admin_id} "
+            f"user={get_display_name(u)}(tg={u.telegram_id}) "
+            f"amount={log.amount} "
+            f"before={log.balance_before} "
+            f"after={log.balance_after}\n"
+        )
+
+    report += "\n--- ИСТОРИЯ АРЕНДЫ ---\n"
+    for r, u in rental_rows:
+        report += (
+            f"date={r.created_at.strftime('%Y-%m-%d')} "
+            f"user={get_display_name(u)} "
+            f"channel={r.renter_channel_title} "
+            f"offer_id={r.offer_id} "
+            f"days={r.rent_days} "
+            f"cost={r.cost_paid} "
+            f"status={r.status}\n"
+        )
+
+    report += "\n=== КОНЕЦ ОТЧЁТА ==="
+
+    try:
+        pdf_bytes = _text_to_pdf_bytes("Экспорт для анализа", report)
+    except Exception as e:
+        # Fallback to TXT if PDF generation fails in runtime
+        buf = BytesIO(report.encode("utf-8"))
+        buf.name = f"report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+        await callback.message.answer_document(
+            buf,
+            caption=f"⚠️ PDF не удалось собрать ({e}). Отправил TXT.",
+        )
+        await callback.answer()
+        return
+
+    buf = BytesIO(pdf_bytes)
+    buf.name = f"report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    await callback.message.answer_document(
+        buf,
+        caption="📁 Экспорт готов (PDF).",
     )
     await callback.answer()
 
@@ -797,6 +1074,228 @@ async def admin_approve_all(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=kb
     )
+
+
+@router.callback_query(F.data == "admin_trusted_uploaders")
+async def admin_trusted_uploaders(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        admin_user = await get_user(session, callback.from_user.id)
+        if not admin_user:
+            await callback.answer()
+            return
+        rows = (await session.execute(
+            select(TrustedUploader, User)
+            .join(User, User.id == TrustedUploader.trusted_user_id)
+            .where(TrustedUploader.admin_user_id == admin_user.id)
+            .order_by(desc(TrustedUploader.created_at))
+            .limit(50)
+        )).all()
+
+    text_out = "🤝 <b>Доверенные авторы</b>\n\n"
+    if not rows:
+        text_out += "Список пуст.\n\nДобавьте ники друзей/авторов, которым доверяете — их видео будет одобряться автоматически."
+    else:
+        for i, (_, u) in enumerate(rows, 1):
+            text_out += f"{i}. {get_display_name(u)} (<code>{u.telegram_id}</code>)\n"
+
+    kb_rows = [
+        [InlineKeyboardButton(text="➕ Добавить", callback_data="trusted_add")],
+    ]
+    if rows:
+        kb_rows.append([InlineKeyboardButton(text="➖ Удалить", callback_data="trusted_remove_menu")])
+    kb_rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    await _safe_edit(callback, text_out, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "trusted_add")
+async def trusted_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(TrustedUploaderState.waiting_add)
+    await callback.message.answer("Введите Telegram ID, @username или ник автора, которого добавить в доверенные:")
+    await callback.answer()
+
+
+@router.message(TrustedUploaderState.waiting_add)
+async def trusted_add_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    raw = (message.text or "").strip()
+    if not raw:
+        await message.answer("❌ Пусто. Введите Telegram ID, @username или ник.")
+        return
+
+    async with async_session() as session:
+        admin_user = await get_user(session, message.from_user.id)
+        if not admin_user:
+            await state.clear()
+            return
+
+        target = None
+        if raw.isdigit():
+            target = await get_user(session, int(raw))
+        elif raw.startswith("@"):
+            target = await get_user_by_username(session, raw)
+        else:
+            target = await get_user_by_display_name(session, raw)
+
+        if not target:
+            await message.answer("❌ Пользователь не найден в базе. Он должен хотя бы раз зайти в бота.")
+            await state.clear()
+            return
+
+        # нельзя добавить самого себя дважды — но можно, просто игнорируем
+        existing = (await session.execute(
+            select(TrustedUploader).where(
+                TrustedUploader.admin_user_id == admin_user.id,
+                TrustedUploader.trusted_user_id == target.id,
+            )
+        )).scalar_one_or_none()
+        if existing:
+            await message.answer("ℹ️ Уже в доверенных.")
+            await state.clear()
+            return
+
+        session.add(TrustedUploader(admin_user_id=admin_user.id, trusted_user_id=target.id))
+        await session.commit()
+
+    await message.answer(f"✅ Добавлено в доверенные: <b>{get_display_name(target)}</b>", parse_mode="HTML")
+    await state.clear()
+
+
+@router.callback_query(F.data == "trusted_remove_menu")
+async def trusted_remove_menu(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        admin_user = await get_user(session, callback.from_user.id)
+        if not admin_user:
+            await callback.answer()
+            return
+        rows = (await session.execute(
+            select(TrustedUploader, User)
+            .join(User, User.id == TrustedUploader.trusted_user_id)
+            .where(TrustedUploader.admin_user_id == admin_user.id)
+            .order_by(desc(TrustedUploader.created_at))
+            .limit(50)
+        )).all()
+
+    if not rows:
+        await callback.answer("Список пуст.", show_alert=True)
+        return
+
+    kb_rows = []
+    for tu, u in rows[:20]:
+        kb_rows.append([InlineKeyboardButton(
+            text=f"❌ {get_display_name(u)}",
+            callback_data=f"trusted_remove:{u.id}"
+        )])
+    kb_rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin_trusted_uploaders")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    await _safe_edit(callback, "Выберите, кого удалить из доверенных:", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("trusted_remove:"))
+async def trusted_remove(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    try:
+        trusted_user_id = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        admin_user = await get_user(session, callback.from_user.id)
+        if not admin_user:
+            await callback.answer()
+            return
+        await session.execute(
+            text(
+                "DELETE FROM trusted_uploaders WHERE admin_user_id = :a AND trusted_user_id = :t"
+            ),
+            {"a": admin_user.id, "t": trusted_user_id},
+        )
+        await session.commit()
+    await callback.answer("Удалено.", show_alert=False)
+    await admin_trusted_uploaders(callback)
+
+
+@router.callback_query(F.data == "admin_auto_moderation")
+async def admin_auto_moderation(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    await callback.answer("⏳ Авто-модерация...", show_alert=False)
+
+    approved = 0
+    considered = 0
+    # ограничитель, чтобы не зависнуть
+    for _ in range(200):
+        async with async_session() as session:
+            admin_user = await get_user(session, callback.from_user.id)
+            if not admin_user:
+                break
+
+            trusted_ids = set([admin_user.id])
+            trusted_rows = (await session.execute(
+                select(TrustedUploader.trusted_user_id).where(TrustedUploader.admin_user_id == admin_user.id)
+            )).scalars().all()
+            trusted_ids.update(trusted_rows)
+
+            video = (await session.execute(
+                select(Video)
+                .where(Video.status == "pending", Video.uploader_user_id.in_(trusted_ids))
+                .order_by(Video.created_at.asc())
+                .limit(1)
+            )).scalar_one_or_none()
+
+            if not video:
+                break
+
+            considered += 1
+            try:
+                res = await approve_video(session, video.id)
+                if res:
+                    approved += 1
+                    uploader = await get_user_by_id(session, video.uploader_user_id)
+                    if uploader:
+                        try:
+                            await callback.bot.send_message(
+                                uploader.telegram_id,
+                                f"✅ Ваше видео #{video.id} одобрено! Монеты начислены."
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                break
+
+    async with async_session() as session:
+        remaining = await count_pending_videos(session)
+
+    text_out = (
+        "⚡ <b>Авто-модерация завершена</b>\n\n"
+        f"✅ Одобрено автоматически: <b>{approved}</b>\n"
+        f"👁️ Просмотрено кандидатов: <b>{considered}</b>\n\n"
+        f"📝 Осталось в очереди: <b>{remaining}</b>\n"
+        "Совет: оставшиеся видео лучше модерировать вручную."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Модерация контента", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text="🤝 Доверенные авторы", callback_data="admin_trusted_uploaders")],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
+    ])
+    await callback.message.answer(text_out, parse_mode="HTML", reply_markup=kb)
 
 
 # =========================

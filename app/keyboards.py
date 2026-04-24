@@ -22,6 +22,7 @@ BTN_LEVEL      = "📊 Уровень"
 BTN_PROMO      = "🎟 Промокоды"
 BTN_FEEDBACK   = "💬 Жалобы и предложения"
 BTN_LOTTERY    = "🎰 Лотерея-лото"
+BTN_LOOTBOXES  = "🎁 Лутбоксы"
 
 
 # =========================
@@ -52,7 +53,8 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📈 Статистика бота", callback_data="admin_extended_stats")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_manage_users")],
         [InlineKeyboardButton(text="📝 Модерация контента", callback_data="admin_get_pending")],
-        [InlineKeyboardButton(text="✅ Одобрить все в очереди", callback_data="admin_approve_all")],
+        [InlineKeyboardButton(text="⚡ Авто-модерация (доверенные)", callback_data="admin_auto_moderation")],
+        [InlineKeyboardButton(text="🤝 Доверенные авторы", callback_data="admin_trusted_uploaders")],
         [InlineKeyboardButton(text="📢 Офферы и реклама", callback_data="admin_offers_menu")],
         [InlineKeyboardButton(text="💬 Обращения пользователей", callback_data="admin_feedback_menu")],
         [InlineKeyboardButton(text="🕵️ Расследование", callback_data="admin_investigation")],
@@ -211,6 +213,7 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🎲 Кости", callback_data="game_dice")],
         [InlineKeyboardButton(text="🪙 Орёл/Решка", callback_data="game_coinflip")],
         [InlineKeyboardButton(text="🎯 Угадай число", callback_data="game_guess")],
+        [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
 
@@ -304,9 +307,18 @@ def low_balance_offer_keyboard() -> InlineKeyboardMarkup:
 # =========================
 # АДМИНСКАЯ БД (только для super-admin)
 # =========================
-def admin_db_keyboard(tables: list[str]) -> InlineKeyboardMarkup:
+def admin_db_keyboard(tables) -> InlineKeyboardMarkup:
+    """
+    tables can be:
+      - list[str]
+      - list[tuple[str, str]] where (table_name, label)
+    """
     kb = []
     for t in tables:
-        kb.append([InlineKeyboardButton(text=f"📋 {t}", callback_data=f"db_table:{t}")])
+        if isinstance(t, (tuple, list)) and len(t) == 2:
+            table_name, label = t[0], t[1]
+        else:
+            table_name, label = t, str(t)
+        kb.append([InlineKeyboardButton(text=f"📋 {label}", callback_data=f"db_open:{table_name}:0")])
     kb.append([InlineKeyboardButton(text="🔙 Админ-центр", callback_data="admin_center")])
     return InlineKeyboardMarkup(inline_keyboard=kb)

@@ -60,6 +60,48 @@ class User(Base):
     created_promocodes: Mapped[List["Promocode"]] = relationship(back_populates="creator")
     activated_promocodes: Mapped[List["PromocodeActivation"]] = relationship(back_populates="user")
     lottery_tickets: Mapped[List["LotteryTicket"]] = relationship(back_populates="user")
+    lootbox_opens: Mapped[List["LootboxOpen"]] = relationship(back_populates="user")
+    trusted_uploaders: Mapped[List["TrustedUploader"]] = relationship(
+        back_populates="admin",
+        foreign_keys="TrustedUploader.admin_user_id",
+    )
+
+
+class LootboxOpen(Base):
+    __tablename__ = "lootbox_opens"
+    __table_args__ = (
+        UniqueConstraint("payment_payload", name="uq_lootbox_payment_payload"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    payment_payload: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pay_currency: Mapped[str] = mapped_column(String(10), nullable=False)  # "coins" | "stars"
+    price_coins: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    price_stars: Mapped[int] = mapped_column(Integer, default=0)
+    reward_coins: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    rarity: Mapped[str] = mapped_column(String(20), default="common")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    user: Mapped["User"] = relationship(back_populates="lootbox_opens")
+
+
+class TrustedUploader(Base):
+    """
+    Per-admin whitelist of uploaders whose content can be auto-moderated.
+    """
+    __tablename__ = "trusted_uploaders"
+    __table_args__ = (
+        UniqueConstraint("admin_user_id", "trusted_user_id", name="uq_admin_trusted_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    admin_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    trusted_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    admin: Mapped["User"] = relationship(foreign_keys=[admin_user_id], back_populates="trusted_uploaders")
+    trusted: Mapped["User"] = relationship(foreign_keys=[trusted_user_id])
 
 
 class UserActionLog(Base):

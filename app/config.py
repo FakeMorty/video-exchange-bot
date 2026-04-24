@@ -259,3 +259,12 @@ LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
 LOTTERY_DRAW_START_HOUR_UTC = _get_int("LOTTERY_DRAW_START_HOUR_UTC", 18)
 LOTTERY_DRAW_END_HOUR_UTC = _get_int("LOTTERY_DRAW_END_HOUR_UTC", 20)
 LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "change-me-secret")
+
+# ============================
+# ЛУТБОКСЫ
+# ============================
+ENABLE_LOOTBOXES = _get_bool("ENABLE_LOOTBOXES", True)
+# Цена лутбокса за монеты (домашнее преимущество: ожидание выигрыша чуть ниже цены)
+LOOTBOX_COIN_PRICE = _get_float("LOOTBOX_COIN_PRICE", 12.0)
+# Цена лутбокса за Stars
+LOOTBOX_STAR_PRICE = _get_int("LOOTBOX_STAR_PRICE", 7)

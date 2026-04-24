@@ -183,6 +183,47 @@ MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS ix_balance_logs_source
     ON balance_logs (source);
     """,
+    # --- lootbox_opens ---
+    """
+    CREATE TABLE IF NOT EXISTS lootbox_opens (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        payment_payload VARCHAR(255) NULL,
+        pay_currency VARCHAR(10) NOT NULL,
+        price_coins NUMERIC(10,2) DEFAULT 0,
+        price_stars INTEGER DEFAULT 0,
+        reward_coins NUMERIC(10,2) DEFAULT 0,
+        rarity VARCHAR(20) DEFAULT 'common',
+        created_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_lootbox_payment_payload UNIQUE (payment_payload)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_lootbox_opens_user_id
+    ON lootbox_opens (user_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_lootbox_opens_created_at
+    ON lootbox_opens (created_at);
+    """,
+    # --- trusted_uploaders ---
+    """
+    CREATE TABLE IF NOT EXISTS trusted_uploaders (
+        id SERIAL PRIMARY KEY,
+        admin_user_id INTEGER NOT NULL REFERENCES users(id),
+        trusted_user_id INTEGER NOT NULL REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_admin_trusted_user UNIQUE (admin_user_id, trusted_user_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_trusted_uploaders_admin_user_id
+    ON trusted_uploaders (admin_user_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_trusted_uploaders_trusted_user_id
+    ON trusted_uploaders (trusted_user_id);
+    """,
     # --- offer_rentals ---
     """
     CREATE TABLE IF NOT EXISTS offer_rentals (

@@ -12,6 +12,7 @@ from app.models import (
     UserActionLog, BalanceLog, UserAdState,
     Promocode, PromocodeActivation, Feedback,
     LotteryRound, LotteryTicket,
+    LootboxOpen,
 )
 from app.config import (
     STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
@@ -45,6 +46,7 @@ from app.config import (
     OFFER_DAILY_REWARD_CAP,
     LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL, LOTTERY_NUMBERS_PER_TICKET,
     LOTTERY_DRAW_START_HOUR_UTC, LOTTERY_DRAW_END_HOUR_UTC,
+    ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
     ADMINS,
 )
 
@@ -52,6 +54,110 @@ PHOTO_UPLOAD_REWARD = Decimal("0.1")
 OFFER_STEP_1_REWARD = Decimal("5")
 OFFER_PENALTY = Decimal("40")
 
+
+# ============================
+# ЛУТБОКСЫ
+# ============================
+def _roll_lootbox_reward_coins() -> tuple[Decimal, str]:
+    """
+    Домашнее преимущество: средний выигрыш чуть ниже цены,
+    но диапазон достаточный, чтобы не обижать игроков.
+    """
+    r = random.random()
+    # common: 70% -> 4..10
+    if r < 0.70:
+        return to_decimal(random.randint(4, 10)), "common"
+    # rare: 25% -> 11..20
+    if r < 0.95:
+        return to_decimal(random.randint(11, 20)), "rare"
+    # epic: 4.5% -> 21..35
+    if r < 0.995:
+        return to_decimal(random.randint(21, 35)), "epic"
+    # jackpot: 0.5% -> 50..120
+    return to_decimal(random.randint(50, 120)), "jackpot"
+
+
+async def open_lootbox_for_coins(session: AsyncSession, user_id: int) -> tuple[Decimal, str] | tuple[None, str]:
+    if not ENABLE_LOOTBOXES:
+        return None, "Лутбоксы временно отключены."
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return None, "Пользователь не найден."
+
+    price = to_decimal(LOOTBOX_COIN_PRICE)
+    if user.balance < price:
+        return None, "Недостаточно монет."
+
+    reward, rarity = _roll_lootbox_reward_coins()
+
+    await log_balance_change(session, user, -price, "lootbox_buy", details="currency=coins")
+    user.balance -= price
+    await log_balance_change(
+        session,
+        user,
+        reward,
+        "lootbox_reward",
+        details=f"rarity={rarity}",
+    )
+    user.balance += reward
+    session.add(LootboxOpen(
+        user_id=user.id,
+        payment_payload=None,
+        pay_currency="coins",
+        price_coins=price,
+        price_stars=0,
+        reward_coins=reward,
+        rarity=rarity,
+    ))
+    await session.commit()
+    return reward, rarity
+
+
+async def open_lootbox_for_stars(
+    session: AsyncSession,
+    telegram_user_id: int,
+    payment_payload: str,
+) -> tuple[Decimal, str] | tuple[None, str]:
+    """
+    Called after successful Telegram Stars payment.
+    Idempotent by payload.
+    """
+    if not ENABLE_LOOTBOXES:
+        return None, "Лутбоксы временно отключены."
+
+    user = await get_user(session, telegram_user_id)
+    if not user:
+        return None, "Пользователь не найден."
+
+    existing = (await session.execute(
+        select(LootboxOpen).where(LootboxOpen.payment_payload == payment_payload)
+    )).scalar_one_or_none()
+    if existing:
+        return None, "Этот платёж уже обработан."
+
+    reward, rarity = _roll_lootbox_reward_coins()
+    stars_price = int(LOOTBOX_STAR_PRICE)
+
+    await log_balance_change(
+        session,
+        user,
+        reward,
+        "lootbox_reward",
+        details=f"currency=stars;rarity={rarity};stars={stars_price}",
+    )
+    user.balance += reward
+    session.add(LootboxOpen(
+        user_id=user.id,
+        payment_payload=payment_payload,
+        pay_currency="stars",
+        price_coins=Decimal("0"),
+        price_stars=stars_price,
+        reward_coins=reward,
+        rarity=rarity,
+    ))
+    await log_user_action(session, user.id, "lootbox_open", f"payload={payment_payload}")
+    await session.commit()
+    return reward, rarity
 
 def to_decimal(val) -> Decimal:
     return Decimal(str(val))

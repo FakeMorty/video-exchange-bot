@@ -46,6 +46,7 @@ from app.config import (
     GUESS_JACKPOT_CHANCE, GUESS_JACKPOT_MULTIPLIER,
     ENABLE_LOTTERY,
     WEBHOOK_BASE,
+    ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
 )
 from app.db import async_session
 from app.models import (
@@ -78,7 +79,9 @@ from app.services import (
     can_show_offer_to_user, mark_offer_shown,
     get_random_active_offer, should_inject_ad_in_video,
     process_referral_reward,
+    open_lootbox_for_coins, open_lootbox_for_stars,
 )
+from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
     rules_keyboard, main_menu,
     video_rating_keyboard, photo_actions_keyboard,
@@ -93,6 +96,7 @@ from app.keyboards import (
     BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY,
+    BTN_LOOTBOXES,
 )
 from app.logger import get_logger
 
@@ -1207,6 +1211,23 @@ async def successful_payment(message: Message):
                         )
         else:
             await message.answer("Ошибка платежа.")
+    elif payload.startswith("lootbox_"):
+        async with async_session() as session:
+            reward, rarity_or_err = await open_lootbox_for_stars(
+                session,
+                telegram_user_id=message.from_user.id,
+                payment_payload=payload,
+            )
+        if reward is None:
+            await message.answer(f"⚠️ {rarity_or_err}")
+        else:
+            rarity = rarity_or_err
+            icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
+            await message.answer(
+                f"{icon} <b>Лутбокс открыт!</b>\n\n"
+                f"Выигрыш: <b>+{reward:.2f}</b> монет",
+                parse_mode="HTML",
+            )
     else:
         async with async_session() as session:
             payment = await apply_successful_payment(session, payload)
@@ -1218,6 +1239,83 @@ async def successful_payment(message: Message):
             )
         else:
             await message.answer("✅ Оплата получена!")
+
+
+def _lootbox_kb() -> InlineKeyboardMarkup:
+    coin_price = to_decimal(LOOTBOX_COIN_PRICE)
+    star_price = int(LOOTBOX_STAR_PRICE)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"🪙 Купить за {coin_price:.0f} монет",
+            callback_data="lootbox_buy:coins"
+        )],
+        [InlineKeyboardButton(
+            text=f"⭐ Купить за {star_price} Stars",
+            callback_data="lootbox_buy:stars"
+        )],
+    ])
+
+
+@router.callback_query(F.data == "lootbox_menu")
+async def lootbox_menu(callback: CallbackQuery):
+    if not ENABLE_LOOTBOXES:
+        await callback.message.answer("⛔ Лутбоксы временно отключены.")
+        await callback.answer()
+        return
+    coin_price = to_decimal(LOOTBOX_COIN_PRICE)
+    star_price = int(LOOTBOX_STAR_PRICE)
+    await callback.message.answer(
+        "🎁 <b>Лутбоксы</b>\n\n"
+        f"Цена: <b>{coin_price:.0f}</b> монет или <b>{star_price}</b> Stars.\n"
+        "Внутри — случайный выигрыш монет.\n"
+        "Редкие крупные выигрыши возможны, но не гарантированы.",
+        parse_mode="HTML",
+        reply_markup=_lootbox_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("lootbox_buy:"))
+async def lootbox_buy(callback: CallbackQuery):
+    if not ENABLE_LOOTBOXES:
+        await callback.answer("Лутбоксы отключены.", show_alert=True)
+        return
+    kind = callback.data.split(":", 1)[1]
+    if kind == "coins":
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            if not user:
+                await callback.answer()
+                return
+            reward, rarity_or_err = await open_lootbox_for_coins(session, user.id)
+        if reward is None:
+            await callback.answer(rarity_or_err, show_alert=True)
+            return
+        rarity = rarity_or_err
+        icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
+        await callback.message.answer(
+            f"{icon} <b>Лутбокс открыт!</b>\n\n"
+            f"Выигрыш: <b>+{reward:.2f}</b> монет",
+            parse_mode="HTML",
+            reply_markup=_lootbox_kb(),
+        )
+        await callback.answer()
+        return
+
+    if kind == "stars":
+        star_price = int(LOOTBOX_STAR_PRICE)
+        payload = f"lootbox_{callback.from_user.id}_{uuid.uuid4().hex[:8]}"
+        await callback.message.answer_invoice(
+            title="Лутбокс",
+            description=f"Открытие лутбокса за {star_price} Stars",
+            payload=payload,
+            currency="XTR",
+            prices=[LabeledPrice(label="Лутбокс", amount=star_price)],
+        )
+        await callback.answer()
+        return
+
+    await callback.answer()
 
 
 # =========================
@@ -2339,12 +2437,21 @@ async def dismiss_low_balance_hint(callback: CallbackQuery):
 # ЛОТЕРЕЯ-ЛОТО
 # =========================
 def _lottery_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    base = (WEBHOOK_BASE or "").rstrip("/")
+    live_url = f"{base}/lottery/live" if base else ""
+
+    buttons = []
+    if live_url:
+        buttons.append([InlineKeyboardButton(text="🔴 Открыть Live", url=live_url)])
+    else:
+        buttons.append([InlineKeyboardButton(text="🔴 Как открыть Live", callback_data="lottery_live_info")])
+
+    buttons.extend([
         [InlineKeyboardButton(text="🎫 Купить билет", callback_data="lottery_buy")],
         [InlineKeyboardButton(text="📋 Мои билеты", callback_data="lottery_my_tickets")],
-        [InlineKeyboardButton(text="🔴 Как открыть Live", callback_data="lottery_live_info")],
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="lottery_menu")],
     ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 async def _send_lottery_menu(message_or_callback_message: Message) -> None:
@@ -2761,3 +2868,14 @@ async def cmd_health(message: Message):
         "• db: connected\n"
         "• bot: running",
     )
+
+
+@router.message(Command("selfcheck"))
+async def cmd_selfcheck(message: Message):
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        admin_flag = is_admin_or_super(message.from_user.id, user)
+        if not admin_flag:
+            return
+        items = await run_selfcheck(session)
+    await message.answer(format_selfcheck_report(items))
