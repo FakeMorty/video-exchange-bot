@@ -1,11 +1,13 @@
 import re
 import uuid
 import asyncio
+import random
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from aiogram import Router, F
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -38,6 +40,11 @@ from app.config import (
     DYNAMIC_STAR_DISCOUNT_HOURS,
     DYNAMIC_STAR_DISCOUNT_MULTIPLIER,
     FIRST_PURCHASE_DAILY_BONUS,
+    ENABLE_PROMOCODES,
+    OFFER_ACTION_COOLDOWN_SECONDS,
+    PROMO_ACTIVATE_COOLDOWN_SECONDS,
+    GUESS_JACKPOT_CHANCE, GUESS_JACKPOT_MULTIPLIER,
+    ENABLE_LOTTERY,
 )
 from app.db import async_session
 from app.models import (
@@ -57,9 +64,13 @@ from app.services import (
     log_user_action, to_decimal,
     set_display_name, get_display_name, log_balance_change,
     can_play_free_game, pay_for_game_session, increment_game_played,
+    get_or_create_game_session,
     check_daily_photo_limit,
     create_promocode, activate_promocode,
     calculate_promocode_star_cost,
+    create_feedback,
+    ensure_current_lottery_round, buy_lottery_ticket,
+    get_latest_lottery_round, get_user_lottery_tickets, get_lottery_state_dict,
     is_admin_or_super,
     should_show_low_balance_hint, mark_low_balance_hint_shown,
     can_show_offer_to_user, mark_offer_shown,
@@ -74,15 +85,59 @@ from app.keyboards import (
     offer_rent_keyboard, rent_days_keyboard,
     games_menu_keyboard, tops_menu_keyboard,
     quests_keyboard, reaction_menu_keyboard,
+    low_balance_offer_keyboard, forced_offer_keyboard,
+    forced_offer_done_keyboard,
     BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
-    BTN_PROMO,
+    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY,
 )
 from app.logger import get_logger
 
 logger = get_logger(__name__)
 router = Router()
+_offer_action_last_ts: dict[tuple[int, str], datetime] = {}
+_promo_activate_last_ts: dict[int, datetime] = {}
+
+
+def _chat_id_from_offer_url(channel_url: str) -> str | None:
+    if not channel_url:
+        return None
+    url = channel_url.strip()
+    if "t.me/" in url:
+        url = url.split("t.me/", 1)[1]
+    if url.startswith("@"):
+        return url
+    url = url.strip("/").split("?")[0]
+    if not url:
+        return None
+    return f"@{url}"
+
+
+async def _check_user_offer_subscription(callback: CallbackQuery, offer: Offer) -> bool:
+    chat_id = _chat_id_from_offer_url(offer.channel_url)
+    if not chat_id:
+        return False
+    try:
+        member = await callback.bot.get_chat_member(chat_id=chat_id, user_id=callback.from_user.id)
+        return member.status in {"member", "administrator", "creator"}
+    except TelegramBadRequest:
+        return False
+    except Exception:
+        return False
+
+
+def _cooldown_ok(
+    cache: dict,
+    key,
+    cooldown_seconds: int,
+) -> bool:
+    now = datetime.utcnow()
+    last = cache.get(key)
+    if last and (now - last).total_seconds() < cooldown_seconds:
+        return False
+    cache[key] = now
+    return True
 
 
 # =========================
@@ -110,6 +165,14 @@ class PromoCreateState(StatesGroup):
     waiting_amount = State()
     waiting_uses = State()
     waiting_hours = State()
+
+
+class PromoActivateState(StatesGroup):
+    waiting_code = State()
+
+
+class FeedbackState(StatesGroup):
+    waiting_text = State()
 
 
 # =========================
@@ -257,9 +320,9 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             if not user.agreed_to_rules:
                 await message.answer(
                     "📋 <b>Правила бота</b>\n\n"
-                    "1. Вы все знаете для чего этот бот. Вот и не кидайте хрень всякую (Я про шок-контент).\n"
-                    "2. Не багоюзте, и будет вам кайф.\n"
-                    "3. Наслаждайтесь, самым уникальным и проработанным проектом в данной тематике.\n\n"
+                    "1. Нельзя публиковать запрещённый или шок-контент.\n"
+                    "2. Нельзя использовать баги и накручивать награды.\n"
+                    "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
                     "Нажмите кнопку ниже, чтобы принять правила.",
                     parse_mode="HTML",
                     reply_markup=rules_keyboard()
@@ -292,9 +355,9 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         if not user.agreed_to_rules:
             await message.answer(
                 "📋 <b>Правила бота</b>\n\n"
-                "1. Вы все знаете для чего этот бот. Вот и не кидайте хрень всякую (Я про шок-контент).\n"
-                "2. Не багоюзте, и будет вам кайф.\n"
-                "3. Наслаждайтесь, самым уникальным и проработанным проектом в данной тематике.\n\n"
+                "1. Нельзя публиковать запрещённый или шок-контент.\n"
+                "2. Нельзя использовать баги и накручивать награды.\n"
+                "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
                 "Нажмите кнопку ниже, чтобы принять правила.",
                 parse_mode="HTML",
                 reply_markup=rules_keyboard()
@@ -347,7 +410,7 @@ async def accept_rules(callback: CallbackQuery):
     ])
     await callback.message.answer(
         "✅ Правила приняты!\n\n"
-        "⚠️ Теперь установите ник. Первая установка бесплатна!\n"
+        "Теперь установите ник. Первая установка бесплатна.\n"
         f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
         f"• Только буквы (рус/лат), цифры, _ и -",
         parse_mode="HTML",
@@ -401,15 +464,15 @@ async def show_profile(message: Message):
         text = (
             f"👤 <b>Профиль</b>\n\n"
             f"🏷 Ник: <b>{get_display_name(user)}</b>\n"
-            f"🆔 TG ID: <code>{user.telegram_id}</code>\n"
+            f"🆔 Telegram ID: <code>{user.telegram_id}</code>\n"
             f"💰 Баланс: <b>{user.balance}</b> монет\n"
             f"🏆 Уровень: <b>{user.level}</b>\n"
             f"⭐ XP: {xp_current}/{xp_needed} [{bar}]\n"
-            f"👥 Рефералов: {refs}\n"
-            f"💎 Реф. заработок: {user.referral_earnings} монет\n"
+            f"👥 Приглашено друзей: {refs}\n"
+            f"💎 Заработано с рефералов: {user.referral_earnings} монет\n"
             f"📊 Статус: {user.status}"
             f"{vip_str}\n\n"
-            f"Смена ника: {NICKNAME_CHANGE_COST} монет"
+            f"Смена ника стоит {NICKNAME_CHANGE_COST} монет"
         )
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
         await log_user_action(session, user.id, "view_profile")
@@ -1209,6 +1272,7 @@ async def cb_offer_open(callback: CallbackQuery):
         f"{offer.description}\n\n"
         f"💰 Предварительно: <b>{offer.reward_preview}</b> монет\n"
         f"🎁 После подтверждения: <b>{offer.reward_final}</b> монет\n"
+        f"⚠️ Штраф за отписку: <b>{offer.penalty_unsubscribe}</b> монет\n"
         f"👥 Участников: {participants}"
     )
 
@@ -1245,6 +1309,13 @@ async def cb_offer_open(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("offer_start:"))
 async def cb_offer_start(callback: CallbackQuery):
+    if not _cooldown_ok(
+        _offer_action_last_ts,
+        (callback.from_user.id, "offer_start"),
+        OFFER_ACTION_COOLDOWN_SECONDS,
+    ):
+        await callback.answer("⏳ Слишком часто. Попробуйте через пару секунд.", show_alert=True)
+        return
     offer_id = int(callback.data.split(":")[1])
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
@@ -1269,15 +1340,31 @@ async def cb_offer_start(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("offer_check:"))
 async def cb_offer_check(callback: CallbackQuery):
+    if not _cooldown_ok(
+        _offer_action_last_ts,
+        (callback.from_user.id, "offer_check"),
+        OFFER_ACTION_COOLDOWN_SECONDS,
+    ):
+        await callback.answer("⏳ Слишком часто. Попробуйте через пару секунд.", show_alert=True)
+        return
     offer_id = int(callback.data.split(":")[1])
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         if not user:
             await callback.answer()
             return
+        offer = await get_offer_by_id(session, offer_id)
+        if not offer:
+            await callback.answer("Оффер не найден.", show_alert=True)
+            return
+        if not await _check_user_offer_subscription(callback, offer):
+            await callback.answer(
+                "❌ Подписка не найдена. Подпишитесь на канал и попробуйте снова.",
+                show_alert=True,
+            )
+            return
         result = await verify_offer_subscription(session, user.id, offer_id)
         if result:
-            offer = await get_offer_by_id(session, offer_id)
             await callback.answer(
                 f"✅ Подтверждено! Получено {offer.reward_final} монет!",
                 show_alert=True
@@ -1617,9 +1704,13 @@ async def game_pay_session(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
-        # Админы бесплатно
+        # Админы получают новую бесплатную сессию без списания монет
         if is_admin_or_super(callback.from_user.id, user):
-            gs = await increment_game_played(session, user.id)  # сбросит счётчик
+            gs = await get_or_create_game_session(session, user.id)
+            gs.games_played = 0
+            gs.window_start = datetime.utcnow()
+            gs.paid_at = datetime.utcnow()
+            await session.commit()
             await callback.answer("✅ Сессия продлена (админ).", show_alert=True)
             return
         ok = await pay_for_game_session(session, callback.from_user.id)
@@ -1862,10 +1953,21 @@ async def guess_num(callback: CallbackQuery, state: FSMContext):
         user.xp += XP_PER_GAME
 
         if guess == actual:
-            win = to_decimal(bet) * 5
+            multiplier = 5
+            jackpot = False
+            if random.random() < GUESS_JACKPOT_CHANCE:
+                multiplier = max(6, GUESS_JACKPOT_MULTIPLIER)
+                jackpot = True
+            win = to_decimal(bet) * multiplier
             user.balance += win
             net = win - to_decimal(bet)
-            result_text = f"🎯 Выпало {actual}! Угадали! 🎉 +{win} монет"
+            if jackpot:
+                result_text = (
+                    f"🎯 Выпало {actual}! Угадали!\n"
+                    f"🌟 ДЖЕКПОТ x{multiplier}! +{win} монет"
+                )
+            else:
+                result_text = f"🎯 Выпало {actual}! Угадали! 🎉 +{win} монет"
         else:
             net = -to_decimal(bet)
             result_text = f"🎯 Выпало {actual}, вы выбрали {guess}. 😔 -{bet} монет"
@@ -2203,6 +2305,207 @@ async def dismiss_low_balance_hint(callback: CallbackQuery):
 
 
 # =========================
+# ЛОТЕРЕЯ-ЛОТО
+# =========================
+def _lottery_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎫 Купить билет", callback_data="lottery_buy")],
+        [InlineKeyboardButton(text="📋 Мои билеты", callback_data="lottery_my_tickets")],
+        [InlineKeyboardButton(text="🔴 Как открыть Live", callback_data="lottery_live_info")],
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="lottery_menu")],
+    ])
+
+
+@router.message(F.text == BTN_LOTTERY)
+async def btn_lottery(message: Message):
+    if not ENABLE_LOTTERY:
+        await message.answer("⛔ Лотерея временно отключена.")
+        return
+    async with async_session() as session:
+        round_obj = await ensure_current_lottery_round(session)
+        state_data = get_lottery_state_dict(round_obj)
+    await message.answer(
+        "🎰 <b>Лотерея-лото</b>\n\n"
+        f"Раунд: <b>{state_data.get('week_key')}</b>\n"
+        f"Статус: <b>{state_data.get('status')}</b>\n"
+        f"Цена билета: <b>{state_data.get('ticket_price')}</b> монет\n"
+        f"Призовой фонд: <b>{state_data.get('prize_pool')}</b> монет\n"
+        f"Уже выпало: {', '.join(map(str, state_data.get('drawn_numbers', []))) or '—'}\n\n"
+        "Розыгрыш проходит в конце недели в live-режиме.",
+        parse_mode="HTML",
+        reply_markup=_lottery_menu_kb(),
+    )
+
+
+@router.callback_query(F.data == "lottery_menu")
+async def lottery_menu(callback: CallbackQuery):
+    if not ENABLE_LOTTERY:
+        await callback.answer("Лотерея отключена.", show_alert=True)
+        return
+    async with async_session() as session:
+        round_obj = await ensure_current_lottery_round(session)
+        state_data = get_lottery_state_dict(round_obj)
+    await callback.message.answer(
+        "🎰 <b>Лотерея-лото</b>\n\n"
+        f"Раунд: <b>{state_data.get('week_key')}</b>\n"
+        f"Статус: <b>{state_data.get('status')}</b>\n"
+        f"Цена билета: <b>{state_data.get('ticket_price')}</b> монет\n"
+        f"Призовой фонд: <b>{state_data.get('prize_pool')}</b> монет\n"
+        f"Уже выпало: {', '.join(map(str, state_data.get('drawn_numbers', []))) or '—'}",
+        parse_mode="HTML",
+        reply_markup=_lottery_menu_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "lottery_buy")
+async def lottery_buy(callback: CallbackQuery):
+    if not ENABLE_LOTTERY:
+        await callback.answer("Лотерея отключена.", show_alert=True)
+        return
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        ticket, error = await buy_lottery_ticket(session, user)
+        if error:
+            await callback.answer(error, show_alert=True)
+            return
+        await callback.answer("Билет куплен!", show_alert=True)
+        await callback.message.answer(
+            f"🎫 Билет #{ticket.id} куплен\n"
+            f"Ваши числа: <b>{ticket.numbers}</b>",
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(F.data == "lottery_my_tickets")
+async def lottery_my_tickets(callback: CallbackQuery):
+    if not ENABLE_LOTTERY:
+        await callback.answer("Лотерея отключена.", show_alert=True)
+        return
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        round_obj = await get_latest_lottery_round(session)
+        tickets = await get_user_lottery_tickets(session, user.id, round_obj.id if round_obj else None, limit=20)
+    if not tickets:
+        await callback.message.answer("У вас пока нет билетов в текущем раунде.")
+        await callback.answer()
+        return
+    text = "📋 <b>Ваши билеты</b>\n\n"
+    for t in tickets:
+        text += f"#{t.id}: {t.numbers} | совпадений: {t.matched_count}\n"
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "lottery_live_info")
+async def lottery_live_info(callback: CallbackQuery):
+    await callback.message.answer(
+        "🔴 Live-страница розыгрыша доступна по адресу:\n"
+        "<code>/lottery/live</code> на вашем домене бота.\n"
+        "Пример: https://your-domain/lottery/live",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+# =========================
+# ЖАЛОБЫ И ПРЕДЛОЖЕНИЯ
+# =========================
+@router.message(F.text == BTN_FEEDBACK)
+async def feedback_start(message: Message, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🐞 Сообщить о баге", callback_data="feedback_kind:bug")],
+        [InlineKeyboardButton(text="💡 Предложить идею", callback_data="feedback_kind:suggestion")],
+        [InlineKeyboardButton(text="❤️ Поблагодарить команду", callback_data="feedback_kind:praise")],
+    ])
+    await message.answer(
+        "💬 <b>Жалобы и предложения</b>\n\n"
+        "Напишите нам бесплатно: о баге, идее или просто поддержке.\n"
+        "Мы читаем все обращения.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("feedback_kind:"))
+async def feedback_pick_kind(callback: CallbackQuery, state: FSMContext):
+    kind = callback.data.split(":", 1)[1]
+    kind_title = {
+        "bug": "Баг",
+        "suggestion": "Идея",
+        "praise": "Благодарность",
+    }.get(kind)
+    if not kind_title:
+        await callback.answer("Неизвестный тип обращения.", show_alert=True)
+        return
+    await state.set_state(FeedbackState.waiting_text)
+    await state.update_data(feedback_kind=kind)
+    await callback.message.answer(
+        f"✍️ Тип: <b>{kind_title}</b>\n\n"
+        "Опишите ваше сообщение одним текстом (5-2000 символов).",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(FeedbackState.waiting_text)
+async def feedback_submit(message: Message, state: FSMContext):
+    text_value = (message.text or "").strip()
+    if len(text_value) < 5:
+        await message.answer("Сообщение слишком короткое. Минимум 5 символов.")
+        return
+    if len(text_value) > 2000:
+        await message.answer("Сообщение слишком длинное. Максимум 2000 символов.")
+        return
+
+    data = await state.get_data()
+    kind = data.get("feedback_kind", "suggestion")
+    kind_title = {
+        "bug": "Баг",
+        "suggestion": "Идея",
+        "praise": "Благодарность",
+    }.get(kind, kind)
+
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            await state.clear()
+            return
+        feedback = await create_feedback(session, user.id, kind, text_value)
+        author_name = get_display_name(user)
+
+    for admin_tg in ADMINS:
+        try:
+            await message.bot.send_message(
+                admin_tg,
+                (
+                    "💬 <b>Новое обращение пользователя</b>\n\n"
+                    f"Тип: <b>{kind_title}</b>\n"
+                    f"Обращение: <code>#{feedback.id}</code>\n"
+                    f"Пользователь: {author_name}\n"
+                    f"TG ID: <code>{message.from_user.id}</code>\n\n"
+                    f"{text_value}"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+    await message.answer(
+        "✅ Спасибо! Ваше обращение отправлено команде.\n"
+        "Если нужно, мы свяжемся с вами в Telegram."
+    )
+    await state.clear()
+
+
+# =========================
 # ПРОМОКОДЫ (НОВЫЙ РАЗДЕЛ)
 # =========================
 @router.message(F.text == BTN_PROMO)
@@ -2338,16 +2641,31 @@ async def promo_hours(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "promo_activate")
 async def promo_activate_start(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(PromoCreateState.waiting_amount)  # используем как временное состояние
+    if not ENABLE_PROMOCODES:
+        await callback.answer("⛔ Промокоды временно отключены.", show_alert=True)
+        return
+    await state.set_state(PromoActivateState.waiting_code)
     await callback.message.answer("Введите промокод:")
     await callback.answer()
 
 
-# Обработчик ввода кода активации (переиспользуем состояние waiting_amount)
-@router.message(PromoCreateState.waiting_amount)
+@router.message(PromoActivateState.waiting_code)
 async def promo_activate_code(message: Message, state: FSMContext):
-    # Проверяем, что мы именно в режиме активации промокода
-    code = message.text.strip()
+    if not ENABLE_PROMOCODES:
+        await message.answer("⛔ Промокоды временно отключены.")
+        await state.clear()
+        return
+    if not _cooldown_ok(
+        _promo_activate_last_ts,
+        message.from_user.id,
+        PROMO_ACTIVATE_COOLDOWN_SECONDS,
+    ):
+        await message.answer("⏳ Слишком часто. Попробуйте чуть позже.")
+        return
+    code = (message.text or "").strip()
+    if not code:
+        await message.answer("Введите промокод.")
+        return
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -2360,6 +2678,9 @@ async def promo_activate_code(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "promo_my")
 async def promo_my(callback: CallbackQuery):
+    if not ENABLE_PROMOCODES:
+        await callback.answer("⛔ Промокоды временно отключены.", show_alert=True)
+        return
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         if not user:
@@ -2383,3 +2704,18 @@ async def promo_my(callback: CallbackQuery):
             )
         await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
+
+
+@router.message(Command("health"))
+async def cmd_health(message: Message):
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        admin_flag = is_admin_or_super(message.from_user.id, user)
+    if not admin_flag:
+        return
+    await message.answer(
+        "✅ Health OK\n"
+        f"• time_utc: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        "• db: connected\n"
+        "• bot: running",
+    )

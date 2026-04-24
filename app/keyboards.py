@@ -20,6 +20,8 @@ BTN_QUESTS     = "📋 Квесты"
 BTN_VIP        = "👑 VIP"
 BTN_LEVEL      = "📊 Уровень"
 BTN_PROMO      = "🎟 Промокоды"
+BTN_FEEDBACK   = "💬 Жалобы и предложения"
+BTN_LOTTERY    = "🎰 Лотерея-лото"
 
 
 # =========================
@@ -32,8 +34,10 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_BUY), KeyboardButton(text=BTN_PROMO)],
         [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
         [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_BONUS)],
+        [KeyboardButton(text=BTN_LOTTERY)],
         [KeyboardButton(text=BTN_QUESTS), KeyboardButton(text=BTN_TOPS)],
         [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
+        [KeyboardButton(text=BTN_FEEDBACK)],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=BTN_ADMIN)])
@@ -46,11 +50,12 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
 def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="📊 Очередь модерации", callback_data="admin_queue_info")],
-        [InlineKeyboardButton(text="📈 Расширенная статистика", callback_data="admin_extended_stats")],
-        [InlineKeyboardButton(text="👥 Управление юзерами", callback_data="admin_manage_users")],
-        [InlineKeyboardButton(text="📝 Взять на модерацию", callback_data="admin_get_pending")],
-        [InlineKeyboardButton(text="✅ Одобрить все", callback_data="admin_approve_all")],
-        [InlineKeyboardButton(text="📢 Офферы", callback_data="admin_offers_menu")],
+        [InlineKeyboardButton(text="📈 Статистика бота", callback_data="admin_extended_stats")],
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_manage_users")],
+        [InlineKeyboardButton(text="📝 Модерация контента", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text="✅ Одобрить все в очереди", callback_data="admin_approve_all")],
+        [InlineKeyboardButton(text="📢 Офферы и реклама", callback_data="admin_offers_menu")],
+        [InlineKeyboardButton(text="💬 Обращения пользователей", callback_data="admin_feedback_menu")],
         [InlineKeyboardButton(text="🕵️ Расследование", callback_data="admin_investigation")],
     ]
     if is_super:

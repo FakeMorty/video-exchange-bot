@@ -10,7 +10,8 @@ from app.models import (
     Comment, ContentReaction, GameHistory,
     DailyQuestProgress, GameSession,
     UserActionLog, BalanceLog, UserAdState,
-    Promocode, PromocodeActivation,
+    Promocode, PromocodeActivation, Feedback,
+    LotteryRound, LotteryTicket,
 )
 from app.config import (
     STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
@@ -41,6 +42,9 @@ from app.config import (
     SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES,
     SMART_AD_VIDEO_CHANCE,
     SMART_AD_FORCED_WATCH_SECONDS,
+    OFFER_DAILY_REWARD_CAP,
+    LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL, LOTTERY_NUMBERS_PER_TICKET,
+    LOTTERY_DRAW_START_HOUR_UTC, LOTTERY_DRAW_END_HOUR_UTC,
     ADMINS,
 )
 
@@ -597,8 +601,26 @@ async def get_offer_by_id(session: AsyncSession, offer_id: int) -> "Offer | None
     )).scalar_one_or_none()
 
 
+async def _get_today_offer_rewards_total(session: AsyncSession, user_id: int) -> Decimal:
+    today = datetime.utcnow().date()
+    value = (await session.execute(
+        select(func.sum(BalanceLog.amount)).where(
+            BalanceLog.user_id == user_id,
+            BalanceLog.amount > 0,
+            BalanceLog.source.in_(["offer_preview", "offer_complete"]),
+            func.date(BalanceLog.created_at) == today,
+        )
+    )).scalar_one() or Decimal("0")
+    return to_decimal(value)
+
+
 async def start_offer_participation(session: AsyncSession, user_id: int,
                                     offer_id: int) -> tuple["OfferParticipation | None", bool]:
+    offer = await get_offer_by_id(session, offer_id)
+    user = await get_user_by_id(session, user_id)
+    if not offer or not user:
+        return None, False
+
     existing = (await session.execute(
         select(OfferParticipation).where(
             OfferParticipation.user_id == user_id,
@@ -607,7 +629,24 @@ async def start_offer_participation(session: AsyncSession, user_id: int,
     )).scalar_one_or_none()
     if existing:
         return existing, False
-    part = OfferParticipation(user_id=user_id, offer_id=offer_id, status="started")
+    today_offer_rewards = await _get_today_offer_rewards_total(session, user_id)
+    cap_remaining = max(to_decimal(OFFER_DAILY_REWARD_CAP) - today_offer_rewards, Decimal("0"))
+    preview_reward = min(to_decimal(offer.reward_preview), cap_remaining)
+    part = OfferParticipation(
+        user_id=user_id,
+        offer_id=offer_id,
+        status="started",
+        reward_given=preview_reward,
+    )
+    if preview_reward > 0:
+        await log_balance_change(
+            session,
+            user,
+            preview_reward,
+            "offer_preview",
+            source_id=offer_id,
+        )
+        user.balance += preview_reward
     session.add(part)
     await session.commit()
     return part, True
@@ -625,23 +664,93 @@ async def verify_offer_subscription(session: AsyncSession, user_id: int,
         return False
     if part.status == "completed":
         return True
-    part.status = "completed"
-    part.checked_at = datetime.utcnow()
+
     offer = await get_offer_by_id(session, offer_id)
     user = await get_user_by_id(session, user_id)
-    if offer and user:
-        additional = offer.reward_final - part.reward_given
-        if additional > 0:
-            await log_balance_change(session, user, additional, "offer_complete", source_id=offer_id)
-            user.balance += additional
-            part.reward_given = offer.reward_final
+    if not offer or not user:
+        return False
+
+    part.status = "completed"
+    part.checked_at = datetime.utcnow()
+
+    today_offer_rewards = await _get_today_offer_rewards_total(session, user_id)
+    cap_remaining = max(to_decimal(OFFER_DAILY_REWARD_CAP) - today_offer_rewards, Decimal("0"))
+    additional = min(
+        to_decimal(offer.reward_final) - to_decimal(part.reward_given),
+        cap_remaining,
+    )
+    if additional > 0:
+        await log_balance_change(
+            session,
+            user,
+            additional,
+            "offer_complete",
+            source_id=offer_id,
+        )
+        user.balance += additional
+        part.reward_given = to_decimal(offer.reward_final)
+
     await session.commit()
     return True
+
+
+def calculate_offer_unsubscribe_amounts(offer: "Offer", part: "OfferParticipation") -> tuple[Decimal, Decimal, Decimal]:
+    rewarded_total = max(to_decimal(part.reward_given), Decimal("0"))
+    if rewarded_total <= 0:
+        return Decimal("0"), Decimal("0"), Decimal("0")
+
+    max_extra_penalty = round_coin(rewarded_total * Decimal("0.5"))
+    requested_penalty = max(to_decimal(offer.penalty_unsubscribe), Decimal("0"))
+    extra_penalty = min(requested_penalty, max_extra_penalty)
+    total_charge = round_coin(rewarded_total + extra_penalty)
+    return round_coin(rewarded_total), round_coin(extra_penalty), total_charge
+
+
+async def apply_offer_unsubscribe_penalty(
+    session: AsyncSession,
+    user: "User",
+    offer: "Offer",
+    part: "OfferParticipation",
+) -> tuple[Decimal, Decimal, Decimal]:
+    rewarded_total, extra_penalty, total_charge = calculate_offer_unsubscribe_amounts(offer, part)
+    if total_charge <= 0:
+        return rewarded_total, extra_penalty, total_charge
+
+    await log_balance_change(
+        session,
+        user,
+        -total_charge,
+        "offer_unsubscribe_penalty",
+        source_id=offer.id,
+        details=f"reward_revoke={rewarded_total}; extra_penalty={extra_penalty}",
+    )
+    user.balance -= total_charge
+    part.status = "unsubscribed"
+    part.unsubscribed_penalized_at = datetime.utcnow()
+    await session.commit()
+    return rewarded_total, extra_penalty, total_charge
+
+
+async def get_offer_participations_for_subscription_audit(
+    session: AsyncSession,
+    limit: int = 200,
+) -> list["OfferParticipation"]:
+    return (await session.execute(
+        select(OfferParticipation)
+        .where(
+            OfferParticipation.status == "completed",
+            OfferParticipation.reward_given > 0,
+            OfferParticipation.unsubscribed_penalized_at.is_(None),
+        )
+        .order_by(OfferParticipation.checked_at.desc().nullslast())
+        .limit(limit)
+    )).scalars().all()
 
 
 async def admin_create_offer(session: AsyncSession, title: str, description: str,
                              channel_url: str, reward_preview: Decimal,
                              reward_final: Decimal, is_rentable: bool = False,
+                             penalty_unsubscribe: Decimal = Decimal("0"),
                              rent_cost_per_day: Decimal = Decimal("0"),
                              max_simultaneous_rentals: int = 1) -> "Offer":
     offer = Offer(
@@ -651,6 +760,7 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
         channel_url=channel_url,
         reward_preview=reward_preview,
         reward_final=reward_final,
+        penalty_unsubscribe=penalty_unsubscribe,
         is_active=True,
         status="approved",
         is_rentable=is_rentable,
@@ -1060,6 +1170,230 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
     await session.commit()
     return f"✅ Промокод активирован! Начислено {amount} монет."
 
+
+async def create_feedback(
+    session: AsyncSession,
+    user_id: int,
+    kind: str,
+    text_value: str,
+) -> Feedback:
+    feedback = Feedback(
+        user_id=user_id,
+        kind=kind,
+        text=text_value.strip(),
+        status="new",
+    )
+    session.add(feedback)
+    await session.commit()
+    return feedback
+
+
+async def get_recent_feedback(session: AsyncSession, limit: int = 20) -> list[Feedback]:
+    return (await session.execute(
+        select(Feedback)
+        .order_by(desc(Feedback.created_at))
+        .limit(limit)
+    )).scalars().all()
+
+
+# ============================
+# ЛОТЕРЕЯ-ЛОТО
+# ============================
+def _week_key(dt: datetime) -> str:
+    iso = dt.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def _serialize_numbers(nums: list[int]) -> str:
+    return ",".join(str(n) for n in sorted(nums))
+
+
+def _deserialize_numbers(raw: str | None) -> list[int]:
+    if not raw:
+        return []
+    return [int(x) for x in raw.split(",") if x.strip().isdigit()]
+
+
+async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
+    now = datetime.utcnow()
+    key = _week_key(now)
+    existing = (await session.execute(
+        select(LotteryRound).where(LotteryRound.week_key == key)
+    )).scalar_one_or_none()
+    if existing:
+        return existing
+
+    week_start = now - timedelta(days=now.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=6, hours=23, minutes=59)
+    draw_start = week_start + timedelta(days=6, hours=LOTTERY_DRAW_START_HOUR_UTC)
+    draw_end = week_start + timedelta(days=6, hours=LOTTERY_DRAW_END_HOUR_UTC)
+    if draw_end <= draw_start:
+        draw_end = draw_start + timedelta(hours=2)
+
+    round_obj = LotteryRound(
+        week_key=key,
+        status="open",
+        ticket_price=to_decimal(LOTTERY_TICKET_PRICE),
+        numbers_pool=max(10, LOTTERY_NUMBERS_POOL),
+        numbers_per_ticket=max(3, LOTTERY_NUMBERS_PER_TICKET),
+        drawn_numbers="",
+        prize_pool=Decimal("0"),
+        starts_at=week_start,
+        draw_starts_at=draw_start,
+        draw_ends_at=draw_end,
+    )
+    session.add(round_obj)
+    await session.commit()
+    return round_obj
+
+
+async def get_latest_lottery_round(session: AsyncSession) -> LotteryRound | None:
+    return (await session.execute(
+        select(LotteryRound).order_by(desc(LotteryRound.created_at)).limit(1)
+    )).scalar_one_or_none()
+
+
+async def buy_lottery_ticket(session: AsyncSession, user: User) -> tuple[LotteryTicket | None, str | None]:
+    round_obj = await ensure_current_lottery_round(session)
+    now = datetime.utcnow()
+    if round_obj.status != "open" or now >= round_obj.draw_starts_at:
+        return None, "Продажа билетов закрыта до следующей недели."
+
+    price = to_decimal(round_obj.ticket_price)
+    if user.balance < price:
+        return None, f"Недостаточно монет. Билет стоит {price}."
+
+    pool = list(range(1, round_obj.numbers_pool + 1))
+    pick_count = min(round_obj.numbers_per_ticket, len(pool))
+    numbers = sorted(random.sample(pool, k=pick_count))
+    ticket = LotteryTicket(
+        round_id=round_obj.id,
+        user_id=user.id,
+        numbers=_serialize_numbers(numbers),
+    )
+    user.balance -= price
+    round_obj.prize_pool += price
+    await log_balance_change(
+        session,
+        user,
+        -price,
+        "lottery_ticket_purchase",
+        source_id=round_obj.id,
+        details=f"numbers={ticket.numbers}",
+    )
+    session.add(ticket)
+    await session.commit()
+    return ticket, None
+
+
+async def get_user_lottery_tickets(
+    session: AsyncSession,
+    user_id: int,
+    round_id: int | None = None,
+    limit: int = 20,
+) -> list[LotteryTicket]:
+    query = select(LotteryTicket).where(LotteryTicket.user_id == user_id)
+    if round_id is not None:
+        query = query.where(LotteryTicket.round_id == round_id)
+    return (await session.execute(
+        query.order_by(desc(LotteryTicket.created_at)).limit(limit)
+    )).scalars().all()
+
+
+def get_lottery_state_dict(round_obj: LotteryRound | None) -> dict:
+    if not round_obj:
+        return {"status": "no_round"}
+    drawn = _deserialize_numbers(round_obj.drawn_numbers)
+    return {
+        "round_id": round_obj.id,
+        "week_key": round_obj.week_key,
+        "status": round_obj.status,
+        "ticket_price": float(round_obj.ticket_price),
+        "prize_pool": float(round_obj.prize_pool),
+        "numbers_pool": round_obj.numbers_pool,
+        "numbers_per_ticket": round_obj.numbers_per_ticket,
+        "drawn_numbers": drawn,
+        "draw_starts_at": round_obj.draw_starts_at.isoformat(),
+        "draw_ends_at": round_obj.draw_ends_at.isoformat(),
+    }
+
+
+async def draw_next_lottery_number(session: AsyncSession, round_obj: LotteryRound) -> int | None:
+    drawn = set(_deserialize_numbers(round_obj.drawn_numbers))
+    all_numbers = set(range(1, round_obj.numbers_pool + 1))
+    available = sorted(all_numbers - drawn)
+    if not available:
+        return None
+    next_num = random.choice(available)
+    drawn.add(next_num)
+    round_obj.drawn_numbers = _serialize_numbers(list(drawn))
+    if len(drawn) >= round_obj.numbers_per_ticket:
+        round_obj.status = "completed"
+    else:
+        round_obj.status = "drawing"
+    await session.commit()
+    return next_num
+
+
+async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -> dict:
+    drawn = set(_deserialize_numbers(round_obj.drawn_numbers))
+    tickets = (await session.execute(
+        select(LotteryTicket).where(LotteryTicket.round_id == round_obj.id)
+    )).scalars().all()
+    if not tickets:
+        round_obj.status = "completed"
+        await session.commit()
+        return {"tickets": 0, "winners": 0, "paid_total": 0.0}
+
+    winners_6: list[LotteryTicket] = []
+    winners_5: list[LotteryTicket] = []
+    winners_4: list[LotteryTicket] = []
+    for t in tickets:
+        matched = len(set(_deserialize_numbers(t.numbers)) & drawn)
+        t.matched_count = matched
+        if matched >= 6:
+            winners_6.append(t)
+        elif matched == 5:
+            winners_5.append(t)
+        elif matched == 4:
+            winners_4.append(t)
+
+    pool = to_decimal(round_obj.prize_pool)
+    payout_map = [
+        (winners_6, to_decimal(0.70), "lottery_win_6"),
+        (winners_5, to_decimal(0.20), "lottery_win_5"),
+        (winners_4, to_decimal(0.10), "lottery_win_4"),
+    ]
+    paid_total = Decimal("0")
+    for winner_group, share, source in payout_map:
+        if not winner_group:
+            continue
+        group_total = round_coin(pool * share)
+        per_ticket = round_coin(group_total / len(winner_group))
+        for t in winner_group:
+            user = await get_user_by_id(session, t.user_id)
+            if not user or t.reward_paid:
+                continue
+            user.balance += per_ticket
+            t.reward_paid = True
+            paid_total += per_ticket
+            await log_balance_change(
+                session,
+                user,
+                per_ticket,
+                source,
+                source_id=round_obj.id,
+                details=f"ticket_id={t.id}; matched={t.matched_count}",
+            )
+
+    round_obj.status = "completed"
+    await session.commit()
+    return {
+        "tickets": len(tickets),
+        "winners": len(winners_6) + len(winners_5) + len(winners_4),
+        "paid_total": float(paid_total),
+    }
 
 # ============================
 # УМНЫЕ ОФФЕРЫ

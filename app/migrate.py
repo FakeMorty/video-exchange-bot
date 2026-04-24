@@ -1,6 +1,7 @@
 import asyncio
 import sys
 sys.path.insert(0, '..')
+import re
 
 from sqlalchemy import text
 from app.db import engine
@@ -9,11 +10,52 @@ from app.logger import setup_logging, get_logger, log_info
 setup_logging()
 logger = get_logger(__name__)
 
+
+def _normalize_sql_for_sqlite(sql: str) -> str:
+    normalized = sql
+    normalized = re.sub(
+        r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS",
+        "ADD COLUMN",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(r"\bSERIAL\b", "INTEGER", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bNOW\(\)", "CURRENT_TIMESTAMP", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _extract_add_column(sql: str) -> tuple[str, str] | None:
+    match = re.search(
+        r"ALTER\s+TABLE\s+([a-zA-Z_][\w]*)\s+ADD\s+COLUMN\s+([a-zA-Z_][\w]*)",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _extract_index_column(sql: str) -> tuple[str, str] | None:
+    match = re.search(
+        r"ON\s+([a-zA-Z_][\w]*)\s*\(\s*([a-zA-Z_][\w]*)\s*\)",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+async def _sqlite_column_exists(conn, table_name: str, column_name: str) -> bool:
+    result = await conn.execute(text(f"PRAGMA table_info({table_name});"))
+    columns = {row[1] for row in result.fetchall()}
+    return column_name in columns
+
 MIGRATIONS = [
     # --- offers ---
     """
     ALTER TABLE offers
-    ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER NULL;
+    ADD COLUMN IF NOT EXISTS creator_user_id INTEGER NULL;
     """,
     """
     ALTER TABLE offers
@@ -22,6 +64,10 @@ MIGRATIONS = [
     """
     ALTER TABLE offers
     ADD COLUMN IF NOT EXISTS promotion_tier VARCHAR(30) DEFAULT 'basic';
+    """,
+    """
+    ALTER TABLE offers
+    ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'approved';
     """,
     """
     ALTER TABLE offers
@@ -66,6 +112,10 @@ MIGRATIONS = [
     """
     ALTER TABLE offers
     ADD COLUMN IF NOT EXISTS max_simultaneous_rentals INTEGER DEFAULT 1;
+    """,
+    """
+    ALTER TABLE offers
+    ADD COLUMN IF NOT EXISTS penalty_unsubscribe NUMERIC(10,2) DEFAULT 40;
     """,
         # --- user_ad_states ---
     """
@@ -162,8 +212,8 @@ MIGRATIONS = [
     """,
     # --- индексы ---
     """
-    CREATE INDEX IF NOT EXISTS ix_offers_created_by_user_id
-    ON offers (created_by_user_id);
+    CREATE INDEX IF NOT EXISTS ix_offers_creator_user_id
+    ON offers (creator_user_id);
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_offers_status
@@ -219,19 +269,110 @@ CREATE INDEX IF NOT EXISTS ix_promocode_activations_promo ON promocode_activatio
 """
 CREATE INDEX IF NOT EXISTS ix_promocode_activations_user ON promocode_activations (user_id);
 """,
+"""
+ALTER TABLE offer_participations
+ADD COLUMN IF NOT EXISTS unsubscribed_penalized_at TIMESTAMP NULL;
+""",
+"""
+CREATE TABLE IF NOT EXISTS feedback_messages (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    kind VARCHAR(20) NOT NULL DEFAULT 'suggestion',
+    text TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'new',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_feedback_messages_user_id ON feedback_messages (user_id);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_feedback_messages_created_at ON feedback_messages (created_at);
+""",
+"""
+CREATE TABLE IF NOT EXISTS lottery_rounds (
+    id SERIAL PRIMARY KEY,
+    week_key VARCHAR(20) UNIQUE NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'open',
+    ticket_price NUMERIC(10,2) NOT NULL DEFAULT 3,
+    numbers_pool INTEGER NOT NULL DEFAULT 36,
+    numbers_per_ticket INTEGER NOT NULL DEFAULT 6,
+    drawn_numbers TEXT NULL,
+    prize_pool NUMERIC(12,2) NOT NULL DEFAULT 0,
+    starts_at TIMESTAMP NOT NULL,
+    draw_starts_at TIMESTAMP NOT NULL,
+    draw_ends_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_lottery_rounds_week_key ON lottery_rounds (week_key);
+""",
+"""
+CREATE TABLE IF NOT EXISTS lottery_tickets (
+    id SERIAL PRIMARY KEY,
+    round_id INTEGER NOT NULL REFERENCES lottery_rounds(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    numbers VARCHAR(100) NOT NULL,
+    matched_count INTEGER NOT NULL DEFAULT 0,
+    reward_paid BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_lottery_tickets_round_id ON lottery_tickets (round_id);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_lottery_tickets_user_id ON lottery_tickets (user_id);
+""",
 ]
 
 
 async def main():
+    applied_count = 0
+    skipped_count = 0
+
     async with engine.begin() as conn:
+        is_sqlite = conn.dialect.name == "sqlite"
+
         for sql in MIGRATIONS:
             try:
-                await conn.execute(text(sql.strip()))
+                sql_to_run = sql.strip()
+                if is_sqlite:
+                    sql_to_run = _normalize_sql_for_sqlite(sql_to_run)
+
+                    add_column = _extract_add_column(sql_to_run)
+                    if add_column:
+                        table_name, column_name = add_column
+                        if await _sqlite_column_exists(conn, table_name, column_name):
+                            skipped_count += 1
+                            log_info(
+                                logger,
+                                f"Migration skipped: column already exists ({table_name}.{column_name})",
+                            )
+                            continue
+
+                    if "CREATE INDEX" in sql_to_run.upper():
+                        index_target = _extract_index_column(sql_to_run)
+                        if index_target:
+                            table_name, column_name = index_target
+                            if not await _sqlite_column_exists(conn, table_name, column_name):
+                                skipped_count += 1
+                                log_info(
+                                    logger,
+                                    f"Migration skipped: index column missing ({table_name}.{column_name})",
+                                )
+                                continue
+                await conn.execute(text(sql_to_run))
+                applied_count += 1
             except Exception as e:
-                # SQLite не поддерживает часть синтаксиса PostgreSQL — пропускаем
+                skipped_count += 1
                 log_info(logger, f"Migration skipped: {e}")
     await engine.dispose()
-    log_info(logger, "Migrations applied successfully")
+    log_info(
+        logger,
+        f"Migrations finished: applied={applied_count}, skipped={skipped_count}",
+    )
 
 
 if __name__ == "__main__":

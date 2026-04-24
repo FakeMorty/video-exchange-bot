@@ -59,6 +59,7 @@ class User(Base):
     ad_state: Mapped["UserAdState"] = relationship(back_populates="user", uselist=False)
     created_promocodes: Mapped[List["Promocode"]] = relationship(back_populates="creator")
     activated_promocodes: Mapped[List["PromocodeActivation"]] = relationship(back_populates="user")
+    lottery_tickets: Mapped[List["LotteryTicket"]] = relationship(back_populates="user")
 
 
 class UserActionLog(Base):
@@ -221,6 +222,7 @@ class OfferParticipation(Base):
     reward_given: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    unsubscribed_penalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     offer: Mapped["Offer"] = relationship(back_populates="participations")
 
@@ -343,3 +345,48 @@ class PromocodeActivation(Base):
 
     promocode: Mapped["Promocode"] = relationship(back_populates="activations")
     user: Mapped["User"] = relationship(back_populates="activated_promocodes")
+
+
+class Feedback(Base):
+    __tablename__ = "feedback_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="suggestion")
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="new")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class LotteryRound(Base):
+    __tablename__ = "lottery_rounds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    week_key: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    ticket_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("3"))
+    numbers_pool: Mapped[int] = mapped_column(Integer, nullable=False, default=36)
+    numbers_per_ticket: Mapped[int] = mapped_column(Integer, nullable=False, default=6)
+    drawn_numbers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prize_pool: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
+    starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    draw_starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    draw_ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    tickets: Mapped[List["LotteryTicket"]] = relationship(back_populates="round")
+
+
+class LotteryTicket(Base):
+    __tablename__ = "lottery_tickets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    round_id: Mapped[int] = mapped_column(ForeignKey("lottery_rounds.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    numbers: Mapped[str] = mapped_column(String(100), nullable=False)
+    matched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reward_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    round: Mapped["LotteryRound"] = relationship(back_populates="tickets")
+    user: Mapped["User"] = relationship(back_populates="lottery_tickets")

@@ -28,6 +28,13 @@ def _get_float(name: str, default: float) -> float:
         return default
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # ============================
 # ОСНОВНЫЕ ПЕРЕМЕННЫЕ
 # ============================
@@ -221,3 +228,34 @@ SMART_AD_LOW_BALANCE_THRESHOLD = 3.0
 SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES = 30
 SMART_AD_VIDEO_CHANCE = 0.35
 SMART_AD_FORCED_WATCH_SECONDS = 5
+
+# Периодический аудит подписок по офферам
+OFFER_SUBSCRIPTION_CHECK_INTERVAL_SECONDS = _get_int(
+    "OFFER_SUBSCRIPTION_CHECK_INTERVAL_SECONDS",
+    300,
+)
+OFFER_SUBSCRIPTION_CHECK_BATCH = _get_int(
+    "OFFER_SUBSCRIPTION_CHECK_BATCH",
+    200,
+)
+OFFER_DAILY_REWARD_CAP = _get_float("OFFER_DAILY_REWARD_CAP", 40.0)
+
+# Флаги финальной эксплуатации
+ENABLE_SUBSCRIPTION_AUDIT = _get_bool("ENABLE_SUBSCRIPTION_AUDIT", True)
+ENABLE_PROMOCODES = _get_bool("ENABLE_PROMOCODES", True)
+ENABLE_ADMIN_BROADCAST = _get_bool("ENABLE_ADMIN_BROADCAST", True)
+
+# Антиспам / рейтлимиты
+OFFER_ACTION_COOLDOWN_SECONDS = _get_int("OFFER_ACTION_COOLDOWN_SECONDS", 3)
+PROMO_ACTIVATE_COOLDOWN_SECONDS = _get_int("PROMO_ACTIVATE_COOLDOWN_SECONDS", 10)
+GUESS_JACKPOT_CHANCE = _get_float("GUESS_JACKPOT_CHANCE", 0.01)
+GUESS_JACKPOT_MULTIPLIER = _get_int("GUESS_JACKPOT_MULTIPLIER", 20)
+
+# Лотерея-лото
+ENABLE_LOTTERY = _get_bool("ENABLE_LOTTERY", True)
+LOTTERY_TICKET_PRICE = _get_float("LOTTERY_TICKET_PRICE", 3.0)
+LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
+LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
+LOTTERY_DRAW_START_HOUR_UTC = _get_int("LOTTERY_DRAW_START_HOUR_UTC", 18)
+LOTTERY_DRAW_END_HOUR_UTC = _get_int("LOTTERY_DRAW_END_HOUR_UTC", 20)
+LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "change-me-secret")
