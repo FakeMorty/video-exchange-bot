@@ -1,5 +1,6 @@
 import re
 import uuid
+import asyncio
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -25,11 +26,23 @@ from app.config import (
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_DEFAULT_RENT_COST_PER_DAY, OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, SMART_AD_FORCED_WATCH_SECONDS,
+    DAILY_PHOTO_LIMIT,
+    FREE_GAMES_PER_SESSION, GAME_SESSION_HOURS, GAME_SESSION_COST,
+    PROMOCODE_CREATION_STAR_RATE,
+    PROMOCODE_BULK_DISCOUNT_THRESHOLD,
+    PROMOCODE_BULK_DISCOUNT_RATE,
+    PROMOCODE_CREATOR_BONUS_PERCENT,
+    PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
+    VIP_FREE_PROMO_PER_MONTH,
+    DYNAMIC_STAR_DISCOUNT_ENABLED,
+    DYNAMIC_STAR_DISCOUNT_HOURS,
+    DYNAMIC_STAR_DISCOUNT_MULTIPLIER,
+    FIRST_PURCHASE_DAILY_BONUS,
 )
 from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
-    DailyQuestProgress, GameHistory, OfferRental, Offer,
+    DailyQuestProgress, GameHistory, OfferRental, Offer, Promocode,
 )
 from app.services import (
     get_or_create_user, get_user, get_user_by_id,
@@ -43,6 +56,15 @@ from app.services import (
     create_offer_rental, get_user_rentals,
     log_user_action, to_decimal,
     set_display_name, get_display_name, log_balance_change,
+    can_play_free_game, pay_for_game_session, increment_game_played,
+    check_daily_photo_limit,
+    create_promocode, activate_promocode,
+    calculate_promocode_star_cost,
+    is_admin_or_super,
+    should_show_low_balance_hint, mark_low_balance_hint_shown,
+    can_show_offer_to_user, mark_offer_shown,
+    get_random_active_offer, should_inject_ad_in_video,
+    process_referral_reward,
 )
 from app.keyboards import (
     rules_keyboard, main_menu,
@@ -55,6 +77,7 @@ from app.keyboards import (
     BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
+    BTN_PROMO,
 )
 from app.logger import get_logger
 
@@ -81,6 +104,12 @@ class RentOfferState(StatesGroup):
     waiting_channel_title = State()
     waiting_channel_url = State()
     waiting_days = State()
+
+
+class PromoCreateState(StatesGroup):
+    waiting_amount = State()
+    waiting_uses = State()
+    waiting_hours = State()
 
 
 # =========================
@@ -208,8 +237,45 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     if not message.from_user:
         return
     await state.clear()
-    referral_code = (command.args or "").strip() or None
+    args = (command.args or "").strip()
 
+    # Если передан промокод (query начинается с promo_)
+    if args.startswith("promo_"):
+        promo_code = args.replace("promo_", "")
+        async with async_session() as session:
+            user, is_new = await get_or_create_user(
+                session, message.from_user.id,
+                message.from_user.username,
+                message.from_user.first_name,
+                message.from_user.last_name,
+            )
+            if user.status == "banned":
+                await message.answer("🚫 Вы заблокированы в боте.")
+                return
+            result = await activate_promocode(session, user.id, promo_code)
+            await message.answer(result)
+            if not user.agreed_to_rules:
+                await message.answer(
+                    "📋 <b>Правила бота</b>\n\n"
+                    "1. Вы все знаете для чего этот бот. Вот и не кидайте хрень всякую (Я про шок-контент).\n"
+                    "2. Не багоюзте, и будет вам кайф.\n"
+                    "3. Наслаждайтесь, самым уникальным и проработанным проектом в данной тематике.\n\n"
+                    "Нажмите кнопку ниже, чтобы принять правила.",
+                    parse_mode="HTML",
+                    reply_markup=rules_keyboard()
+                )
+                return
+            admin_flag = is_any_admin(message.from_user.id, user)
+            vip_str = " 👑" if is_vip(user) else ""
+            await message.answer(
+                f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
+                f"💰 Баланс: <b>{user.balance}</b> монет",
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+            return
+
+    referral_code = args if args else None
     async with async_session() as session:
         user, is_new = await get_or_create_user(
             session,
@@ -461,7 +527,6 @@ async def watch_video_content(callback: CallbackQuery):
             cost = round(cost * to_decimal(0.5), 2)
 
         if user.balance < cost:
-            # --- Умная реклама: намёк при низком балансе ---
             if await should_show_low_balance_hint(session, user):
                 await mark_low_balance_hint_shown(session, user.id)
                 await callback.message.answer(
@@ -483,7 +548,7 @@ async def watch_video_content(callback: CallbackQuery):
             await callback.answer()
             return
 
-        # --- Умная реклама: 35% шанс принудительного оффера ---
+        # Умная реклама: 35% шанс принудительного оффера
         if should_inject_ad_in_video() and await can_show_offer_to_user(session, user.id):
             offer = await get_random_active_offer(session)
             if offer:
@@ -502,8 +567,6 @@ async def watch_video_content(callback: CallbackQuery):
                         SMART_AD_FORCED_WATCH_SECONDS
                     )
                 )
-                # Запускаем таймер — через N секунд отправим кнопку "Продолжить"
-                import asyncio
                 async def send_continue_button(chat_id: int, o_id: int, bot):
                     await asyncio.sleep(SMART_AD_FORCED_WATCH_SECONDS)
                     try:
@@ -523,9 +586,9 @@ async def watch_video_content(callback: CallbackQuery):
                     )
                 )
                 await callback.answer()
-                return  # Не показываем видео до истечения 5 секунд
+                return
 
-        # --- Обычный показ видео ---
+        # Обычный показ видео
         video = await get_random_video_for_user(session, user.id)
         if not video:
             await callback.message.answer(
@@ -545,9 +608,6 @@ async def watch_video_content(callback: CallbackQuery):
         await _level_up_check(session, user, callback)
         await _update_quest_progress(session, user.id, "watch", 1)
 
-        # --- Умная реклама: обновляем время показа если показывали ---
-        # (только обычный флоу, forced уже обработан выше)
-
         await callback.message.answer_video(
             video.telegram_file_id,
             caption=(
@@ -557,6 +617,7 @@ async def watch_video_content(callback: CallbackQuery):
             reply_markup=video_rating_keyboard(video.id)
         )
         await callback.answer()
+
 
 @router.callback_query(F.data == "watch_next")
 async def watch_next(callback: CallbackQuery):
@@ -570,6 +631,19 @@ async def watch_photo_content(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
+
+        # Проверка дневного лимита фото для обычных пользователей
+        if not is_vip(user):
+            can_view = await check_daily_photo_limit(session, user.id)
+            if not can_view:
+                await callback.message.answer(
+                    f"📸 Вы исчерпали лимит просмотра фото на сегодня ({DAILY_PHOTO_LIMIT} шт.).\n"
+                    f"👑 VIP пользователи смотрят без ограничений.",
+                    parse_mode="HTML"
+                )
+                await callback.answer()
+                return
+
         photo = await get_random_photo_for_user(session, user.id)
         if not photo:
             await callback.message.answer("😔 Нет доступных фото.")
@@ -751,7 +825,7 @@ async def cb_react(callback: CallbackQuery):
         await session.commit()
         await _update_quest_progress(session, user.id, "react", 1)
 
-    await callback.answer(f"{reaction} Реакция!")
+    await callback.answer(f"{reaction} Поставлена!")
 
 
 # =========================
@@ -840,6 +914,8 @@ async def handle_photo_upload(message: Message):
         await message.answer(
             f"✅ Фото #{saved.id} отправлено на модерацию!"
         )
+
+
 # =========================
 # BONUS
 # =========================
@@ -899,8 +975,23 @@ async def btn_buy(message: Message):
             return
         if not await require_nickname(message, user):
             return
+
+    # Динамический курс
+    bonus_text = ""
+    if DYNAMIC_STAR_DISCOUNT_ENABLED:
+        try:
+            start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
+            now_h = datetime.utcnow().hour
+            if start_h <= now_h < end_h:
+                bonus_text = f"\n🔥 <b>Сейчас действует бонус +{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}% монет!</b>"
+            else:
+                bonus_text = f"\n💡 Часы бонуса: {start_h}:00–{end_h}:00 UTC (+{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}%)"
+        except Exception:
+            pass
+    bonus_text += f"\n🎁 Первая покупка дня: +{FIRST_PURCHASE_DAILY_BONUS} монет бонусом."
+
     await message.answer(
-        "💳 <b>Пополнение баланса</b>\n\nВыберите пакет:",
+        f"💳 <b>Пополнение баланса</b>{bonus_text}\n\nВыберите пакет:",
         parse_mode="HTML",
         reply_markup=buy_coins_keyboard()
     )
@@ -994,6 +1085,34 @@ async def successful_payment(message: Message):
         await message.answer(
             f"👑 VIP активирован на {VIP_DURATION_DAYS} дней!"
         )
+    elif payload.startswith("promo_"):
+        # Инвойс на создание промокода (платный)
+        parts = payload.split("_")
+        if len(parts) >= 5:
+            creator_tg_id = int(parts[1])
+            amount = int(parts[2])
+            uses = int(parts[3])
+            hours = int(parts[4])
+            async with async_session() as session:
+                user = await get_user(session, creator_tg_id)
+                if user:
+                    promo, cost, error = await create_promocode(
+                        session, creator_tg_id,
+                        to_decimal(amount), uses, hours
+                    )
+                    if error:
+                        await message.answer(f"❌ Ошибка создания промокода: {error}")
+                    else:
+                        bot = await message.bot.get_me()
+                        await message.answer(
+                            f"✅ Промокод создан:\n"
+                            f"<code>{promo.code}</code>\n"
+                            f"Сумма: {amount} монет, использований: {uses}/{promo.max_uses}\n"
+                            f"Ссылка: t.me/{bot.username}?start=promo_{promo.code}",
+                            parse_mode="HTML"
+                        )
+        else:
+            await message.answer("Ошибка платежа.")
     else:
         async with async_session() as session:
             payment = await apply_successful_payment(session, payload)
@@ -1077,7 +1196,6 @@ async def cb_offer_open(callback: CallbackQuery):
             await callback.answer("Оффер не найден.", show_alert=True)
             return
 
-        # Кол-во участников
         from sqlalchemy import select as sa_select
         from app.models import OfferParticipation
         participants = (await session.execute(
@@ -1094,7 +1212,6 @@ async def cb_offer_open(callback: CallbackQuery):
         f"👥 Участников: {participants}"
     )
 
-    # Если оффер поддерживает аренду — показываем кнопку
     kb_rows = [
         [InlineKeyboardButton(
             text="📢 Перейти в канал",
@@ -1263,7 +1380,6 @@ async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Аренда недоступна.", show_alert=True)
             return
 
-        # Проверяем слоты
         active_count = (await session.execute(
             select(func.count(OfferRental.id)).where(
                 OfferRental.offer_id == offer_id,
@@ -1349,7 +1465,6 @@ async def rent_days_selected(callback: CallbackQuery, state: FSMContext):
             await state.clear()
             return
 
-    # Показываем итог
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -1464,7 +1579,7 @@ async def my_rentals(callback: CallbackQuery):
 
 
 # =========================
-# GAMES
+# GAMES (с игровыми сессиями)
 # =========================
 @router.message(F.text == BTN_GAMES)
 async def btn_games(message: Message):
@@ -1474,11 +1589,45 @@ async def btn_games(message: Message):
             return
         if not await require_nickname(message, user):
             return
-    await message.answer(
-        "🎮 <b>Игровой центр</b>",
-        parse_mode="HTML",
-        reply_markup=games_menu_keyboard()
-    )
+
+        can_play = await can_play_free_game(session, user.id)
+        if can_play:
+            await message.answer(
+                "🎮 <b>Игровой центр</b>",
+                parse_mode="HTML",
+                reply_markup=games_menu_keyboard()
+            )
+        else:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"💰 Продлить за {GAME_SESSION_COST} монет",
+                    callback_data="game_pay_session"
+                )]
+            ])
+            await message.answer(
+                "Бесплатные игры на сегодня закончились. Продлите сессию.",
+                reply_markup=kb
+            )
+
+
+@router.callback_query(F.data == "game_pay_session")
+async def game_pay_session(callback: CallbackQuery):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        # Админы бесплатно
+        if is_admin_or_super(callback.from_user.id, user):
+            gs = await increment_game_played(session, user.id)  # сбросит счётчик
+            await callback.answer("✅ Сессия продлена (админ).", show_alert=True)
+            return
+        ok = await pay_for_game_session(session, callback.from_user.id)
+        if ok:
+            await callback.answer("✅ Сессия продлена! Ещё 5 игр.", show_alert=True)
+        else:
+            await callback.answer("❌ Недостаточно монет.", show_alert=True)
+    await callback.message.edit_reply_markup(reply_markup=None)
 
 
 @router.callback_query(F.data == "game_dice")
@@ -1513,11 +1662,18 @@ async def dice_bet(callback: CallbackQuery):
         if user.balance < to_decimal(bet):
             await callback.answer("❌ Недостаточно монет!", show_alert=True)
             return
+        if not is_admin_or_super(callback.from_user.id, user):
+            can_play = await can_play_free_game(session, user.id)
+            if not can_play:
+                await callback.answer("Бесплатные игры закончились.", show_alert=True)
+                return
 
         dice_msg = await callback.message.answer_dice(emoji="🎲")
         dice_value = dice_msg.dice.value
 
         user.balance -= to_decimal(bet)
+        if not is_admin_or_super(callback.from_user.id, user):
+            await increment_game_played(session, user.id)
 
         if dice_value >= 4:
             win = to_decimal(bet) * 2
@@ -1582,11 +1738,18 @@ async def coinflip_bet(callback: CallbackQuery):
         if user.balance < to_decimal(bet):
             await callback.answer("❌ Недостаточно монет!", show_alert=True)
             return
+        if not is_admin_or_super(callback.from_user.id, user):
+            can_play = await can_play_free_game(session, user.id)
+            if not can_play:
+                await callback.answer("Бесплатные игры закончились.", show_alert=True)
+                return
 
         coin_msg = await callback.message.answer_dice(emoji="🪙")
         won = coin_msg.dice.value >= 4
 
         user.balance -= to_decimal(bet)
+        if not is_admin_or_super(callback.from_user.id, user):
+            await increment_game_played(session, user.id)
         user.xp += XP_PER_GAME
 
         if won:
@@ -1647,6 +1810,11 @@ async def guess_bet_start(callback: CallbackQuery, state: FSMContext):
         if user.balance < to_decimal(bet):
             await callback.answer("❌ Недостаточно монет!", show_alert=True)
             return
+        if not is_admin_or_super(callback.from_user.id, user):
+            can_play = await can_play_free_game(session, user.id)
+            if not can_play:
+                await callback.answer("Бесплатные игры закончились.", show_alert=True)
+                return
 
     await state.update_data(guess_bet=bet)
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1679,11 +1847,18 @@ async def guess_num(callback: CallbackQuery, state: FSMContext):
         if user.balance < to_decimal(bet):
             await callback.answer("❌ Недостаточно монет!", show_alert=True)
             return
+        if not is_admin_or_super(callback.from_user.id, user):
+            can_play = await can_play_free_game(session, user.id)
+            if not can_play:
+                await callback.answer("Бесплатные игры закончились.", show_alert=True)
+                return
 
         dice_msg = await callback.message.answer_dice(emoji="🎲")
         actual = dice_msg.dice.value
 
         user.balance -= to_decimal(bet)
+        if not is_admin_or_super(callback.from_user.id, user):
+            await increment_game_played(session, user.id)
         user.xp += XP_PER_GAME
 
         if guess == actual:
@@ -1973,13 +2148,14 @@ async def _update_quest_progress(
         await session.commit()
     except Exception:
         await session.rollback()
-        # =========================
+
+
+# =========================
 # УМНАЯ РЕКЛАМА — FORCED OFFER
 # =========================
 
 @router.callback_query(F.data == "forced_offer_wait")
 async def forced_offer_wait(callback: CallbackQuery):
-    """Пользователь нажал до истечения 5 секунд."""
     await callback.answer(
         f"⏳ Подождите ещё немного...",
         show_alert=False
@@ -1988,10 +2164,8 @@ async def forced_offer_wait(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("forced_offer_continue:"))
 async def forced_offer_continue(callback: CallbackQuery):
-    """После 5 секунд — продолжаем показ видео."""
     offer_id = int(callback.data.split(":")[1])
 
-    # Предлагаем подписаться (необязательно)
     async with async_session() as session:
         offer = await get_offer_by_id(session, offer_id)
         if offer:
@@ -2013,7 +2187,6 @@ async def forced_offer_continue(callback: CallbackQuery):
                 reply_markup=kb
             )
         else:
-            # Просто продолжаем просмотр
             await watch_video_content(callback)
             return
 
@@ -2022,9 +2195,191 @@ async def forced_offer_continue(callback: CallbackQuery):
 
 @router.callback_query(F.data == "dismiss_low_balance_hint")
 async def dismiss_low_balance_hint(callback: CallbackQuery):
-    """Пользователь закрыл подсказку о низком балансе."""
     try:
         await callback.message.delete()
     except Exception:
         pass
     await callback.answer("Хорошо! Офферы всегда доступны в меню 💰")
+
+
+# =========================
+# ПРОМОКОДЫ (НОВЫЙ РАЗДЕЛ)
+# =========================
+@router.message(F.text == BTN_PROMO)
+async def btn_promo(message: Message):
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        if not await require_nickname(message, user):
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎟 Создать промокод", callback_data="promo_create")],
+            [InlineKeyboardButton(text="🔑 Активировать промокод", callback_data="promo_activate")],
+            [InlineKeyboardButton(text="📋 Мои промокоды", callback_data="promo_my")],
+        ])
+        await message.answer(
+            "🎟 <b>Промокоды</b>\n\n"
+            "Создайте код на монеты и поделитесь с друзьями!\n"
+            f"Стоимость создания: {PROMOCODE_CREATION_STAR_RATE} Stars за 1 монету × использования.\n"
+            f"VIP: {VIP_FREE_PROMO_PER_MONTH} бесплатный код в месяц.",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+
+
+@router.callback_query(F.data == "promo_create")
+async def promo_create_start(callback: CallbackQuery, state: FSMContext):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        await state.set_state(PromoCreateState.waiting_amount)
+        await callback.message.answer(
+            f"Введите сумму монет (1–{PROMOCODE_MAX_AMOUNT}):"
+        )
+    await callback.answer()
+
+
+@router.message(PromoCreateState.waiting_amount)
+async def promo_amount(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("Введите число.")
+        return
+    amount = int(message.text)
+    if amount < 1 or amount > PROMOCODE_MAX_AMOUNT:
+        await message.answer(f"От 1 до {PROMOCODE_MAX_AMOUNT}.")
+        return
+    await state.update_data(promo_amount=amount)
+    await state.set_state(PromoCreateState.waiting_uses)
+    await message.answer(f"Количество использований (1–{PROMOCODE_MAX_USES}):")
+
+
+@router.message(PromoCreateState.waiting_uses)
+async def promo_uses(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("Введите число.")
+        return
+    uses = int(message.text)
+    if uses < 1 or uses > PROMOCODE_MAX_USES:
+        await message.answer(f"От 1 до {PROMOCODE_MAX_USES}.")
+        return
+    await state.update_data(promo_uses=uses)
+    await state.set_state(PromoCreateState.waiting_hours)
+    await message.answer(f"Срок действия в часах (1–{PROMOCODE_MAX_HOURS}):")
+
+
+@router.message(PromoCreateState.waiting_hours)
+async def promo_hours(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("Введите число.")
+        return
+    hours = int(message.text)
+    if hours < 1 or hours > PROMOCODE_MAX_HOURS:
+        await message.answer(f"От 1 до {PROMOCODE_MAX_HOURS}.")
+        return
+    data = await state.get_data()
+    amount = data["promo_amount"]
+    uses = data["promo_uses"]
+    star_cost = calculate_promocode_star_cost(to_decimal(amount), uses)
+
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            await state.clear()
+            return
+        admin_free = is_admin_or_super(message.from_user.id, user)
+        if admin_free:
+            promo, _, error = await create_promocode(session, message.from_user.id,
+                                                      to_decimal(amount), uses, hours,
+                                                      admin_free=True)
+            if error:
+                await message.answer(error)
+            else:
+                await message.answer(
+                    f"✅ Промокод создан (админ-режим):\n"
+                    f"<code>{promo.code}</code>\n"
+                    f"Сумма: {amount} монет, использований: {uses}/{promo.max_uses}\n"
+                    f"Ссылка: t.me/{(await message.bot.get_me()).username}?start=promo_{promo.code}",
+                    parse_mode="HTML"
+                )
+            await state.clear()
+            return
+
+        # VIP бесплатный
+        if is_vip(user) and user.promo_created_this_month < VIP_FREE_PROMO_PER_MONTH:
+            promo, cost, error = await create_promocode(session, message.from_user.id,
+                                                         to_decimal(amount), uses, hours)
+            if error:
+                await message.answer(error)
+            else:
+                await message.answer(
+                    f"✅ Бесплатный VIP-промокод:\n"
+                    f"<code>{promo.code}</code>\n"
+                    f"Сумма: {amount} монет, использований: {uses}\n"
+                    f"Осталось бесплатных в этом месяце: {VIP_FREE_PROMO_PER_MONTH - user.promo_created_this_month}",
+                    parse_mode="HTML"
+                )
+            await state.clear()
+            return
+
+        # Платный – выставляем инвойс
+        payload = f"promo_{message.from_user.id}_{amount}_{uses}_{hours}_{uuid.uuid4().hex[:4]}"
+        await message.answer_invoice(
+            title="Создание промокода",
+            description=f"{amount} монет × {uses} исп. на {hours}ч",
+            payload=payload,
+            currency="XTR",
+            prices=[LabeledPrice(label="Промокод", amount=star_cost)]
+        )
+    await state.clear()
+
+
+@router.callback_query(F.data == "promo_activate")
+async def promo_activate_start(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(PromoCreateState.waiting_amount)  # используем как временное состояние
+    await callback.message.answer("Введите промокод:")
+    await callback.answer()
+
+
+# Обработчик ввода кода активации (переиспользуем состояние waiting_amount)
+@router.message(PromoCreateState.waiting_amount)
+async def promo_activate_code(message: Message, state: FSMContext):
+    # Проверяем, что мы именно в режиме активации промокода
+    code = message.text.strip()
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            await state.clear()
+            return
+        result = await activate_promocode(session, user.id, code)
+        await message.answer(result)
+    await state.clear()
+
+
+@router.callback_query(F.data == "promo_my")
+async def promo_my(callback: CallbackQuery):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        promos = (await session.execute(
+            select(Promocode).where(Promocode.creator_user_id == user.id)
+            .order_by(desc(Promocode.created_at)).limit(10)
+        )).scalars().all()
+        if not promos:
+            await callback.message.answer("У вас пока нет промокодов.")
+            await callback.answer()
+            return
+        text = "🎟 <b>Ваши промокоды:</b>\n\n"
+        for p in promos:
+            status = "✅" if p.is_active else "❌"
+            text += (
+                f"{status} <code>{p.code}</code>\n"
+                f"Сумма: {p.coin_amount} | Исп: {p.used_count}/{p.max_uses}\n"
+                f"До: {p.expires_at.strftime('%d.%m %H:%M') if p.expires_at else '∞'}\n\n"
+            )
+        await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()

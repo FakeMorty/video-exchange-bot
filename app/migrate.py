@@ -177,6 +177,48 @@ MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS ix_game_history_created_at
     ON game_history (created_at);
     """,
+"""
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_streak INTEGER DEFAULT 0;
+""",
+"""
+ALTER TABLE users ADD COLUMN IF NOT EXISTS promo_created_this_month INTEGER DEFAULT 0;
+""",
+"""
+CREATE TABLE IF NOT EXISTS promocodes (
+    id SERIAL PRIMARY KEY,
+    creator_user_id INTEGER NOT NULL REFERENCES users(id),
+    code VARCHAR(50) UNIQUE NOT NULL,
+    coin_amount NUMERIC(10,2) NOT NULL,
+    max_uses INTEGER NOT NULL,
+    used_count INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    is_public BOOLEAN DEFAULT FALSE,
+    created_via_stars BOOLEAN DEFAULT TRUE,
+    stars_paid INTEGER DEFAULT 0,
+    expires_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_promocodes_code ON promocodes (code);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_promocodes_creator ON promocodes (creator_user_id);
+""",
+"""
+CREATE TABLE IF NOT EXISTS promocode_activations (
+    id SERIAL PRIMARY KEY,
+    promocode_id INTEGER NOT NULL REFERENCES promocodes(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_promocode_activations_promo ON promocode_activations (promocode_id);
+""",
+"""
+CREATE INDEX IF NOT EXISTS ix_promocode_activations_user ON promocode_activations (user_id);
+""",
 ]
 
 

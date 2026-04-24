@@ -5,6 +5,7 @@ from sqlalchemy import (
     Integer, DateTime, ForeignKey, UniqueConstraint, Text, Date,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from typing import List
 
 
 class Base(DeclarativeBase):
@@ -27,31 +28,37 @@ class User(Base):
     agreed_to_rules: Mapped[bool] = mapped_column(Boolean, default=False)
     nickname_set: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_code: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
-    referred_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    referred_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
     referral_earnings: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     last_bonus_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    bonus_streak: Mapped[int] = mapped_column(Integer, default=0)
     xp: Mapped[int] = mapped_column(Integer, default=0)
     level: Mapped[int] = mapped_column(Integer, default=1)
     vip_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    promo_created_this_month: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    videos: Mapped[list["Video"]] = relationship(back_populates="uploader")
-    views: Mapped[list["VideoView"]] = relationship(back_populates="user")
-    ratings: Mapped[list["VideoRating"]] = relationship(back_populates="user")
-    payments: Mapped[list["Payment"]] = relationship(back_populates="user")
-    comments: Mapped[list["Comment"]] = relationship(back_populates="user")
-    reactions: Mapped[list["ContentReaction"]] = relationship(back_populates="user")
-    game_history: Mapped[list["GameHistory"]] = relationship(back_populates="user")
-    quest_progress: Mapped[list["DailyQuestProgress"]] = relationship(back_populates="user")
-    game_sessions: Mapped[list["GameSession"]] = relationship(back_populates="user")
-    action_logs: Mapped[list["UserActionLog"]] = relationship(back_populates="user")
-    balance_logs: Mapped[list["BalanceLog"]] = relationship(back_populates="user")
-    user_offers: Mapped[list["Offer"]] = relationship(back_populates="creator")
-    rentals: Mapped[list["OfferRental"]] = relationship(
-        back_populates="renter",
-        foreign_keys="OfferRental.renter_user_id"
+    # Отношения
+    videos: Mapped[List["Video"]] = relationship(back_populates="uploader")
+    views: Mapped[List["VideoView"]] = relationship(back_populates="user")
+    ratings: Mapped[List["VideoRating"]] = relationship(back_populates="user")
+    payments: Mapped[List["Payment"]] = relationship(back_populates="user")
+    comments: Mapped[List["Comment"]] = relationship(back_populates="user")
+    reactions: Mapped[List["ContentReaction"]] = relationship(back_populates="user")
+    game_history: Mapped[List["GameHistory"]] = relationship(back_populates="user")
+    quest_progress: Mapped[List["DailyQuestProgress"]] = relationship(back_populates="user")
+    game_sessions: Mapped[List["GameSession"]] = relationship(back_populates="user")
+    action_logs: Mapped[List["UserActionLog"]] = relationship(back_populates="user")
+    balance_logs: Mapped[List["BalanceLog"]] = relationship(back_populates="user")
+    user_offers: Mapped[List["Offer"]] = relationship(back_populates="creator")
+    rentals: Mapped[List["OfferRental"]] = relationship(
+        back_populates="renter", foreign_keys="OfferRental.renter_user_id"
     )
     ad_state: Mapped["UserAdState"] = relationship(back_populates="user", uselist=False)
+    created_promocodes: Mapped[List["Promocode"]] = relationship(back_populates="creator")
+    activated_promocodes: Mapped[List["PromocodeActivation"]] = relationship(back_populates="user")
 
 
 class UserActionLog(Base):
@@ -67,7 +74,6 @@ class UserActionLog(Base):
 
 
 class BalanceLog(Base):
-    """Подробный лог каждого изменения баланса — для расследований."""
     __tablename__ = "balance_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -99,10 +105,10 @@ class Video(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     uploader: Mapped["User"] = relationship(back_populates="videos")
-    views: Mapped[list["VideoView"]] = relationship(back_populates="video")
-    ratings: Mapped[list["VideoRating"]] = relationship(back_populates="video")
-    comments: Mapped[list["Comment"]] = relationship(back_populates="video")
-    reactions: Mapped[list["ContentReaction"]] = relationship(back_populates="video")
+    views: Mapped[List["VideoView"]] = relationship(back_populates="video")
+    ratings: Mapped[List["VideoRating"]] = relationship(back_populates="video")
+    comments: Mapped[List["Comment"]] = relationship(back_populates="video")
+    reactions: Mapped[List["ContentReaction"]] = relationship(back_populates="video")
 
 
 class VideoView(Base):
@@ -114,7 +120,7 @@ class VideoView(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
-    watched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="views")
     video: Mapped["Video"] = relationship(back_populates="views")
@@ -198,8 +204,8 @@ class Offer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     creator: Mapped["User"] = relationship(back_populates="user_offers")
-    participations: Mapped[list["OfferParticipation"]] = relationship(back_populates="offer")
-    rentals: Mapped[list["OfferRental"]] = relationship(back_populates="offer")
+    participations: Mapped[List["OfferParticipation"]] = relationship(back_populates="offer")
+    rentals: Mapped[List["OfferRental"]] = relationship(back_populates="offer")
 
 
 class OfferParticipation(Base):
@@ -220,7 +226,6 @@ class OfferParticipation(Base):
 
 
 class OfferRental(Base):
-    """Аренда рекламного слота пользователем."""
     __tablename__ = "offer_rentals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -235,8 +240,7 @@ class OfferRental(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     renter: Mapped["User"] = relationship(
-        back_populates="rentals",
-        foreign_keys=[renter_user_id]
+        back_populates="rentals", foreign_keys=[renter_user_id]
     )
     offer: Mapped["Offer"] = relationship(back_populates="rentals")
 
@@ -298,3 +302,44 @@ class UserAdState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="ad_state")
+
+
+# ============================
+# ПРОМОКОДЫ (НОВАЯ ТАБЛИЦА)
+# ============================
+class Promocode(Base):
+    """Промокод, создаваемый пользователем за Stars."""
+    __tablename__ = "promocodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    creator_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    coin_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False)
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_via_stars: Mapped[bool] = mapped_column(Boolean, default=True)  # False если админ создал бесплатно
+    stars_paid: Mapped[int] = mapped_column(Integer, default=0)              # сколько Stars заплачено
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    creator: Mapped["User"] = relationship(back_populates="created_promocodes")
+    activations: Mapped[List["PromocodeActivation"]] = relationship(back_populates="promocode")
+
+
+class PromocodeActivation(Base):
+    """Запись об активации промокода."""
+    __tablename__ = "promocode_activations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    promocode_id: Mapped[int] = mapped_column(
+        ForeignKey("promocodes.id"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    promocode: Mapped["Promocode"] = relationship(back_populates="activations")
+    user: Mapped["User"] = relationship(back_populates="activated_promocodes")
