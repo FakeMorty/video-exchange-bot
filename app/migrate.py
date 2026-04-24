@@ -183,6 +183,15 @@ MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS ix_balance_logs_source
     ON balance_logs (source);
     """,
+    # --- video_views ---
+    """
+    ALTER TABLE video_views
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_video_views_created_at
+    ON video_views (created_at);
+    """,
     # --- lootbox_opens ---
     """
     CREATE TABLE IF NOT EXISTS lootbox_opens (
