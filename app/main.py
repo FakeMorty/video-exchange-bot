@@ -21,6 +21,9 @@ async def on_startup(app):
         await run_migrations()
     except Exception as e:
         log_info(logger, f"Migrations warning: {e}")
+    print("=" * 40)
+    print("  BOT STARTED")
+    print("=" * 40)
     log_info(logger, "Bot started, DB initialized")
 
 

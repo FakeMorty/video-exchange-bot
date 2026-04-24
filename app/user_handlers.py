@@ -722,25 +722,31 @@ async def handle_video_upload(message: Message):
         if not user or user.status == "banned":
             return
         if not user.agreed_to_rules:
-            await message.answer("Сначала примите правила /start")
+            await message.answer("Примите правила командой /start")
             return
         if not user.nickname_set:
             await require_nickname(message, user)
             return
 
         v = message.video
-        saved = await save_video(
+        saved, is_duplicate = await save_video(
             session, user.id,
             v.file_id, v.file_unique_id,
             v.duration, v.file_size
         )
+
+        if is_duplicate:
+            await message.answer(
+                "⚠️ Это видео уже есть в базе и не может быть загружено повторно."
+            )
+            return
+
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
-
-    await message.answer(
-        f"✅ Видео #{saved.id} отправлено на модерацию!"
-    )
+        await message.answer(
+            f"✅ Видео #{saved.id} отправлено на модерацию!"
+        )
 
 
 @router.message(F.photo)
@@ -750,27 +756,31 @@ async def handle_photo_upload(message: Message):
         if not user or user.status == "banned":
             return
         if not user.agreed_to_rules:
-            await message.answer("Сначала примите правила /start")
+            await message.answer("Примите правила командой /start")
             return
         if not user.nickname_set:
             await require_nickname(message, user)
             return
 
         p = message.photo[-1]
-        saved = await save_photo(
+        saved, is_duplicate = await save_photo(
             session, user.id,
             p.file_id, p.file_unique_id,
             p.file_size
         )
+
+        if is_duplicate:
+            await message.answer(
+                "⚠️ Это фото уже есть в базе и не может быть загружено повторно."
+            )
+            return
+
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
-
-    await message.answer(
-        f"✅ Фото #{saved.id} отправлено на модерацию!"
-    )
-
-
+        await message.answer(
+            f"✅ Фото #{saved.id} отправлено на модерацию!"
+        )
 # =========================
 # BONUS
 # =========================

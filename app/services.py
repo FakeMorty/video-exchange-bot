@@ -334,7 +334,15 @@ async def save_video(
     file_unique_id: str,
     duration: int = None,
     file_size: int = None,
-) -> "Video":
+) -> tuple["Video", bool]:
+    """Возвращает (video, is_duplicate)"""
+    # Проверка дубликата по file_unique_id
+    existing = (await session.execute(
+        select(Video).where(Video.telegram_file_unique_id == file_unique_id)
+    )).scalar_one_or_none()
+    if existing:
+        return existing, True
+
     video = Video(
         uploader_user_id=user_id,
         content_type="video",
@@ -347,7 +355,7 @@ async def save_video(
     session.add(video)
     await session.commit()
     await log_user_action(session, user_id, "upload_video", f"file={file_unique_id}")
-    return video
+    return video, False
 
 
 async def save_photo(
@@ -356,7 +364,14 @@ async def save_photo(
     file_id: str,
     file_unique_id: str,
     file_size: int = None,
-) -> "Video":
+) -> tuple["Video", bool]:
+    """Возвращает (photo, is_duplicate)"""
+    existing = (await session.execute(
+        select(Video).where(Video.telegram_file_unique_id == file_unique_id)
+    )).scalar_one_or_none()
+    if existing:
+        return existing, True
+
     photo = Video(
         uploader_user_id=user_id,
         content_type="photo",
@@ -368,8 +383,7 @@ async def save_photo(
     session.add(photo)
     await session.commit()
     await log_user_action(session, user_id, "upload_photo", f"file={file_unique_id}")
-    return photo
-
+    return photo, False
 
 async def get_random_video_for_user(
     session: AsyncSession,
