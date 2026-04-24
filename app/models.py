@@ -51,6 +51,7 @@ class User(Base):
         back_populates="renter",
         foreign_keys="OfferRental.renter_user_id"
     )
+    ad_state: Mapped["UserAdState"] = relationship(back_populates="user", uselist=False)
 
 
 class UserActionLog(Base):
@@ -191,7 +192,6 @@ class Offer(Base):
     penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("40"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="approved")
-    # Поля для аренды
     is_rentable: Mapped[bool] = mapped_column(Boolean, default=False)
     rent_cost_per_day: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     max_simultaneous_rentals: Mapped[int] = mapped_column(Integer, default=1)
@@ -282,9 +282,9 @@ class GameSession(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="game_sessions")
-    
-    
-    class UserAdState(Base):
+
+
+class UserAdState(Base):
     __tablename__ = "user_ad_states"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -296,3 +296,5 @@ class GameSession(Base):
     forced_offer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     forced_offer_shown_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="ad_state")
