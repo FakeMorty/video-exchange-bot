@@ -45,6 +45,7 @@ from app.config import (
     PROMO_ACTIVATE_COOLDOWN_SECONDS,
     GUESS_JACKPOT_CHANCE, GUESS_JACKPOT_MULTIPLIER,
     ENABLE_LOTTERY,
+    WEBHOOK_BASE,
 )
 from app.db import async_session
 from app.models import (
@@ -55,7 +56,8 @@ from app.services import (
     get_or_create_user, get_user, get_user_by_id,
     save_video, save_photo,
     get_random_video_for_user, get_random_photo_for_user,
-    record_view_and_charge, record_photo_view,
+    record_view_and_charge, record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
+    record_photo_view,
     rate_video, claim_daily_bonus, count_referrals,
     create_payment, create_custom_payment, apply_successful_payment,
     get_active_offers, get_rentable_offers, get_offer_by_id,
@@ -651,33 +653,50 @@ async def watch_video_content(callback: CallbackQuery):
                 await callback.answer()
                 return
 
-        # Обычный показ видео
-        video = await get_random_video_for_user(session, user.id)
-        if not video:
-            await callback.message.answer(
-                "😔 Нет доступных видео.\n"
-                "Загрузите своё видео, чтобы другие смотрели!"
-            )
+        # Обычный показ видео (с безопасной отправкой и возвратом при ошибке)
+        last_send_error: str | None = None
+        for _ in range(3):
+            video = await get_random_video_for_user(session, user.id)
+            if not video:
+                break
+
+            ok = await record_view_and_charge_with_cost(session, user.id, video.id, cost)
+            if not ok:
+                await callback.message.answer("❌ Ошибка списания монет.")
+                await callback.answer()
+                return
+
+            try:
+                await callback.message.answer_video(
+                    video.telegram_file_id,
+                    caption=(
+                        f"🎬 Видео #{video.id}\n"
+                        f"💰 Списано: {cost} монет"
+                    ),
+                    reply_markup=video_rating_keyboard(video.id)
+                )
+            except Exception as e:
+                last_send_error = str(e)
+                await mark_content_broken(session, video.id, f"send_failed: {e}")
+                await refund_watch_and_unview(
+                    session,
+                    user.id,
+                    video.id,
+                    cost,
+                    reason=f"send_failed: {e}",
+                )
+                continue
+
+            user = await get_user(session, callback.from_user.id)
+            await _level_up_check(session, user, callback)
+            await _update_quest_progress(session, user.id, "watch", 1)
             await callback.answer()
             return
 
-        ok = await record_view_and_charge(session, user.id, video.id)
-        if not ok:
-            await callback.message.answer("❌ Ошибка списания монет.")
-            await callback.answer()
-            return
-
-        user = await get_user(session, callback.from_user.id)
-        await _level_up_check(session, user, callback)
-        await _update_quest_progress(session, user.id, "watch", 1)
-
-        await callback.message.answer_video(
-            video.telegram_file_id,
-            caption=(
-                f"🎬 Видео #{video.id}\n"
-                f"💰 Списано: {cost} монет"
-            ),
-            reply_markup=video_rating_keyboard(video.id)
+        await callback.message.answer(
+            "😔 Нет доступных видео.\n"
+            "Загрузите своё видео, чтобы другие смотрели!"
+            + (f"\n\n⚠️ Ошибка отправки: {last_send_error}" if last_send_error else "")
         )
         await callback.answer()
 
@@ -707,19 +726,31 @@ async def watch_photo_content(callback: CallbackQuery):
                 await callback.answer()
                 return
 
-        photo = await get_random_photo_for_user(session, user.id)
-        if not photo:
-            await callback.message.answer("😔 Нет доступных фото.")
+        last_send_error: str | None = None
+        for _ in range(3):
+            photo = await get_random_photo_for_user(session, user.id)
+            if not photo:
+                break
+            try:
+                await callback.message.answer_photo(
+                    photo.telegram_file_id,
+                    caption=f"🖼 Фото #{photo.id}",
+                    reply_markup=photo_actions_keyboard(photo.id)
+                )
+            except Exception as e:
+                last_send_error = str(e)
+                await mark_content_broken(session, photo.id, f"send_failed: {e}")
+                continue
+
+            await record_photo_view(session, user.id, photo.id)
             await callback.answer()
             return
-        await record_photo_view(session, user.id, photo.id)
 
-    await callback.message.answer_photo(
-        photo.telegram_file_id,
-        caption=f"🖼 Фото #{photo.id}",
-        reply_markup=photo_actions_keyboard(photo.id)
-    )
-    await callback.answer()
+        await callback.message.answer(
+            "😔 Нет доступных фото."
+            + (f"\n\n⚠️ Ошибка отправки: {last_send_error}" if last_send_error else "")
+        )
+        await callback.answer()
 
 
 @router.callback_query(F.data == "watch_next_photo")
@@ -2316,15 +2347,14 @@ def _lottery_menu_kb() -> InlineKeyboardMarkup:
     ])
 
 
-@router.message(F.text == BTN_LOTTERY)
-async def btn_lottery(message: Message):
+async def _send_lottery_menu(message_or_callback_message: Message) -> None:
     if not ENABLE_LOTTERY:
-        await message.answer("⛔ Лотерея временно отключена.")
+        await message_or_callback_message.answer("⛔ Лотерея временно отключена.")
         return
     async with async_session() as session:
         round_obj = await ensure_current_lottery_round(session)
         state_data = get_lottery_state_dict(round_obj)
-    await message.answer(
+    await message_or_callback_message.answer(
         "🎰 <b>Лотерея-лото</b>\n\n"
         f"Раунд: <b>{state_data.get('week_key')}</b>\n"
         f"Статус: <b>{state_data.get('status')}</b>\n"
@@ -2335,6 +2365,17 @@ async def btn_lottery(message: Message):
         parse_mode="HTML",
         reply_markup=_lottery_menu_kb(),
     )
+
+
+@router.message(F.text == BTN_LOTTERY)
+async def btn_lottery(message: Message):
+    await _send_lottery_menu(message)
+
+
+@router.callback_query(F.data == "open_lottery")
+async def open_lottery_from_games(callback: CallbackQuery):
+    await _send_lottery_menu(callback.message)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "lottery_menu")
@@ -2405,10 +2446,11 @@ async def lottery_my_tickets(callback: CallbackQuery):
 
 @router.callback_query(F.data == "lottery_live_info")
 async def lottery_live_info(callback: CallbackQuery):
+    base = (WEBHOOK_BASE or "").rstrip("/")
+    live_url = f"{base}/lottery/live" if base else "/lottery/live"
     await callback.message.answer(
-        "🔴 Live-страница розыгрыша доступна по адресу:\n"
-        "<code>/lottery/live</code> на вашем домене бота.\n"
-        "Пример: https://your-domain/lottery/live",
+        "🔴 <b>Live-розыгрыш</b>\n\n"
+        f"Ссылка: {live_url}",
         parse_mode="HTML",
     )
     await callback.answer()

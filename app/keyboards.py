@@ -34,7 +34,6 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_BUY), KeyboardButton(text=BTN_PROMO)],
         [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
         [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_BONUS)],
-        [KeyboardButton(text=BTN_LOTTERY)],
         [KeyboardButton(text=BTN_QUESTS), KeyboardButton(text=BTN_TOPS)],
         [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
         [KeyboardButton(text=BTN_FEEDBACK)],
@@ -212,6 +211,7 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🎲 Кости", callback_data="game_dice")],
         [InlineKeyboardButton(text="🪙 Орёл/Решка", callback_data="game_coinflip")],
         [InlineKeyboardButton(text="🎯 Угадай число", callback_data="game_guess")],
+        [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
 
 

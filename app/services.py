@@ -369,6 +369,63 @@ async def record_view_and_charge(session: AsyncSession, user_id: int, video_id: 
     return True
 
 
+async def record_view_and_charge_with_cost(
+    session: AsyncSession,
+    user_id: int,
+    video_id: int,
+    cost: Decimal,
+) -> bool:
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return False
+    cost = to_decimal(cost)
+    if user.balance < cost:
+        return False
+    await log_balance_change(session, user, -cost, "watch", source_id=video_id)
+    user.balance -= cost
+    session.add(VideoView(user_id=user_id, video_id=video_id))
+    await session.commit()
+    return True
+
+
+async def refund_watch_and_unview(
+    session: AsyncSession,
+    user_id: int,
+    video_id: int,
+    cost: Decimal,
+    reason: str,
+) -> None:
+    from sqlalchemy import delete
+
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return
+
+    cost = to_decimal(cost)
+    await log_balance_change(
+        session,
+        user,
+        cost,
+        "watch_refund",
+        source_id=video_id,
+        details=reason,
+    )
+    user.balance += cost
+    await session.execute(
+        delete(VideoView).where(VideoView.user_id == user_id, VideoView.video_id == video_id)
+    )
+    await session.commit()
+
+
+async def mark_content_broken(session: AsyncSession, video_id: int, reason: str) -> None:
+    v = (await session.execute(select(Video).where(Video.id == video_id))).scalar_one_or_none()
+    if not v:
+        return
+    v.status = "broken"
+    v.rejection_reason = (reason or "")[:255]
+    await session.commit()
+
+
 async def record_photo_view(session: AsyncSession, user_id: int, photo_id: int) -> bool:
     existing = (await session.execute(
         select(VideoView).where(
