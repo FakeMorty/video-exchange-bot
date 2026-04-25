@@ -17,7 +17,7 @@ from app.config import (
     LOTTERY_DRAW_SECRET,
     ADMINS,
 )
-from app.db import engine, init_db, async_session
+from app.db import engine, async_session
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
 from app.logger import setup_logging, get_logger, log_info
@@ -175,6 +175,8 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                         f"total_charged={penalized_total:.2f}"
                     ),
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             log_info(logger, f"Subscription audit warning: {e}")
 
@@ -203,6 +205,8 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                         logger,
                         f"Lottery round #{round_obj.id} settled: {stats}",
                     )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             log_info(logger, f"Lottery worker warning: {e}")
 
@@ -843,12 +847,6 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
 
 
 async def on_startup(app):
-    from app.migrate import main as run_migrations
-    await init_db()
-    try:
-        await run_migrations()
-    except Exception as e:
-        log_info(logger, f"Migrations warning: {e}")
     bot: Bot | None = app.get("bot")
     if bot:
         try:

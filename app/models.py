@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlalchemy import (
     BigInteger, String, Numeric, Boolean,
     Integer, DateTime, ForeignKey, UniqueConstraint, Text, Date,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from typing import List
@@ -163,8 +164,17 @@ class VideoView(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
-    watched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    watched_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        server_default=text("NOW()"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        server_default=text("NOW()"),
+    )
 
     user: Mapped["User"] = relationship(back_populates="views")
     video: Mapped["Video"] = relationship(back_populates="views")

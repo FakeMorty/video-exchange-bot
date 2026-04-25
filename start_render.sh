@@ -7,7 +7,7 @@ python -m pip install --upgrade pip
 python -m compileall app >/dev/null 2>&1 || true
 
 # Always run migrations before starting
-python -m app.migrate
+python -m alembic upgrade head
 
 exec python -m app.main
 

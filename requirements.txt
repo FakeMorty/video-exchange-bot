@@ -5,3 +5,4 @@ aiosqlite==0.20.0
 asyncpg==0.29.0
 python-dotenv==1.0.1
 reportlab==4.2.2
+alembic==1.13.2

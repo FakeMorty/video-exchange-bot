@@ -1,16 +1,17 @@
-# Final Release Checklist
+# Финальный чек-лист релиза
 
-- [ ] `python -m compileall app` passes without errors
-- [ ] `venv\Scripts\python -m app.migrate` runs successfully
-- [ ] `/health` command works for admin account
-- [ ] Offer flow checked manually:
-  - [ ] start offer gives preview reward
-  - [ ] subscription verify gives final reward
-  - [ ] unsubscribe penalty applies only once
-  - [ ] extra penalty never exceeds 50% of paid rewards
-- [ ] Broadcast tested from admin panel
-- [ ] Promocode activation tested with cooldown behavior
-- [ ] Feature flags in `.env` reviewed for production
-- [ ] DB backup created (`scripts/backup_db.py`) before release
-- [ ] Recovery procedure tested once on a copy
-- [ ] Changelog/update message prepared for users/admins
+- [ ] `python -m compileall app` проходит без ошибок
+- [ ] `venv\Scripts\python -m alembic upgrade head` выполняется успешно
+- [ ] `venv\Scripts\python scripts\release_smoke_check.py` проходит успешно
+- [ ] Команда `/health` работает для админ-аккаунта
+- [ ] Поток офферов проверен вручную:
+  - [ ] старт оффера выдаёт превью-награду
+  - [ ] проверка подписки выдаёт финальную награду
+  - [ ] штраф за отписку применяется только один раз
+  - [ ] дополнительный штраф никогда не превышает 50% от выданных наград
+- [ ] Рассылка проверена из админ-панели
+- [ ] Активация промокода проверена с поведением cooldown
+- [ ] Фиче-флаги в `.env` проверены для продакшена
+- [ ] Перед релизом создан бэкап БД (`scripts/backup_db.py`)
+- [ ] Процедура восстановления проверена хотя бы один раз на копии
+- [ ] Подготовлен changelog / текст обновления для пользователей и админов

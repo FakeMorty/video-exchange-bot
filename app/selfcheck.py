@@ -47,6 +47,7 @@ async def run_selfcheck(session: AsyncSession) -> list[CheckItem]:
         "users", "videos", "balance_logs", "user_action_logs",
         "trusted_uploaders", "lootbox_opens",
         "lottery_rounds", "lottery_tickets",
+        "video_views",
     ]
     for t in table_names:
         try:
@@ -54,6 +55,19 @@ async def run_selfcheck(session: AsyncSession) -> list[CheckItem]:
             checks.append(CheckItem(f"db:table:{t}", True, "ok"))
         except Exception as e:
             checks.append(CheckItem(f"db:table:{t}", False, f"missing or unreadable: {e}"))
+
+    # Schema sanity: verify critical columns exist (catches drift between DB and ORM/migrations)
+    critical_columns = [
+        ("video_views", "watched_at"),
+        ("video_views", "created_at"),
+    ]
+    for table_name, column_name in critical_columns:
+        try:
+            # Works in both SQLite and Postgres: if column missing -> raises
+            await session.execute(text(f'SELECT "{column_name}" FROM "{table_name}" LIMIT 1'))
+            checks.append(CheckItem(f"db:column:{table_name}.{column_name}", True, "ok"))
+        except Exception as e:
+            checks.append(CheckItem(f"db:column:{table_name}.{column_name}", False, str(e)))
 
     # Feature toggles info
     checks.append(CheckItem("feature:lottery", True, "enabled" if ENABLE_LOTTERY else "disabled"))

@@ -50,10 +50,6 @@ from app.config import (
     ADMINS,
 )
 
-PHOTO_UPLOAD_REWARD = Decimal("0.1")
-OFFER_STEP_1_REWARD = Decimal("5")
-OFFER_PENALTY = Decimal("40")
-
 
 # ============================
 # ЛУТБОКСЫ
@@ -214,14 +210,17 @@ async def log_user_action(
     session: AsyncSession,
     user_id: int,
     action: str,
-    details: str = None
+    details: str = None,
+    *,
+    auto_commit: bool = True,
 ):
     log = UserActionLog(user_id=user_id, action=action, details=details)
     session.add(log)
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
+    if auto_commit:
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
 
 
 # ============================
@@ -698,6 +697,56 @@ async def create_custom_payment(session: AsyncSession, user_id: int, stars: int)
     session.add(payment)
     await session.commit()
     return payment
+
+
+async def ensure_payment_pending(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    payload: str,
+    stars_amount: int,
+    coins_amount: Decimal = Decimal("0"),
+) -> Payment:
+    """
+    Ensure a pending payment row exists for payload.
+    Used for VIP / promo / lootbox stars flows to guarantee idempotency.
+    """
+    payment = (await session.execute(
+        select(Payment).where(Payment.payload == payload)
+    )).scalar_one_or_none()
+    if payment:
+        return payment
+    payment = Payment(
+        user_id=user_id,
+        payload=payload,
+        stars_amount=int(stars_amount),
+        coins_amount=to_decimal(coins_amount),
+        status="pending",
+    )
+    session.add(payment)
+    await session.flush()
+    return payment
+
+
+async def mark_payment_paid_once(session: AsyncSession, payload: str) -> bool:
+    """
+    Mark payment as paid exactly once.
+    Returns True only for the first successful transition pending -> paid.
+    """
+    payment = (await session.execute(
+        select(Payment).where(Payment.payload == payload)
+    )).scalar_one_or_none()
+    if not payment or payment.status != "pending":
+        return False
+    payment.status = "paid"
+    await session.flush()
+    return True
+
+
+async def get_payment_by_payload(session: AsyncSession, payload: str) -> Payment | None:
+    return (await session.execute(
+        select(Payment).where(Payment.payload == payload)
+    )).scalar_one_or_none()
 
 
 async def apply_successful_payment(session: AsyncSession, payload: str) -> Payment | None:
@@ -1227,6 +1276,7 @@ async def create_promocode(
     hours: int = 24,
     is_public: bool = False,
     admin_free: bool = False,
+    auto_commit: bool = True,
 ) -> tuple["Promocode | None", int, str | None]:
     """
     Создаёт промокод.
@@ -1280,9 +1330,13 @@ async def create_promocode(
         expires_at=expires_at,
     )
     session.add(promo)
-    await session.commit()
+    if auto_commit:
+        await session.commit()
+    else:
+        await session.flush()
     await log_user_action(session, user.id, "create_promocode",
-                          f"code={code}, amount={coin_amount}, uses={max_uses}, admin_free={admin_free}")
+                          f"code={code}, amount={coin_amount}, uses={max_uses}, admin_free={admin_free}",
+                          auto_commit=auto_commit)
     return promo, star_cost, None
 
 

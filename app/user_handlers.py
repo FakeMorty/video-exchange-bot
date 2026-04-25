@@ -61,6 +61,8 @@ from app.services import (
     record_photo_view,
     rate_video, claim_daily_bonus, count_referrals,
     create_payment, create_custom_payment, apply_successful_payment,
+    ensure_payment_pending, mark_payment_paid_once,
+    get_payment_by_payload,
     get_active_offers, get_rentable_offers, get_offer_by_id,
     start_offer_participation, verify_offer_subscription,
     create_offer_rental, get_user_rentals,
@@ -562,10 +564,23 @@ async def show_vip(message: Message):
 
 @router.callback_query(F.data == "buy_vip")
 async def buy_vip(callback: CallbackQuery):
+    payload = f"vip_{callback.from_user.id}_{uuid.uuid4().hex[:6]}"
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        await ensure_payment_pending(
+            session,
+            user_id=user.id,
+            payload=payload,
+            stars_amount=int(VIP_PRICE_STARS),
+        )
+        await session.commit()
     await callback.message.answer_invoice(
         title="VIP статус",
         description=f"VIP на {VIP_DURATION_DAYS} дней",
-        payload=f"vip_{callback.from_user.id}_{uuid.uuid4().hex[:6]}",
+        payload=payload,
         currency="XTR",
         prices=[LabeledPrice(label="VIP", amount=VIP_PRICE_STARS)]
     )
@@ -1170,17 +1185,72 @@ async def process_custom_stars(message: Message, state: FSMContext):
 
 @router.pre_checkout_query()
 async def pre_checkout(query: PreCheckoutQuery):
+    payload = query.invoice_payload or ""
+    allowed = (
+        payload.startswith("pack_")
+        or payload.startswith("custom_")
+        or payload.startswith("vip_")
+        or payload.startswith("promo_")
+        or payload.startswith("lootbox_")
+    )
+    if not allowed:
+        await query.answer(ok=False, error_message="Неверный платёжный payload.")
+        return
+    async with async_session() as session:
+        user = await get_user(session, query.from_user.id)
+        if not user:
+            await query.answer(ok=False, error_message="Пользователь не найден.")
+            return
+        payment = await get_payment_by_payload(session, payload)
+        if not payment:
+            await query.answer(ok=False, error_message="Платёж не найден.")
+            return
+        if payment.user_id != user.id:
+            await query.answer(ok=False, error_message="Платёж принадлежит другому пользователю.")
+            return
+        if payment.status != "pending":
+            await query.answer(ok=False, error_message="Платёж уже обработан.")
+            return
+        if int(payment.stars_amount) != int(query.total_amount):
+            await query.answer(ok=False, error_message="Сумма платежа не совпадает.")
+            return
     await query.answer(ok=True)
 
 
 @router.message(F.successful_payment)
 async def successful_payment(message: Message):
     payload = message.successful_payment.invoice_payload
+    paid_stars = int(message.successful_payment.total_amount)
 
     if payload.startswith("vip_"):
+        parts = payload.split("_")
+        if len(parts) < 3 or not parts[1].isdigit() or int(parts[1]) != message.from_user.id:
+            await message.answer("Ошибка платежа: некорректный payload.")
+            return
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if user:
+                payment = await get_payment_by_payload(session, payload)
+                if not payment:
+                    await ensure_payment_pending(
+                        session,
+                        user_id=user.id,
+                        payload=payload,
+                        stars_amount=paid_stars,
+                    )
+                    payment = await get_payment_by_payload(session, payload)
+                if not payment or payment.user_id != user.id:
+                    await session.rollback()
+                    await message.answer("Ошибка платежа: пользователь не совпадает.")
+                    return
+                if int(payment.stars_amount) != paid_stars:
+                    await session.rollback()
+                    await message.answer("Ошибка платежа: сумма не совпадает.")
+                    return
+                if not await mark_payment_paid_once(session, payload):
+                    await session.rollback()
+                    await message.answer("✅ Платёж уже был обработан ранее.")
+                    return
                 now = datetime.utcnow()
                 user.vip_until = (
                     user.vip_until + timedelta(days=VIP_DURATION_DAYS)
@@ -1190,7 +1260,8 @@ async def successful_payment(message: Message):
                 await log_user_action(
                     session, user.id,
                     "buy_vip",
-                    f"until={user.vip_until}"
+                    f"payload={payload};until={user.vip_until}",
+                    auto_commit=False,
                 )
                 await session.commit()
         await message.answer(
@@ -1200,37 +1271,95 @@ async def successful_payment(message: Message):
         # Инвойс на создание промокода (платный)
         parts = payload.split("_")
         if len(parts) >= 5:
-            creator_tg_id = int(parts[1])
-            amount = int(parts[2])
-            uses = int(parts[3])
-            hours = int(parts[4])
+            try:
+                creator_tg_id = int(parts[1])
+                amount = int(parts[2])
+                uses = int(parts[3])
+                hours = int(parts[4])
+            except Exception:
+                await message.answer("Ошибка платежа: некорректный payload.")
+                return
             async with async_session() as session:
                 user = await get_user(session, creator_tg_id)
-                if user:
-                    promo, cost, error = await create_promocode(
-                        session, creator_tg_id,
-                        to_decimal(amount), uses, hours
+                if not user or user.telegram_id != message.from_user.id:
+                    await message.answer("Ошибка платежа: пользователь не найден.")
+                    return
+                payment = await get_payment_by_payload(session, payload)
+                if not payment:
+                    await ensure_payment_pending(
+                        session,
+                        user_id=user.id,
+                        payload=payload,
+                        stars_amount=paid_stars,
                     )
-                    if error:
-                        await message.answer(f"❌ Ошибка создания промокода: {error}")
-                    else:
-                        bot = await message.bot.get_me()
-                        await message.answer(
-                            f"✅ Промокод создан:\n"
-                            f"<code>{promo.code}</code>\n"
-                            f"Сумма: {amount} монет, использований: {uses}/{promo.max_uses}\n"
-                            f"Ссылка: t.me/{bot.username}?start=promo_{promo.code}",
-                            parse_mode="HTML"
-                        )
+                    payment = await get_payment_by_payload(session, payload)
+                if not payment or payment.user_id != user.id:
+                    await session.rollback()
+                    await message.answer("Ошибка платежа: пользователь не совпадает.")
+                    return
+                if int(payment.stars_amount) != paid_stars:
+                    await session.rollback()
+                    await message.answer("Ошибка платежа: сумма не совпадает.")
+                    return
+                if not await mark_payment_paid_once(session, payload):
+                    await session.rollback()
+                    await message.answer("✅ Платёж уже был обработан ранее.")
+                    return
+                promo, cost, error = await create_promocode(
+                    session, creator_tg_id,
+                    to_decimal(amount), uses, hours,
+                    auto_commit=False,
+                )
+                if error:
+                    await session.rollback()
+                    await message.answer(f"❌ Ошибка создания промокода: {error}")
+                else:
+                    await session.commit()
+                    bot = await message.bot.get_me()
+                    await message.answer(
+                        f"✅ Промокод создан:\n"
+                        f"<code>{promo.code}</code>\n"
+                        f"Сумма: {amount} монет, использований: {uses}/{promo.max_uses}\n"
+                        f"Ссылка: t.me/{bot.username}?start=promo_{promo.code}",
+                        parse_mode="HTML"
+                    )
         else:
             await message.answer("Ошибка платежа.")
     elif payload.startswith("lootbox_"):
+        parts = payload.split("_")
+        if len(parts) < 3 or not parts[1].isdigit() or int(parts[1]) != message.from_user.id:
+            await message.answer("Ошибка платежа: некорректный payload.")
+            return
         async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("⚠️ Пользователь не найден.")
+                return
+            payment = await get_payment_by_payload(session, payload)
+            if not payment:
+                await ensure_payment_pending(
+                    session,
+                    user_id=user.id,
+                    payload=payload,
+                    stars_amount=paid_stars,
+                )
+                payment = await get_payment_by_payload(session, payload)
+            if not payment or payment.user_id != user.id:
+                await session.rollback()
+                await message.answer("Ошибка платежа: пользователь не совпадает.")
+                return
+            if int(payment.stars_amount) != paid_stars:
+                await session.rollback()
+                await message.answer("Ошибка платежа: сумма не совпадает.")
+                return
             reward, rarity_or_err = await open_lootbox_for_stars(
                 session,
                 telegram_user_id=message.from_user.id,
                 payment_payload=payload,
             )
+            # Keep Payment status aligned with idempotent lootbox processing.
+            if await mark_payment_paid_once(session, payload):
+                await session.commit()
         if reward is None:
             await message.answer(f"⚠️ {rarity_or_err}")
         else:
@@ -1243,6 +1372,17 @@ async def successful_payment(message: Message):
             )
     else:
         async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                await message.answer("⚠️ Пользователь не найден.")
+                return
+            payment_row = await get_payment_by_payload(session, payload)
+            if not payment_row or payment_row.user_id != user.id:
+                await message.answer("Ошибка платежа: не найден в системе.")
+                return
+            if int(payment_row.stars_amount) != paid_stars:
+                await message.answer("Ошибка платежа: сумма не совпадает.")
+                return
             payment = await apply_successful_payment(session, payload)
         if payment:
             await message.answer(
@@ -1318,6 +1458,18 @@ async def lootbox_buy(callback: CallbackQuery):
     if kind == "stars":
         star_price = int(LOOTBOX_STAR_PRICE)
         payload = f"lootbox_{callback.from_user.id}_{uuid.uuid4().hex[:8]}"
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            if not user:
+                await callback.answer()
+                return
+            await ensure_payment_pending(
+                session,
+                user_id=user.id,
+                payload=payload,
+                stars_amount=star_price,
+            )
+            await session.commit()
         await callback.message.answer_invoice(
             title="Лутбокс",
             description=f"Открытие лутбокса за {star_price} Stars",
@@ -2792,6 +2944,13 @@ async def promo_hours(message: Message, state: FSMContext):
 
         # Платный – выставляем инвойс
         payload = f"promo_{message.from_user.id}_{amount}_{uses}_{hours}_{uuid.uuid4().hex[:4]}"
+        await ensure_payment_pending(
+            session,
+            user_id=user.id,
+            payload=payload,
+            stars_amount=star_cost,
+        )
+        await session.commit()
         await message.answer_invoice(
             title="Создание промокода",
             description=f"{amount} монет × {uses} исп. на {hours}ч",

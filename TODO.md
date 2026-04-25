@@ -1,16 +1,16 @@
-# Bug Fixes - Print to Logger Cleanup
+# Исправления багов — перевод print в logger
 
-## Progress
-- [x] Analyze codebase and identify bugs (prints, no logger)
-- [x] Create edit plan and get approval
+## Прогресс
+- [x] Проанализировать кодовую базу и найти проблемы (print, отсутствие logger)
+- [x] Составить план правок и получить подтверждение
 
-## Tasks
-- [x] Edit app/make_project_pdf.py: Replace all print() with logger calls, add setup_logging(), wrap main() try/except
-- [x] Edit app/user_handlers.py: Replace print(\"START COMMAND RECEIVED\") 
-- [x] Edit app/migrate.py: Replace print(\"Migrations applied successfully\")
-- [x] Test: run python app/make_project_pdf.py (check PDF + logs no prints) - SUCCESS: PDF generated with JSON logs, no prints
-- [x] Test: python app/migrate.py (logs) - SUCCESS: Logger setup, runs (migrate error expected if no DB tables)
-- [ ] Run bot, /start (no print)
+## Задачи
+- [x] Изменить `app/make_project_pdf.py`: заменить все `print()` на вызовы logger, добавить `setup_logging()`, обернуть `main()` в `try/except`
+- [x] Изменить `app/user_handlers.py`: заменить `print("START COMMAND RECEIVED")`
+- [x] Изменить `app/migrate.py`: заменить `print("Migrations applied successfully")`
+- [x] Тест: запустить `python app/make_project_pdf.py` (проверка PDF + логов без print) — УСПЕХ: PDF создан, JSON-логи есть, print нет
+- [x] Тест: `python app/migrate.py` (логи) — УСПЕХ: logger инициализируется, запуск есть (ошибка миграции ожидаема при отсутствии таблиц)
+- [ ] Запустить бота, `/start` (без print)
 - [ ] attempt_completion
 
-**Estimated fixes: 3 files, cleanup for prod-ready**
+**Оценка: 3 файла, очистка для состояния prod-ready**
