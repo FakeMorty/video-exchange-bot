@@ -189,6 +189,15 @@ MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
     """,
     """
+    UPDATE video_views
+    SET watched_at = COALESCE(watched_at, created_at, NOW())
+    WHERE watched_at IS NULL;
+    """,
+    """
+    ALTER TABLE video_views
+    ALTER COLUMN watched_at SET DEFAULT NOW();
+    """,
+    """
     CREATE INDEX IF NOT EXISTS ix_video_views_created_at
     ON video_views (created_at);
     """,

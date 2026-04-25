@@ -469,7 +469,7 @@ async def record_view_and_charge(session: AsyncSession, user_id: int, video_id: 
         return False
     await log_balance_change(session, user, -cost, "watch", source_id=video_id)
     user.balance -= cost
-    view = VideoView(user_id=user_id, video_id=video_id)
+    view = VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.utcnow())
     session.add(view)
     await session.commit()
     return True
@@ -489,7 +489,7 @@ async def record_view_and_charge_with_cost(
         return False
     await log_balance_change(session, user, -cost, "watch", source_id=video_id)
     user.balance -= cost
-    session.add(VideoView(user_id=user_id, video_id=video_id))
+    session.add(VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.utcnow()))
     await session.commit()
     return True
 
@@ -539,7 +539,7 @@ async def record_photo_view(session: AsyncSession, user_id: int, photo_id: int) 
         )
     )).scalar_one_or_none()
     if not existing:
-        view = VideoView(user_id=user_id, video_id=photo_id)
+        view = VideoView(user_id=user_id, video_id=photo_id, watched_at=datetime.utcnow())
         session.add(view)
         await session.commit()
     return True
