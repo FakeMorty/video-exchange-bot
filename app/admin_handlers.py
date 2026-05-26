@@ -440,7 +440,7 @@ async def inv_suspicious_games(callback: CallbackQuery):
         await callback.answer()
         return
     async with async_session() as session:
-        week_ago = datetime.utcnow() - timedelta(days=7)
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
         rows = (await session.execute(
             select(
                 User,
@@ -704,7 +704,7 @@ async def inv_export_ai(callback: CallbackQuery):
             rental_rows = []
 
     report = "=== ОТЧЁТ ДЛЯ АНАЛИЗА ===\n"
-    report += f"Дата: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+    report += f"Дата: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n\n"
 
     report += "--- ТОП 10 БОГАЧЕЙ ---\n"
     for i, u in enumerate(rich_users, 1):
@@ -752,7 +752,7 @@ async def inv_export_ai(callback: CallbackQuery):
     report += "\n=== КОНЕЦ ОТЧЁТА ==="
 
     buf = BytesIO(report.encode("utf-8"))
-    buf.name = f"report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+    buf.name = f"report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.txt"
     await callback.message.answer_document(
         buf,
         caption="📁 Экспорт готов (TXT)."
@@ -804,7 +804,7 @@ async def inv_export_ai_pdf(callback: CallbackQuery):
             rental_rows = []
 
     report = "=== ОТЧЁТ ДЛЯ АНАЛИЗА ===\n"
-    report += f"Дата: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+    report += f"Дата: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n\n"
 
     report += "--- ТОП 10 БОГАЧЕЙ ---\n"
     for i, u in enumerate(rich_users, 1):
@@ -856,7 +856,7 @@ async def inv_export_ai_pdf(callback: CallbackQuery):
     except Exception as e:
         # Fallback to TXT if PDF generation fails in runtime
         buf = BytesIO(report.encode("utf-8"))
-        buf.name = f"report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+        buf.name = f"report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.txt"
         await callback.message.answer_document(
             buf,
             caption=f"⚠️ PDF не удалось собрать ({e}). Отправил TXT.",
@@ -865,7 +865,7 @@ async def inv_export_ai_pdf(callback: CallbackQuery):
         return
 
     buf = BytesIO(pdf_bytes)
-    buf.name = f"report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    buf.name = f"report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.pdf"
     await callback.message.answer_document(
         buf,
         caption="📁 Экспорт готов (PDF).",
@@ -1402,7 +1402,7 @@ async def process_dossier(message: Message, state: FSMContext):
             f"💰 Баланс: <b>{u.balance:.2f}</b>\n"
             f"⭐ Ур.{u.level} | XP: {u.xp}\n"
             f"🔹 Статус: {u.status}\n"
-            f"💎 VIP: {'да' if u.vip_until and u.vip_until > datetime.utcnow() else 'нет'}\n"
+            f"💎 VIP: {'да' if u.vip_until and u.vip_until > datetime.now(timezone.utc) else 'нет'}\n"
             f"📅 Рег.: {u.created_at.strftime('%d.%m.%Y')}\n\n"
             f"📤 Загружено: {dossier['videos_uploaded']}\n"
             f"📥 Просмотрено: {dossier['videos_watched']}\n"
@@ -2653,7 +2653,7 @@ async def approve_rental_cb(callback: CallbackQuery):
                 await callback.answer("Не найдено.", show_alert=True)
                 return
             rental.status = "active"
-            rental.expires_at = datetime.utcnow() + timedelta(days=rental.rent_days)
+            rental.expires_at = datetime.now(timezone.utc) + timedelta(days=rental.rent_days)
             await session.commit()
 
             renter = await get_user_by_id(session, rental.renter_user_id)
