@@ -10,6 +10,7 @@ from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+    BufferedInputFile,
     Message, CallbackQuery,
     LabeledPrice, PreCheckoutQuery,
     InlineKeyboardMarkup, InlineKeyboardButton
@@ -80,7 +81,7 @@ from app.services import (
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
-    rules_keyboard, main_menu,
+    main_menu,
     video_rating_keyboard, photo_actions_keyboard,
     watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard,
     offers_list_keyboard, rent_days_keyboard,
@@ -352,49 +353,21 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             result = await activate_promocode(session, user.id, promo_code)
             await message.answer(result)
             if not user.agreed_to_rules:
-                await message.answer(
-                    "📋 <b>Правила бота</b>\n\n"
-                    "1. Нельзя публиковать запрещённый или шок-контент.\n"
-                    "2. Нельзя использовать баги и накручивать награды.\n"
-                    "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
-                    "Нажмите кнопку ниже, чтобы принять правила.",
-                    parse_mode="HTML",
-                    reply_markup=rules_keyboard()
-                )
-                return
-            admin_flag = is_any_admin(message.from_user.id, user)
-            vip_str = " 👑" if is_vip(user) else ""
-            await message.answer(
-                f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
-                f"💰 Баланс: <b>{user.balance}</b> монет",
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
-            )
-            return
-
-    referral_code = args if args else None
-    async with async_session() as session:
-        user, is_new = await get_or_create_user(
-            session,
-            message.from_user.id,
-            message.from_user.username,
-            message.from_user.first_name,
-            message.from_user.last_name,
-            referral_code,
-        )
-        if user.status == "banned":
-            await message.answer("🚫 Вы заблокированы в боте.")
-            return
-
-        if not user.agreed_to_rules:
-            await message.answer(
-                "📋 <b>Правила бота</b>\n\n"
-                "1. Нельзя публиковать запрещённый или шок-контент.\n"
-                "2. Нельзя использовать баги и накручивать награды.\n"
-                "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
-                "Нажмите кнопку ниже, чтобы принять правила.",
-                parse_mode="HTML",
-                reply_markup=rules_keyboard()
+                from captcha.image import ImageCaptcha
+            import string
+            import random
+            
+            image = ImageCaptcha(width=280, height=90)
+            captcha_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+            data = image.generate(captcha_text)
+            
+            await state.update_data(captcha_text=captcha_text)
+            await state.set_state(CaptchaState.waiting_for_text)
+            
+            photo = BufferedInputFile(data.getvalue(), filename="captcha.png")
+            await message.answer_photo(
+                photo=photo,
+                caption="🤖 <b>Проверка на робота!</b>\n\nПожалуйста, введите код с картинки, чтобы продолжить:"
             )
             return
 
@@ -423,6 +396,45 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             f"💰 Баланс: <b>{user.balance}</b> монет",
             parse_mode="HTML",
             reply_markup=main_menu(is_admin=admin_flag)
+        )
+
+
+
+@router.message(CaptchaState.waiting_for_text)
+async def process_captcha(message: Message, state: FSMContext):
+    data = await state.get_data()
+    correct_text = data.get("captcha_text", "")
+    
+    if message.text and message.text.strip().upper() == correct_text.upper():
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if user:
+                user.agreed_to_rules = True
+                await session.commit()
+        
+        await state.clear()
+        await message.answer("✅ Вы успешно прошли проверку! Добро пожаловать!")
+        from app.keyboards import main_menu
+        await message.answer(
+            "🚀 Используйте меню ниже для навигации.",
+            reply_markup=main_menu(is_admin=is_any_admin(message.from_user.id, user))
+        )
+    else:
+        from captcha.image import ImageCaptcha
+        import string
+        import random
+        from aiogram.types import BufferedInputFile
+        
+        image = ImageCaptcha(width=280, height=90)
+        new_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+        new_data = image.generate(new_text)
+        
+        await state.update_data(captcha_text=new_text)
+        photo = BufferedInputFile(new_data.getvalue(), filename="captcha.png")
+        
+        await message.answer_photo(
+            photo=photo,
+            caption="❌ <b>Неверный код.</b>\n\nПопробуйте еще раз. Введите код с новой картинки:"
         )
 
 
@@ -1065,8 +1077,10 @@ async def _process_watermark(bot, video_obj, msg: Message):
         await msg.answer(f"❌ Системная ошибка: {e}")
     finally:
         await info_msg.delete()
-        if os.path.exists(input_path): os.remove(input_path)
-        if os.path.exists(output_path): os.remove(output_path)
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
 
 @router.message(F.video)
