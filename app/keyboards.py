@@ -114,11 +114,18 @@ def rules_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def watch_choice_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def watch_choice_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
+    buttons = [
         [InlineKeyboardButton(text="🎬 Видео", callback_data="watch_video_content")],
         [InlineKeyboardButton(text="🖼 Фото", callback_data="watch_photo_content")],
-    ])
+    ]
+    if is_admin:
+        from app.config import WEBHOOK_BASE
+        base = (WEBHOOK_BASE or "").rstrip("/")
+        if base:
+            from aiogram.types.web_app_info import WebAppInfo
+            buttons.append([InlineKeyboardButton(text="📱 SexTok (Web App)", web_app=WebAppInfo(url=f"{base}/sextok"))])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
