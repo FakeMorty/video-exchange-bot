@@ -647,6 +647,8 @@ async def main():
     app.on_startup.append(on_startup)
     app.router.add_get("/", handle_health_check)
     app.router.add_get("/sextok", sextok_page_handler)
+    app.router.add_get("/api/sextok/feed", api_sextok_feed)
+    app.router.add_get("/api/video/{id}", api_video_stream)
     app.router.add_get("/lottery/state", lottery_state_handler)
     app.router.add_post("/lottery/draw-next", lottery_draw_next_handler)
     app.router.add_get("/lottery/live", lottery_live_page_handler)
