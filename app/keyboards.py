@@ -210,12 +210,20 @@ def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
 # =========================
 def games_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎲 Кости", callback_data="game_dice")],
-        [InlineKeyboardButton(text="🪙 Орёл/Решка", callback_data="game_coinflip")],
-        [InlineKeyboardButton(text="🎯 Угадай число", callback_data="game_guess")],
+        [InlineKeyboardButton(text="🎲 Кости (PvP)", callback_data="dice_menu")],
+        [InlineKeyboardButton(text="🎰 Угадай число", callback_data="guess_menu")],
         [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
+
+def telegram_games_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🎰 Игровые автоматы"), KeyboardButton(text="🏀 Баскетбол")],
+            [KeyboardButton(text="🎯 Дартс"), KeyboardButton(text="⬅️ Назад")]
+        ],
+        resize_keyboard=True
+    )
 
 
 # =========================
@@ -322,3 +330,16 @@ def admin_db_keyboard(tables) -> InlineKeyboardMarkup:
         kb.append([InlineKeyboardButton(text=f"📋 {label}", callback_data=f"db_open:{table_name}:0")])
     kb.append([InlineKeyboardButton(text="🔙 Админ-центр", callback_data="admin_center")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
+    emojis = ["🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑"]
+    options = random.sample([e for e in emojis if e != target_emoji], 5)
+    options.append(target_emoji)
+    random.shuffle(options)
+    
+    buttons = []
+    for em in options:
+        cb_data = "captcha_pass" if em == target_emoji else f"captcha_fail:{em}"
+        buttons.append(InlineKeyboardButton(text=em, callback_data=cb_data))
+        
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[:3], buttons[3:]])

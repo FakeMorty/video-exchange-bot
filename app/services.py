@@ -15,7 +15,7 @@ from app.models import (
     LootboxOpen,
 )
 from app.config import (
-    STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
+    STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD, AUTHOR_VIEW_REWARD,
     REFERRAL_REWARD_INVITER, STARS_PACKAGES, STARS_TO_COINS_RATE,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
@@ -51,22 +51,14 @@ PHOTO_UPLOAD_REWARD = Decimal("0.1")
 # ЛУТБОКСЫ
 # ============================
 def _roll_lootbox_reward_coins() -> tuple[Decimal, str]:
-    """
-    Домашнее преимущество: средний выигрыш чуть ниже цены,
-    но диапазон достаточный, чтобы не обижать игроков.
-    """
     r = random.random()
-    # common: 70% -> 4..10
     if r < 0.70:
-        return to_decimal(random.randint(4, 10)), "common"
-    # rare: 25% -> 11..20
+        return to_decimal(random.randint(40, 100)), "common"
     if r < 0.95:
-        return to_decimal(random.randint(11, 20)), "rare"
-    # epic: 4.5% -> 21..35
+        return to_decimal(random.randint(110, 200)), "rare"
     if r < 0.995:
-        return to_decimal(random.randint(21, 35)), "epic"
-    # jackpot: 0.5% -> 50..120
-    return to_decimal(random.randint(50, 120)), "jackpot"
+        return to_decimal(random.randint(210, 350)), "epic"
+    return to_decimal(random.randint(500, 1200)), "jackpot"
 
 
 async def open_lootbox_for_coins(session: AsyncSession, user_id: int) -> tuple[Decimal, str] | tuple[None, str]:
@@ -485,6 +477,15 @@ async def record_view_and_charge_with_cost(
     await log_balance_change(session, user, -cost, "watch", source_id=video_id)
     user.balance -= cost
     session.add(VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.utcnow()))
+
+    video = await session.get(Video, video_id)
+    if video:
+        uploader = await get_user_by_id(session, video.uploader_user_id)
+        if uploader:
+            author_reward = to_decimal(AUTHOR_VIEW_REWARD)
+            uploader.balance += author_reward
+            await log_balance_change(session, uploader, author_reward, "video_viewed_by_other", source_id=video_id)
+
     await session.commit()
     return True
 
