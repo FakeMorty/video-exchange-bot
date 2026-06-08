@@ -219,14 +219,7 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 
-def telegram_games_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎰 Игровые автоматы"), KeyboardButton(text="🏀 Баскетбол")],
-            [KeyboardButton(text="🎯 Дартс"), KeyboardButton(text="⬅️ Назад")]
-        ],
-        resize_keyboard=True
-    )
+
 
 
 # =========================

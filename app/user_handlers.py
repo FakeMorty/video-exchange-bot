@@ -3,7 +3,6 @@ import random
 import asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict
-from decimal import Decimal
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
@@ -84,7 +83,7 @@ from app.keyboards import (
     video_rating_keyboard, photo_actions_keyboard,
     watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard,
     offers_list_keyboard, rent_days_keyboard,
-    telegram_games_keyboard, games_menu_keyboard, tops_menu_keyboard,
+    games_menu_keyboard, tops_menu_keyboard,
     quests_keyboard, reaction_menu_keyboard,
     low_balance_offer_keyboard, forced_offer_keyboard,
     forced_offer_done_keyboard,
@@ -613,7 +612,7 @@ async def btn_watch(message: Message):
         if not await require_nickname(message, user):
             return
         admin_flag = is_admin_or_super(message.from_user.id, user)
-    await message.answer("Что смотреть?", reply_markup=watch_choice_keyboard(is_admin=admin_flag))
+    await message.answer("👀 Что смотреть?", reply_markup=watch_choice_keyboard(is_admin=admin_flag))
 
 
 @router.callback_query(F.data == "watch_video_content")
@@ -1979,27 +1978,35 @@ async def my_rentals(callback: CallbackQuery):
 @router.message(F.text == BTN_GAMES)
 async def btn_games(message: Message):
     from app.keyboards import games_menu_keyboard
+    from app.services import can_play_free_game
+    from app.config import GAME_SESSION_COST
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
             return
         if not await require_nickname(message, user):
             return
-    await message.answer(
-        "🎮 Добро пожаловать в Игровой зал! Выбирайте игру снизу:",
-        reply_markup=telegram_games_keyboard()
-    )
-    await message.answer("Или сыграйте в мини-игры с другими игроками:", reply_markup=games_menu_keyboard())
 
-@router.message(F.text == "⬅️ Назад")
-async def btn_games_back(message: Message):
-    from app.keyboards import main_menu
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-    await message.answer(
-        "Главное меню",
-        reply_markup=main_menu(is_admin=is_admin_or_super(message.from_user.id, user))
-    )
+        can_play = await can_play_free_game(session, user.id)
+        if can_play:
+            await message.answer(
+                "🎮 <b>Игровой центр</b>\n\nВыберите игру:",
+                parse_mode="HTML",
+                reply_markup=games_menu_keyboard()
+            )
+        else:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"💰 Продлить за {GAME_SESSION_COST} монет",
+                    callback_data="game_pay_session"
+                )]
+            ])
+            await message.answer(
+                "⏳ Бесплатные игры на сегодня закончились. Продлите сессию:",
+                reply_markup=kb
+            )
 
 
 @router.callback_query(F.data == "game_pay_session")
@@ -2619,13 +2626,14 @@ async def dismiss_low_balance_hint(callback: CallbackQuery):
 # ЛОТЕРЕЯ-ЛОТО
 # =========================
 def _lottery_menu_kb() -> InlineKeyboardMarkup:
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from app.config import WEBHOOK_BASE
     base = (WEBHOOK_BASE or "").rstrip("/")
     live_url = f"{base}/lottery/live" if base else ""
 
     buttons = []
     if live_url:
-        from aiogram.types.web_app_info import WebAppInfo
-        buttons.append([InlineKeyboardButton(text="🔴 Открыть Live (Mini App)", web_app=WebAppInfo(url=live_url))])
+        buttons.append([InlineKeyboardButton(text="🔴 Открыть Live", url=live_url)])
     else:
         buttons.append([InlineKeyboardButton(text="🔴 Как открыть Live", callback_data="lottery_live_info")])
 
@@ -2684,7 +2692,7 @@ async def open_lottery_from_games(callback: CallbackQuery):
 @router.callback_query(F.data == "lottery_menu")
 async def lottery_menu(callback: CallbackQuery):
     if not ENABLE_LOTTERY:
-        await callback.answer("Лотерея отключена.", show_alert=True)
+        await callback.answer("⛔ Лотерея отключена.", show_alert=True)
         return
     await _send_lottery_menu(callback.message)
     await callback.answer()
@@ -2693,7 +2701,7 @@ async def lottery_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "lottery_buy")
 async def lottery_buy(callback: CallbackQuery):
     if not ENABLE_LOTTERY:
-        await callback.answer("Лотерея отключена.", show_alert=True)
+        await callback.answer("⛔ Лотерея отключена.", show_alert=True)
         return
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
@@ -2715,7 +2723,7 @@ async def lottery_buy(callback: CallbackQuery):
 @router.callback_query(F.data == "lottery_my_tickets")
 async def lottery_my_tickets(callback: CallbackQuery):
     if not ENABLE_LOTTERY:
-        await callback.answer("Лотерея отключена.", show_alert=True)
+        await callback.answer("⛔ Лотерея отключена.", show_alert=True)
         return
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
@@ -2725,7 +2733,7 @@ async def lottery_my_tickets(callback: CallbackQuery):
         round_obj = await get_latest_lottery_round(session)
         tickets = await get_user_lottery_tickets(session, user.id, round_obj.id if round_obj else None, limit=20)
     if not tickets:
-        await callback.message.answer("У вас пока нет билетов в текущем раунде.")
+        await callback.message.answer("😔 У вас пока нет билетов в текущем раунде.")
         await callback.answer()
         return
     text = "📋 <b>Ваши билеты</b>\n\n"
@@ -3031,7 +3039,7 @@ async def promo_my(callback: CallbackQuery):
             .order_by(desc(Promocode.created_at)).limit(10)
         )).scalars().all()
         if not promos:
-            await callback.message.answer("У вас пока нет промокодов.")
+            await callback.message.answer("📭 У вас пока нет промокодов.")
             await callback.answer()
             return
         text = "🎟 <b>Ваши промокоды:</b>\n\n"
@@ -3095,94 +3103,4 @@ async def cmd_selfcheck(message: Message):
     await message.answer(format_selfcheck_report(items))
 
 
-@router.message(F.text == "🎰 Игровые автоматы")
-async def play_slots(message: Message):
-    import asyncio
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        bet = Decimal("10.0")
-        if user.balance < bet:
-            await message.answer("Недостаточно монет для игры (нужно 10 🪙).")
-            return
-        
-        await log_balance_change(session, user, -bet, "slots_bet")
-        user.balance -= bet
-        await session.commit()
-        
-        msg = await message.answer_dice(emoji="🎰")
-        val = msg.dice.value
-        
-        reward = Decimal("0")
-        if val == 64:
-            reward = Decimal("500.0")
-        elif val == 43:
-            reward = Decimal("100.0")
-        elif val == 22:
-            reward = Decimal("50.0")
-        elif val == 1:
-            reward = Decimal("30.0")
-        
-        if reward > 0:
-            await log_balance_change(session, user, reward, "slots_win")
-            user.balance += reward
-            await session.commit()
-            await asyncio.sleep(2)
-            await message.answer(f"🎉 ДЖЕКПОТ! Вы выиграли {reward} 🪙!")
 
-@router.message(F.text == "🏀 Баскетбол")
-async def play_basketball(message: Message):
-    import asyncio
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        bet = Decimal("10.0")
-        if user.balance < bet:
-            await message.answer("Недостаточно монет для игры (нужно 10 🪙).")
-            return
-        
-        await log_balance_change(session, user, -bet, "basketball_bet")
-        user.balance -= bet
-        await session.commit()
-
-        msg = await message.answer_dice(emoji="🏀")
-        val = msg.dice.value
-        
-        reward = Decimal("0")
-        if val >= 4:
-            reward = Decimal("25.0")
-        
-        if reward > 0:
-            await log_balance_change(session, user, reward, "basketball_win")
-            user.balance += reward
-            await session.commit()
-            await asyncio.sleep(2)
-            await message.answer(f"🏀 ГОООЛ! Вы выиграли {reward} 🪙!")
-
-@router.message(F.text == "🎯 Дартс")
-async def play_darts(message: Message):
-    import asyncio
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        bet = Decimal("10.0")
-        if user.balance < bet:
-            await message.answer("Недостаточно монет для игры (нужно 10 🪙).")
-            return
-        
-        await log_balance_change(session, user, -bet, "darts_bet")
-        user.balance -= bet
-        await session.commit()
-
-        msg = await message.answer_dice(emoji="🎯")
-        val = msg.dice.value
-        
-        reward = Decimal("0")
-        if val == 6:
-            reward = Decimal("50.0")
-        elif val == 5:
-            reward = Decimal("20.0")
-        
-        if reward > 0:
-            await log_balance_change(session, user, reward, "darts_win")
-            user.balance += reward
-            await session.commit()
-            await asyncio.sleep(2)
-            await message.answer(f"🎯 Точно в цель! Вы выиграли {reward} 🪙!")

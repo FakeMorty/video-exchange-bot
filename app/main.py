@@ -1,7 +1,6 @@
 import os
 from sqlalchemy import func
 from app.models import Video
-from app.models import LotteryTicket, User
 from sqlalchemy import select
 from alembic import command
 from alembic.config import Config
@@ -127,53 +126,6 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
 
 
 
-async def notify_lottery_started(bot: Bot, session, round_id: int):
-    tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
-    user_ids = list(set(t.user_id for t in tickets))
-    users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
-    
-    msg = f"🎰 <b>Лотерея #{round_id} началась!</b>\n\nЗаходите в Live, чтобы следить за розыгрышем в прямом эфире."
-    import asyncio
-    for u in users:
-        try:
-            await bot.send_message(u.telegram_id, msg)
-        except Exception:
-            pass
-        await asyncio.sleep(0.05)
-
-async def notify_lottery_results(bot: Bot, session, round_id: int):
-    tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
-    user_ids = list(set(t.user_id for t in tickets))
-    users = {u.id: u for u in (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()}
-    
-    # We want to notify everyone who bought a ticket.
-    # We have to figure out if they won based on ticket.matched_count
-    
-    user_results = {}
-    for t in tickets:
-        if t.user_id not in user_results:
-            user_results[t.user_id] = {"won": False, "matched": 0}
-        user_results[t.user_id]["matched"] = max(user_results[t.user_id]["matched"], t.matched_count)
-        if t.reward_paid:
-            user_results[t.user_id]["won"] = True
-
-    import asyncio
-    for uid, data in user_results.items():
-        u = users.get(uid)
-        if not u:
-            continue
-        
-        if data["won"]:
-            msg = f"🎉 <b>Поздравляем!</b> Ваш билет в лотерее #{round_id} оказался выигрышным!\nНаграда зачислена на ваш баланс."
-        else:
-            msg = f"😢 Лотерея #{round_id} завершена. К сожалению, ваш билет не выиграл.\nНе расстраивайтесь, повезет в следующий раз!"
-            
-        try:
-            await bot.send_message(u.telegram_id, msg)
-        except Exception:
-            pass
-        await asyncio.sleep(0.05)
-
 async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
     while not stop_event.is_set():
         try:
@@ -185,7 +137,6 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                     round_obj.status = "drawing"
                     await session.commit()
                     log_info(logger, f"Lottery round #{round_obj.id} moved to drawing")
-                    await notify_lottery_started(bot, session, round_obj.id)
 
                 if round_obj.status == "drawing" and utc_now >= round_obj.draw_ends_at:
                     while round_obj.status == "drawing":
@@ -197,7 +148,6 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                         logger,
                         f"Lottery round #{round_obj.id} settled: {stats}",
                     )
-                    await notify_lottery_results(bot, session, round_obj.id)
         except Exception as e:
             log_info(logger, f"Lottery worker warning: {e}")
 

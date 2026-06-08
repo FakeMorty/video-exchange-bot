@@ -39,6 +39,7 @@ from app.config import (
     SMART_AD_VIDEO_CHANCE,
     OFFER_DAILY_REWARD_CAP,
     LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL, LOTTERY_NUMBERS_PER_TICKET,
+    LOTTERY_DRAW_START_HOUR_UTC, LOTTERY_DRAW_END_HOUR_UTC,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
     ADMINS,
 )
@@ -780,16 +781,16 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> Payme
 # ============================
 async def get_active_offers(session: AsyncSession) -> list["Offer"]:
     return (await session.execute(
-        select(Offer).where(Offer.is_active == True, Offer.status == "approved")
+        select(Offer).where(Offer.is_active, Offer.status == "approved")
     )).scalars().all()
 
 
 async def get_rentable_offers(session: AsyncSession) -> list["Offer"]:
     return (await session.execute(
         select(Offer).where(
-            Offer.is_active == True,
+            Offer.is_active,
             Offer.status == "approved",
-            Offer.is_rentable == True,
+            Offer.is_rentable,
         )
     )).scalars().all()
 
@@ -1116,7 +1117,7 @@ async def get_admin_extended_stats(session: AsyncSession) -> dict:
         select(func.count(User.id)).where(User.vip_until > datetime.utcnow())
     )).scalar_one()
     with_nickname = (await session.execute(
-        select(func.count(User.id)).where(User.nickname_set == True)
+        select(func.count(User.id)).where(User.nickname_set)
     )).scalar_one()
     comments = (await session.execute(select(func.count(Comment.id)))).scalar_one()
     reactions = (await session.execute(select(func.count(ContentReaction.id)))).scalar_one()
@@ -1282,7 +1283,7 @@ async def create_promocode(
         return None, 0, f"Срок от 1 до {PROMOCODE_MAX_HOURS} часов."
 
     star_cost = calculate_promocode_star_cost(coin_amount, max_uses)
-    is_admin = is_admin_or_super(creator_tg_id, user)
+    is_admin_or_super(creator_tg_id, user)
 
     if not admin_free:
         # Проверка VIP (бесплатный промокод раз в месяц)
@@ -1404,10 +1405,8 @@ async def get_recent_feedback(session: AsyncSession, limit: int = 20) -> list[Fe
 # ЛОТЕРЕЯ-ЛОТО
 # ============================
 def _week_key(dt: datetime) -> str:
-    epoch = datetime(1970, 1, 1, 20, 0, 0)
-    delta = dt - epoch
-    cycle_idx = int(delta.total_seconds() // (48 * 3600))
-    return f"c_{cycle_idx}"
+    iso = dt.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
 
 
 def _serialize_numbers(nums: list[int]) -> str:
@@ -1417,7 +1416,10 @@ def _serialize_numbers(nums: list[int]) -> str:
 def _deserialize_numbers(raw: str | None) -> list[int]:
     if not raw:
         return []
-    return [int(x) for x in raw.split(",") if x.strip().isdigit()]
+    try:
+        return [int(x) for x in raw.split(",") if x.strip()]
+    except Exception:
+        return []
 
 
 async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
@@ -1429,13 +1431,11 @@ async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
     if existing:
         return existing
 
-    epoch = datetime(1970, 1, 1, 20, 0, 0)
-    delta = now - epoch
-    cycle_idx = int(delta.total_seconds() // (48 * 3600))
-    cycle_start = epoch + timedelta(hours=cycle_idx * 48)
-    
-    draw_start = cycle_start + timedelta(hours=46)
-    draw_end = cycle_start + timedelta(hours=48)
+    week_start = now - timedelta(days=now.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start + timedelta(days=6, hours=23, minutes=59)
+    draw_start = week_start + timedelta(days=6, hours=LOTTERY_DRAW_START_HOUR_UTC)
+    draw_end = week_start + timedelta(days=6, hours=LOTTERY_DRAW_END_HOUR_UTC)
     if draw_end <= draw_start:
         draw_end = draw_start + timedelta(hours=2)
 
@@ -1447,7 +1447,7 @@ async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
         numbers_per_ticket=max(3, LOTTERY_NUMBERS_PER_TICKET),
         drawn_numbers="",
         prize_pool=Decimal("0"),
-        starts_at=cycle_start,
+        starts_at=week_start,
         draw_starts_at=draw_start,
         draw_ends_at=draw_end,
     )
@@ -1656,7 +1656,7 @@ async def mark_low_balance_hint_shown(session: AsyncSession, user_id: int) -> No
 async def get_random_active_offer(session: AsyncSession) -> "Offer | None":
     return (await session.execute(
         select(Offer).where(
-            Offer.is_active == True, Offer.status == "approved",
+            Offer.is_active, Offer.status == "approved",
         ).order_by(func.random()).limit(1)
     )).scalar_one_or_none()
 
