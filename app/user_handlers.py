@@ -103,13 +103,23 @@ _upload_notifications = defaultdict(lambda: {"count": 0, "task": None})
 async def _send_upload_notification(bot, chat_id, user_id):
     await asyncio.sleep(2.0)
     data = _upload_notifications[user_id]
-    count = data["count"]
+    count = data.get("count", 0)
+    dup = data.get("dup_count", 0)
+    
+    msg = ""
     if count > 0:
+        msg += f"✅ Отправлено на модерацию: <b>{count}</b> файлов!\n"
+    if dup > 0:
+        msg += f"⚠️ Пропущено дубликатов: <b>{dup}</b>."
+        
+    if msg:
         try:
-            await bot.send_message(chat_id, f"✅ Успешно отправлено на модерацию: <b>{count}</b> файлов!", parse_mode="HTML")
+            await bot.send_message(chat_id, msg.strip(), parse_mode="HTML")
         except Exception:
             pass
-    del _upload_notifications[user_id]
+            
+    if user_id in _upload_notifications:
+        del _upload_notifications[user_id]
 _offer_action_last_ts: dict[tuple[int, str], datetime] = {}
 _promo_activate_last_ts: dict[int, datetime] = {}
 
@@ -1122,15 +1132,21 @@ async def handle_photo_upload(message: Message):
         )
 
         if is_duplicate:
-            await message.answer(
-                "⚠️ Это фото уже есть в базе и не может быть загружено повторно."
-            )
+            data = _upload_notifications[user.id]
+            # Initialize safely
+            if "dup_count" not in data:
+                data["dup_count"] = 0
+            data["dup_count"] += 1
+            if data["task"] is None or data["task"].done():
+                data["task"] = asyncio.create_task(_send_upload_notification(message.bot, message.chat.id, user.id))
             return
 
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
         data = _upload_notifications[user.id]
+        if "count" not in data:
+            data["count"] = 0
         data["count"] += 1
         if data["task"] is None or data["task"].done():
             data["task"] = asyncio.create_task(_send_upload_notification(message.bot, message.chat.id, user.id))
