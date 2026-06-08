@@ -530,8 +530,14 @@ async def sextok_page_handler(request: web.Request) -> web.Response:
         try {
             document.getElementById('feed').innerHTML = '<div style="color:yellow; text-align:center; padding-top: 50vh;">Fetching API...</div>';
             
-            // Build absolute URL based on current origin to prevent mixed content / routing issues
-            const api_url = window.location.origin + '/api/sextok/feed';
+            let host = window.location.origin;
+            if (host === "null" || host === "about:blank" || !host.startsWith("http")) {
+                host = window.location.href.split('/').slice(0, 3).join('/');
+            }
+            const api_url = host + '/api/sextok/feed';
+            
+            document.getElementById('feed').innerHTML = '<div style="color:yellow; text-align:center; padding-top: 50vh;">Fetching: ' + api_url + '</div>';
+            
             const res = await fetch(api_url);
             
             document.getElementById('feed').innerHTML = '<div style="color:yellow; text-align:center; padding-top: 50vh;">Reading Response...</div>';

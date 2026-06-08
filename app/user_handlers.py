@@ -3045,6 +3045,29 @@ async def cmd_health(message: Message):
 
 
 @router.message(Command("selfcheck"))
+
+@router.message(Command("version"))
+async def cmd_version(message: Message):
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not is_admin_or_super(message.from_user.id, user):
+            return
+            
+    version = "1.2.0"
+    changes = (
+        "🔥 <b>Версия:</b> " + version + "\n\n"
+        "<b>Последние изменения:</b>\n"
+        "• SexTok: Absolute URL Fetching & Debug logs\n"
+        "• SexTok: CORS headers injected\n"
+        "• Quests: Перевод на русский\n"
+        "• Games: Слоты, Дартс, Баскетбол\n"
+        "• Economy: x10 Scale & Fixes\n"
+        "• Core: AsyncPG 0.30 & Greenlet"
+    )
+    await message.answer(changes, parse_mode="HTML")
+
+
+@router.message(Command("selfcheck"))
 async def cmd_selfcheck(message: Message):
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
