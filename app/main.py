@@ -436,15 +436,19 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
 
 
 async def api_sextok_feed(request: web.Request) -> web.Response:
-    async with async_session() as session:
-        # Fetch up to 10 random approved videos
-        videos = (await session.execute(
-            select(Video).where(Video.status == "approved")
-            .order_by(func.random()).limit(10)
-        )).scalars().all()
-        
-        data = [{"id": v.id, "author": v.uploader_user_id} for v in videos]
-        return web.json_response({"videos": data})
+    try:
+        async with async_session() as session:
+            videos = (await session.execute(
+                select(Video).where(Video.status == "approved")
+                .order_by(func.random()).limit(10)
+            )).scalars().all()
+            
+            data = [{"id": v.id, "author": v.uploader_user_id} for v in videos]
+            headers = {"Access-Control-Allow-Origin": "*"}
+            return web.json_response({"videos": data}, headers=headers)
+    except Exception as e:
+        import traceback
+        return web.json_response({"error": str(e), "trace": traceback.format_exc()}, status=500)
 
 async def api_video_stream(request: web.Request) -> web.Response:
     video_id = request.match_info.get("id")
@@ -525,7 +529,19 @@ async def sextok_page_handler(request: web.Request) -> web.Response:
      async function loadFeed() {
         try {
             const res = await fetch('/api/sextok/feed');
-            const data = await res.json();
+            const textRaw = await res.text();
+            let data;
+            try {
+                data = JSON.parse(textRaw);
+            } catch(e) {
+                document.getElementById('feed').innerHTML = '<div style="color:red; padding: 20px;">Parse error: ' + e.message + '<br><br>' + textRaw + '</div>';
+                return;
+            }
+            
+            if(data.error) {
+                document.getElementById('feed').innerHTML = '<div style="color:red; padding: 20px;">Server error: ' + data.error + '</div>';
+                return;
+            }
             const feed = document.getElementById('feed');
             feed.innerHTML = ''; // clear loading
             
