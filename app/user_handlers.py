@@ -337,7 +337,6 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     await state.clear()
     args = (command.args or "").strip()
 
-    # Если передан промокод (query начинается с promo_)
     if args.startswith("promo_"):
         promo_code = args.replace("promo_", "")
         async with async_session() as session:
@@ -370,6 +369,48 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                     caption="🤖 <b>Проверка на робота!</b>\n\nПожалуйста, введите код с картинки, чтобы продолжить:"
                 )
                 return
+            admin_flag = is_any_admin(message.from_user.id, user)
+            vip_str = " 👑" if is_vip(user) else ""
+            await message.answer(
+                f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
+                f"💰 Баланс: <b>{user.balance}</b> монет",
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+            return
+
+    referral_code = args if args else None
+    async with async_session() as session:
+        user, is_new = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.username,
+            message.from_user.first_name,
+            message.from_user.last_name,
+            referral_code,
+        )
+        if user.status == "banned":
+            await message.answer("🚫 Вы заблокированы в боте.")
+            return
+
+        if not user.agreed_to_rules:
+            from captcha.image import ImageCaptcha
+            import string
+            import random
+            
+            image = ImageCaptcha(width=280, height=90)
+            captcha_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+            data = image.generate(captcha_text)
+            
+            await state.update_data(captcha_text=captcha_text)
+            await state.set_state(CaptchaState.waiting_for_text)
+            
+            photo = BufferedInputFile(data.getvalue(), filename="captcha.png")
+            await message.answer_photo(
+                photo=photo,
+                caption="🤖 <b>Проверка на робота!</b>\n\nПожалуйста, введите код с картинки, чтобы продолжить:"
+            )
+            return
 
         if not user.nickname_set or not user.display_name:
             kb = InlineKeyboardMarkup(inline_keyboard=[
