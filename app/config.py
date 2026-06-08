@@ -64,7 +64,6 @@ STARTING_BALANCE = _get_float("STARTING_BALANCE", 150.0)
 
 # Просмотр видео: зритель ПЛАТИТ
 WATCH_COST = _get_float("WATCH_COST", 15.0)
-AUTHOR_VIEW_REWARD = _get_float("AUTHOR_VIEW_REWARD", 10.0)
 
 # Награда автору за загрузку (скромная, чтобы не фармили)
 UPLOAD_REWARD = _get_float("UPLOAD_REWARD", 30.0)

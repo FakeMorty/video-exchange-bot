@@ -15,7 +15,7 @@ from app.models import (
     LootboxOpen,
 )
 from app.config import (
-    STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD, AUTHOR_VIEW_REWARD,
+    STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
     REFERRAL_REWARD_INVITER, STARS_PACKAGES, STARS_TO_COINS_RATE,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
@@ -39,7 +39,6 @@ from app.config import (
     SMART_AD_VIDEO_CHANCE,
     OFFER_DAILY_REWARD_CAP,
     LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL, LOTTERY_NUMBERS_PER_TICKET,
-    LOTTERY_DRAW_START_HOUR_UTC, LOTTERY_DRAW_END_HOUR_UTC,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
     ADMINS,
 )
@@ -477,15 +476,6 @@ async def record_view_and_charge_with_cost(
     await log_balance_change(session, user, -cost, "watch", source_id=video_id)
     user.balance -= cost
     session.add(VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.utcnow()))
-
-    video = await session.get(Video, video_id)
-    if video:
-        uploader = await get_user_by_id(session, video.uploader_user_id)
-        if uploader:
-            author_reward = to_decimal(AUTHOR_VIEW_REWARD)
-            uploader.balance += author_reward
-            await log_balance_change(session, uploader, author_reward, "video_viewed_by_other", source_id=video_id)
-
     await session.commit()
     return True
 
