@@ -98,7 +98,44 @@ OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.
 # ============================
 # ЛИМИТЫ
 # ============================
+
+# ============================
+# WATERMARK (ВОДЯНОЙ ЗНАК)
+# ============================
+ENABLE_WATERMARK = True
+WATERMARK_TEXT = "@Wseksbot"
+
+# ============================
+# ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
+# ============================
+REFERRAL_MILESTONES = {
+    3: {"type": "coins", "amount": 100.0, "desc": "100 монет"},
+    5: {"type": "lootbox", "amount": 1, "desc": "1 Лутбокс"},
+    10: {"type": "coins", "amount": 300.0, "desc": "300 монет"},
+    15: {"type": "lootbox", "amount": 3, "desc": "3 Лутбокса"},
+    20: {"type": "vip", "amount": 7, "desc": "VIP на 7 дней"},
+}
+
 DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
+# ============================
+# WATERMARK (ВОДЯНОЙ ЗНАК)
+# ============================
+ENABLE_WATERMARK = True
+WATERMARK_TEXT = "@Wseksbot"
+
+# ============================
+# ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
+# ============================
+REFERRAL_MILESTONES = {
+    3: {"type": "coins", "amount": 100.0, "desc": "100 монет"},
+    5: {"type": "lootbox", "amount": 1, "desc": "1 Лутбокс"},
+    10: {"type": "coins", "amount": 300.0, "desc": "300 монет"},
+    15: {"type": "lootbox", "amount": 3, "desc": "3 Лутбокса"},
+    20: {"type": "vip", "amount": 7, "desc": "VIP на 7 дней"},
+}
+
+DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
+
 
 # Бесплатные игры
 FREE_GAMES_PER_SESSION = 5

@@ -42,6 +42,7 @@ from app.config import (
     ENABLE_LOTTERY,
     WEBHOOK_BASE,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
+    ENABLE_WATERMARK, WATERMARK_TEXT,
 )
 from app.db import async_session
 from app.models import (
@@ -985,6 +986,79 @@ async def btn_upload(message: Message):
     )
 
 
+async def _process_watermark(bot, video_obj, msg: Message):
+    import os
+    import asyncio
+    from aiogram.types import FSInputFile
+    from app.services import save_video, get_user
+    from app.db import async_session
+    
+    # Send processing message
+    info_msg = await msg.answer("⏳ Накладываем водяной знак... (Это может занять минуту)")
+    
+    cache_dir = "video_cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    input_path = os.path.join(cache_dir, f"in_{video_obj.file_unique_id}.mp4")
+    output_path = os.path.join(cache_dir, f"out_{video_obj.file_unique_id}.mp4")
+    
+    try:
+        # Download
+        tg_file = await bot.get_file(video_obj.file_id)
+        await bot.download_file(tg_file.file_path, input_path)
+        
+        # FFmpeg
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-vf", f"drawtext=text='{WATERMARK_TEXT}':x=W-tw-20:y=H-th-20:fontsize=48:fontcolor=white@0.7:shadowcolor=black@0.5:shadowx=2:shadowy=2",
+            "-c:v", "libx264", "-crf", "28", "-preset", "ultrafast",
+            "-c:a", "copy",
+            output_path
+        ]
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await proc.communicate()
+        
+        if proc.returncode == 0:
+            # Upload back to telegram privately (to get new file_id)
+            # Send to Log Chat or Admin to just get file_id? We can just send to the user and delete.
+            # But the user might be confused. Let's send to LOG_CHAT_ID.
+            from app.config import LOG_CHAT_ID
+            chat_to_send = LOG_CHAT_ID if LOG_CHAT_ID else msg.from_user.id
+            
+            sent_msg = await bot.send_video(chat_to_send, FSInputFile(output_path), disable_notification=True)
+            new_file_id = sent_msg.video.file_id
+            new_file_unique_id = sent_msg.video.file_unique_id
+            
+            # Delete if it was sent to user
+            if not LOG_CHAT_ID:
+                await bot.delete_message(chat_to_send, sent_msg.message_id)
+                
+            # Now save to DB
+            async with async_session() as session:
+                user = await get_user(session, msg.from_user.id)
+                saved, is_dup = await save_video(
+                    session, user.id,
+                    new_file_id, new_file_unique_id,
+                    video_obj.duration, os.path.getsize(output_path)
+                )
+                if is_dup:
+                    await msg.answer("⚠️ Это видео уже есть в базе.")
+                    await info_msg.delete()
+                    return
+                    
+                user.xp += 20  # XP_PER_UPLOAD
+                await session.commit()
+                await msg.answer(f"✅ Видео #{saved.id} (с водяным знаком) отправлено на модерацию!")
+        else:
+            await msg.answer("❌ Ошибка при наложении водяного знака.")
+            
+    except Exception as e:
+        await msg.answer(f"❌ Системная ошибка: {e}")
+    finally:
+        await info_msg.delete()
+        if os.path.exists(input_path): os.remove(input_path)
+        if os.path.exists(output_path): os.remove(output_path)
+
+
 @router.message(F.video)
 async def handle_video_upload(message: Message):
     async with async_session() as session:
@@ -998,7 +1072,16 @@ async def handle_video_upload(message: Message):
             await require_nickname(message, user)
             return
 
-        v = message.video
+    v = message.video
+    if ENABLE_WATERMARK and v.file_size and v.file_size < 20 * 1024 * 1024:
+        # File is under 20MB, we can process it!
+        import asyncio
+        asyncio.create_task(_process_watermark(message.bot, v, message))
+        return
+        
+    # Standard logic without watermark
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
         saved, is_duplicate = await save_video(
             session, user.id,
             v.file_id, v.file_unique_id,
@@ -1006,12 +1089,10 @@ async def handle_video_upload(message: Message):
         )
 
         if is_duplicate:
-            await message.answer(
-                "⚠️ Это видео уже есть в базе и не может быть загружено повторно."
-            )
+            await message.answer("⚠️ Это видео уже есть в базе и не может быть загружено повторно.")
             return
 
-        user.xp += XP_PER_UPLOAD
+        user.xp += 20
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
         data = _upload_notifications[user.id]

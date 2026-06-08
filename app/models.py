@@ -33,6 +33,8 @@ class User(Base):
         ForeignKey("users.id"), nullable=True
     )
     referral_earnings: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    referrals_count: Mapped[int] = mapped_column(Integer, default=0)
+    referral_milestone_level: Mapped[int] = mapped_column(Integer, default=0)
     last_bonus_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     bonus_streak: Mapped[int] = mapped_column(Integer, default=0)
     xp: Mapped[int] = mapped_column(Integer, default=0)
