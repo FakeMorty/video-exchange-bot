@@ -1,5 +1,4 @@
 import os
-import logging
 from pathlib import Path
 from datetime import datetime
 
@@ -9,7 +8,7 @@ from reportlab.pdfgen import canvas
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.logger import setup_logging, get_logger, log_info, log_warning, log_exception
+from app.logger import setup_logging, get_logger, log_exception
 from pathlib import Path
 
 

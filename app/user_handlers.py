@@ -1,9 +1,7 @@
-import re
 import uuid
 import asyncio
 import random
 from datetime import datetime, timedelta
-from decimal import Decimal
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
@@ -21,19 +19,16 @@ from app.config import (
     ADMINS, WATCH_COST, STARS_PACKAGES, STARS_TO_COINS_RATE,
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
-    PIN_OFFER_COST, VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER,
+    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER,
     LEVEL_XP_BASE, LEVEL_XP_MULTIPLIER,
     DAILY_QUESTS, PREMIUM_DAILY_QUESTS,
     COMMENTS_PER_10_MIN,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
-    OFFER_DEFAULT_RENT_COST_PER_DAY, OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
+    OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, SMART_AD_FORCED_WATCH_SECONDS,
     DAILY_PHOTO_LIMIT,
-    FREE_GAMES_PER_SESSION, GAME_SESSION_HOURS, GAME_SESSION_COST,
+    GAME_SESSION_COST,
     PROMOCODE_CREATION_STAR_RATE,
-    PROMOCODE_BULK_DISCOUNT_THRESHOLD,
-    PROMOCODE_BULK_DISCOUNT_RATE,
-    PROMOCODE_CREATOR_BONUS_PERCENT,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
     DYNAMIC_STAR_DISCOUNT_ENABLED,
@@ -57,7 +52,7 @@ from app.services import (
     get_or_create_user, get_user, get_user_by_id,
     save_video, save_photo,
     get_random_video_for_user, get_random_photo_for_user,
-    record_view_and_charge, record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
+    record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
     record_photo_view,
     rate_video, claim_daily_bonus, count_referrals,
     create_payment, create_custom_payment, apply_successful_payment,
@@ -80,7 +75,6 @@ from app.services import (
     should_show_low_balance_hint, mark_low_balance_hint_shown,
     can_show_offer_to_user, mark_offer_shown,
     get_random_active_offer, should_inject_ad_in_video,
-    process_referral_reward,
     open_lootbox_for_coins, open_lootbox_for_stars,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
@@ -88,8 +82,7 @@ from app.keyboards import (
     rules_keyboard, main_menu,
     video_rating_keyboard, photo_actions_keyboard,
     watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard,
-    offers_list_keyboard, offer_view_keyboard,
-    offer_rent_keyboard, rent_days_keyboard,
+    offers_list_keyboard, rent_days_keyboard,
     games_menu_keyboard, tops_menu_keyboard,
     quests_keyboard, reaction_menu_keyboard,
     low_balance_offer_keyboard, forced_offer_keyboard,
@@ -98,7 +91,6 @@ from app.keyboards import (
     BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY,
-    BTN_LOOTBOXES,
 )
 from app.logger import get_logger
 
@@ -663,7 +655,7 @@ async def watch_video_content(callback: CallbackQuery):
                         try:
                             await bot.send_message(
                                 chat_id,
-                                f"✅ Спасибо за просмотр! Теперь можно продолжить.",
+                                "✅ Спасибо за просмотр! Теперь можно продолжить.",
                                 reply_markup=forced_offer_done_keyboard(o_id)
                             )
                         except Exception:
@@ -2553,7 +2545,7 @@ async def _update_quest_progress(
 @router.callback_query(F.data == "forced_offer_wait")
 async def forced_offer_wait(callback: CallbackQuery):
     await callback.answer(
-        f"⏳ Подождите ещё немного...",
+        "⏳ Подождите ещё немного...",
         show_alert=False
     )
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from io import BytesIO
 import os
@@ -19,7 +19,7 @@ from app.db import async_session
 from app.models import (
     Base,
     User, Video, Offer, BalanceLog, GameHistory,
-    UserActionLog, OfferRental, OfferParticipation
+    OfferRental, OfferParticipation
     , TrustedUploader
 )
 from app.services import (
@@ -27,7 +27,7 @@ from app.services import (
     get_user_dossier, update_user_balance, set_user_ban_status,
     count_pending_videos, count_approved_videos, count_rejected_videos,
     get_next_pending_video, approve_video, reject_video,
-    get_admin_extended_stats, to_decimal, get_display_name,
+    get_admin_extended_stats, get_display_name,
     get_user_by_display_name, admin_create_offer,
     count_active_rentals, expire_old_rentals, log_user_action,
     get_recent_feedback,

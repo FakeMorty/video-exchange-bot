@@ -2,7 +2,6 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from app.config import DATABASE_URL
 from app.models import Base
 # ПРИНУДИТЕЛЬНЫЙ ИМПОРТ МОДЕЛЕЙ для регистрации в Base.metadata
-import app.models
 
 def _fix_url(url: str) -> str:
     if not url:
@@ -19,11 +18,6 @@ if "postgresql" in DATABASE_URL:
     connect_args = {"ssl": "require"}
 
 engine = create_async_engine(
-    _fix_url(DATABASE_URL),
-    echo=False,
-    connect_args={"ssl": "require"},
-    pool_pre_ping=True
-)
     _fix_url(DATABASE_URL),
     echo=False,
     connect_args=connect_args,

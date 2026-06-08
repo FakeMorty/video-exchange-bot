@@ -272,7 +272,7 @@ def reaction_menu_keyboard(video_id: int) -> InlineKeyboardMarkup:
 def forced_offer_keyboard(offer_id: int, channel_url: str, seconds: int = 5) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"📢 Перейти в канал (реклама)",
+            text="📢 Перейти в канал (реклама)",
             url=channel_url
         )],
         [InlineKeyboardButton(
