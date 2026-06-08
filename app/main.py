@@ -133,11 +133,13 @@ async def notify_lottery_started(bot: Bot, session, round_id: int):
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
     
     msg = f"🎰 <b>Лотерея #{round_id} началась!</b>\n\nЗаходите в Live, чтобы следить за розыгрышем в прямом эфире."
+    import asyncio
     for u in users:
         try:
             await bot.send_message(u.telegram_id, msg)
         except Exception:
             pass
+        await asyncio.sleep(0.05)
 
 async def notify_lottery_results(bot: Bot, session, round_id: int):
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
@@ -155,6 +157,7 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
         if t.reward_paid:
             user_results[t.user_id]["won"] = True
 
+    import asyncio
     for uid, data in user_results.items():
         u = users.get(uid)
         if not u:
@@ -169,6 +172,7 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
             await bot.send_message(u.telegram_id, msg)
         except Exception:
             pass
+        await asyncio.sleep(0.05)
 
 async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
     while not stop_event.is_set():

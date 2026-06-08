@@ -3081,6 +3081,7 @@ async def cmd_selfcheck(message: Message):
 @router.message(F.text == "🎰 Игровые автоматы")
 async def play_slots(message: Message):
     from decimal import Decimal
+    import asyncio
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         bet = Decimal("10.0")
@@ -3088,6 +3089,7 @@ async def play_slots(message: Message):
             await message.answer("Недостаточно монет для игры (нужно 10 🪙).")
             return
         
+        await log_balance_change(session, user, -bet, "slots_bet")
         user.balance -= bet
         await session.commit()
         
@@ -3105,19 +3107,16 @@ async def play_slots(message: Message):
             reward = Decimal("30.0")
         
         if reward > 0:
-            user.balance += reward
             await log_balance_change(session, user, reward, "slots_win")
+            user.balance += reward
             await session.commit()
-            import asyncio
             await asyncio.sleep(2)
             await message.answer(f"🎉 ДЖЕКПОТ! Вы выиграли {reward} 🪙!")
-        else:
-            await log_balance_change(session, user, -bet, "slots_loss")
-            await session.commit()
 
 @router.message(F.text == "🏀 Баскетбол")
 async def play_basketball(message: Message):
     from decimal import Decimal
+    import asyncio
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         bet = Decimal("10.0")
@@ -3125,7 +3124,10 @@ async def play_basketball(message: Message):
             await message.answer("Недостаточно монет для игры (нужно 10 🪙).")
             return
         
+        await log_balance_change(session, user, -bet, "basketball_bet")
         user.balance -= bet
+        await session.commit()
+
         msg = await message.answer_dice(emoji="🏀")
         val = msg.dice.value
         
@@ -3134,19 +3136,16 @@ async def play_basketball(message: Message):
             reward = Decimal("25.0")
         
         if reward > 0:
-            user.balance += reward
             await log_balance_change(session, user, reward, "basketball_win")
+            user.balance += reward
             await session.commit()
-            import asyncio
             await asyncio.sleep(2)
             await message.answer(f"🏀 ГОООЛ! Вы выиграли {reward} 🪙!")
-        else:
-            await log_balance_change(session, user, -bet, "basketball_loss")
-            await session.commit()
 
 @router.message(F.text == "🎯 Дартс")
 async def play_darts(message: Message):
     from decimal import Decimal
+    import asyncio
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         bet = Decimal("10.0")
@@ -3154,7 +3153,10 @@ async def play_darts(message: Message):
             await message.answer("Недостаточно монет для игры (нужно 10 🪙).")
             return
         
+        await log_balance_change(session, user, -bet, "darts_bet")
         user.balance -= bet
+        await session.commit()
+
         msg = await message.answer_dice(emoji="🎯")
         val = msg.dice.value
         
@@ -3165,12 +3167,8 @@ async def play_darts(message: Message):
             reward = Decimal("20.0")
         
         if reward > 0:
-            user.balance += reward
             await log_balance_change(session, user, reward, "darts_win")
+            user.balance += reward
             await session.commit()
-            import asyncio
             await asyncio.sleep(2)
             await message.answer(f"🎯 Точно в цель! Вы выиграли {reward} 🪙!")
-        else:
-            await log_balance_change(session, user, -bet, "darts_loss")
-            await session.commit()

@@ -1060,6 +1060,7 @@ async def admin_approve_all(callback: CallbackQuery):
                 errors += 1
                 break
 
+    import asyncio
     for tg_id, approved_count in uploader_notifications.items():
         try:
             await callback.bot.send_message(
@@ -1068,6 +1069,7 @@ async def admin_approve_all(callback: CallbackQuery):
             )
         except Exception:
             pass
+        await asyncio.sleep(0.05)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀ В меню", callback_data="admin_center")]
