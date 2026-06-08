@@ -475,7 +475,10 @@ async def api_video_stream(request: web.Request) -> web.Response:
         except Exception as e:
             return web.Response(status=500, text=str(e))
             
-    return web.FileResponse(file_path_local)
+    response = web.FileResponse(file_path_local)
+    response.content_type = 'video/mp4'
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 async def sextok_page_handler(request: web.Request) -> web.Response:
     html = """
@@ -567,7 +570,7 @@ async def sextok_page_handler(request: web.Request) -> web.Response:
                 container.className = 'video-container';
                 container.innerHTML = `
                     <div class="loading">Загрузка видео...</div>
-                    <video src="/api/video/${v.id}" loop playsinline preload="metadata" muted></video>
+                    <video src="/api/video/${v.id}" loop playsinline preload="auto" muted crossOrigin="anonymous" style="background:transparent;"></video>
                     <div class="mute-btn" onclick="toggleMute(event)">🔇</div>
                     <div class="overlay">
                         <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('Функция лайков в разработке!')">❤️</div>
