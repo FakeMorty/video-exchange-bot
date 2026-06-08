@@ -354,22 +354,22 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             await message.answer(result)
             if not user.agreed_to_rules:
                 from captcha.image import ImageCaptcha
-            import string
-            import random
-            
-            image = ImageCaptcha(width=280, height=90)
-            captcha_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
-            data = image.generate(captcha_text)
-            
-            await state.update_data(captcha_text=captcha_text)
-            await state.set_state(CaptchaState.waiting_for_text)
-            
-            photo = BufferedInputFile(data.getvalue(), filename="captcha.png")
-            await message.answer_photo(
-                photo=photo,
-                caption="🤖 <b>Проверка на робота!</b>\n\nПожалуйста, введите код с картинки, чтобы продолжить:"
-            )
-            return
+                import string
+                import random
+                
+                image = ImageCaptcha(width=280, height=90)
+                captcha_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+                data = image.generate(captcha_text)
+                
+                await state.update_data(captcha_text=captcha_text)
+                await state.set_state(CaptchaState.waiting_for_text)
+                
+                photo = BufferedInputFile(data.getvalue(), filename="captcha.png")
+                await message.answer_photo(
+                    photo=photo,
+                    caption="🤖 <b>Проверка на робота!</b>\n\nПожалуйста, введите код с картинки, чтобы продолжить:"
+                )
+                return
 
         if not user.nickname_set or not user.display_name:
             kb = InlineKeyboardMarkup(inline_keyboard=[
