@@ -1,3 +1,4 @@
+import random
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     KeyboardButton, ReplyKeyboardMarkup
@@ -216,14 +217,7 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
 
-def telegram_games_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎰 Игровые автоматы"), KeyboardButton(text="🏀 Баскетбол")],
-            [KeyboardButton(text="🎯 Дартс"), KeyboardButton(text="⬅️ Назад")]
-        ],
-        resize_keyboard=True
-    )
+
 
 def telegram_games_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(

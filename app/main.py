@@ -430,6 +430,71 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+
+async def sextok_page_handler(request: web.Request) -> web.Response:
+    html = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SexTok</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body {
+      margin: 0; padding: 0; background-color: #000; color: #fff;
+      font-family: -apple-system, sans-serif; overflow: hidden;
+    }
+    .video-container {
+      width: 100vw; height: 100vh;
+      display: flex; justify-content: center; align-items: center;
+      position: relative;
+    }
+    .placeholder {
+      text-align: center; font-size: 24px; font-weight: bold; color: #666;
+    }
+    .overlay {
+      position: absolute; bottom: 50px; right: 20px;
+      display: flex; flex-direction: column; gap: 20px;
+    }
+    .btn {
+      width: 50px; height: 50px; border-radius: 50%;
+      background: rgba(255, 255, 255, 0.2);
+      display: flex; justify-content: center; align-items: center;
+      font-size: 24px; cursor: pointer;
+    }
+    .btn:active { background: rgba(255, 255, 255, 0.4); }
+  </style>
+</head>
+<body>
+  <div class="video-container" id="vc">
+    <div class="placeholder">Swipe Up / Down<br><span style="font-size:14px">Coming Soon...</span></div>
+    <div class="overlay">
+      <div class="btn">❤️</div>
+      <div class="btn">💸</div>
+      <div class="btn">⏭</div>
+    </div>
+  </div>
+  <script>
+    window.Telegram.WebApp.ready();
+    window.Telegram.WebApp.expand();
+    
+    // Add simple swipe detection just for UI feedback
+    let startY = 0;
+    document.addEventListener('touchstart', e => startY = e.touches[0].clientY);
+    document.addEventListener('touchend', e => {
+        let endY = e.changedTouches[0].clientY;
+        if(startY - endY > 50) {
+            window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+            document.querySelector('.placeholder').innerHTML = "Loading Next Video...<br><span style='font-size:14px'>API Integration Required</span>";
+        }
+    });
+  </script>
+</body>
+</html>
+"""
+    return web.Response(text=html, content_type="text/html")
+
 async def handle_health_check(request):
     """Handler for Render health checks"""
     return web.Response(text="Bot is running", status=200)
@@ -476,6 +541,7 @@ async def main():
     app['bot'] = bot
     app.on_startup.append(on_startup)
     app.router.add_get("/", handle_health_check)
+    app.router.add_get("/sextok", sextok_page_handler)
     app.router.add_get("/lottery/state", lottery_state_handler)
     app.router.add_post("/lottery/draw-next", lottery_draw_next_handler)
     app.router.add_get("/lottery/live", lottery_live_page_handler)

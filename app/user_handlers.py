@@ -587,6 +587,7 @@ async def buy_vip(callback: CallbackQuery):
 # =========================
 @router.message(F.text == BTN_WATCH)
 async def btn_watch(message: Message):
+    from app.services import is_admin_or_super
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -596,7 +597,8 @@ async def btn_watch(message: Message):
             return
         if not await require_nickname(message, user):
             return
-    await message.answer("Что смотреть?", reply_markup=watch_choice_keyboard())
+        admin_flag = is_admin_or_super(message.from_user.id, user)
+    await message.answer("Что смотреть?", reply_markup=watch_choice_keyboard(is_admin=admin_flag))
 
 
 @router.callback_query(F.data == "watch_video_content")
@@ -1724,7 +1726,7 @@ async def offers_rent_list(callback: CallbackQuery):
 @router.callback_query(F.data == "btn_offers_back")
 async def btn_offers_back(callback: CallbackQuery):
     async with async_session() as session:
-        offers = await get_active_offers(session)
+        await get_active_offers(session)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📢 Офферы (участие)",
@@ -2529,7 +2531,7 @@ async def _update_quest_progress(
             DailyQuestProgress.user_id == user_id,
             DailyQuestProgress.quest_type == quest_type,
             DailyQuestProgress.quest_date == today,
-            DailyQuestProgress.completed == False
+            not DailyQuestProgress.completed
         )
     )).scalars().all()
 

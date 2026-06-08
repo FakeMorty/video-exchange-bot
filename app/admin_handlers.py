@@ -1041,6 +1041,7 @@ async def admin_approve_all(callback: CallbackQuery):
     count = 0
     errors = 0
     # Каждый approve в отдельной сессии чтобы избежать stale data
+    uploader_notifications = {}
     for _ in range(200):  # защита от бесконечного цикла
         async with async_session() as session:
             video = await get_next_pending_video(session)
@@ -1050,21 +1051,23 @@ async def admin_approve_all(callback: CallbackQuery):
                 result = await approve_video(session, video.id)
                 if result:
                     count += 1
-                    # Уведомляем загрузчика
                     uploader = await get_user_by_id(session, video.uploader_user_id)
                     if uploader:
-                        try:
-                            await callback.bot.send_message(
-                                uploader.telegram_id,
-                                f"✅ Ваше видео #{video.id} одобрено! Монеты начислены."
-                            )
-                        except Exception:
-                            pass
+                        uploader_notifications[uploader.telegram_id] = uploader_notifications.get(uploader.telegram_id, 0) + 1
                 else:
                     break
             except Exception:
                 errors += 1
                 break
+
+    for tg_id, approved_count in uploader_notifications.items():
+        try:
+            await callback.bot.send_message(
+                tg_id,
+                f"✅ Одобрено {approved_count} ваших видео/фото! Монеты начислены."
+            )
+        except Exception:
+            pass
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀ В меню", callback_data="admin_center")]
