@@ -1,7 +1,9 @@
 import uuid
-import asyncio
 import random
+import asyncio
 from datetime import datetime, timedelta
+from collections import defaultdict
+from decimal import Decimal
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
@@ -11,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, CallbackQuery,
     LabeledPrice, PreCheckoutQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
 from sqlalchemy import select, func, desc
 
@@ -82,7 +84,7 @@ from app.keyboards import (
     video_rating_keyboard, photo_actions_keyboard,
     watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard,
     offers_list_keyboard, rent_days_keyboard,
-    games_menu_keyboard, tops_menu_keyboard,
+    telegram_games_keyboard, games_menu_keyboard, tops_menu_keyboard,
     quests_keyboard, reaction_menu_keyboard,
     low_balance_offer_keyboard, forced_offer_keyboard,
     forced_offer_done_keyboard,
@@ -95,6 +97,19 @@ from app.logger import get_logger
 
 logger = get_logger(__name__)
 router = Router()
+
+_upload_notifications = defaultdict(lambda: {"count": 0, "task": None})
+
+async def _send_upload_notification(bot, chat_id, user_id):
+    await asyncio.sleep(2.0)
+    data = _upload_notifications[user_id]
+    count = data["count"]
+    if count > 0:
+        try:
+            await bot.send_message(chat_id, f"✅ Успешно отправлено на модерацию: <b>{count}</b> файлов!", parse_mode="HTML")
+        except Exception:
+            pass
+    del _upload_notifications[user_id]
 _offer_action_last_ts: dict[tuple[int, str], datetime] = {}
 _promo_activate_last_ts: dict[int, datetime] = {}
 
@@ -1000,9 +1015,10 @@ async def handle_video_upload(message: Message):
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
-        await message.answer(
-            f"✅ Видео #{saved.id} отправлено на модерацию!"
-        )
+        data = _upload_notifications[user.id]
+        data["count"] += 1
+        if data["task"] is None or data["task"].done():
+            data["task"] = asyncio.create_task(_send_upload_notification(message.bot, message.chat.id, user.id))
 
 
 @router.message(F.photo)
@@ -1034,9 +1050,10 @@ async def handle_photo_upload(message: Message):
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
-        await message.answer(
-            f"✅ Фото #{saved.id} отправлено на модерацию!"
-        )
+        data = _upload_notifications[user.id]
+        data["count"] += 1
+        if data["task"] is None or data["task"].done():
+            data["task"] = asyncio.create_task(_send_upload_notification(message.bot, message.chat.id, user.id))
 
 
 # =========================
@@ -1961,7 +1978,7 @@ async def my_rentals(callback: CallbackQuery):
 # =========================
 @router.message(F.text == BTN_GAMES)
 async def btn_games(message: Message):
-    from app.keyboards import telegram_games_keyboard, games_menu_keyboard
+    from app.keyboards import games_menu_keyboard
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -3080,7 +3097,6 @@ async def cmd_selfcheck(message: Message):
 
 @router.message(F.text == "🎰 Игровые автоматы")
 async def play_slots(message: Message):
-    from decimal import Decimal
     import asyncio
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
@@ -3115,7 +3131,6 @@ async def play_slots(message: Message):
 
 @router.message(F.text == "🏀 Баскетбол")
 async def play_basketball(message: Message):
-    from decimal import Decimal
     import asyncio
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
@@ -3144,7 +3159,6 @@ async def play_basketball(message: Message):
 
 @router.message(F.text == "🎯 Дартс")
 async def play_darts(message: Message):
-    from decimal import Decimal
     import asyncio
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
