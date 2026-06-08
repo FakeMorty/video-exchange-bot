@@ -2599,7 +2599,8 @@ def _lottery_menu_kb() -> InlineKeyboardMarkup:
 
     buttons = []
     if live_url:
-        buttons.append([InlineKeyboardButton(text="🔴 Открыть Live", url=live_url)])
+        from aiogram.types.web_app_info import WebAppInfo
+        buttons.append([InlineKeyboardButton(text="🔴 Открыть Live (Mini App)", web_app=WebAppInfo(url=live_url))])
     else:
         buttons.append([InlineKeyboardButton(text="🔴 Как открыть Live", callback_data="lottery_live_info")])
 

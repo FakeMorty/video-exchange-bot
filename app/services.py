@@ -1413,8 +1413,10 @@ async def get_recent_feedback(session: AsyncSession, limit: int = 20) -> list[Fe
 # ЛОТЕРЕЯ-ЛОТО
 # ============================
 def _week_key(dt: datetime) -> str:
-    iso = dt.isocalendar()
-    return f"{iso.year}-W{iso.week:02d}"
+    epoch = datetime(1970, 1, 1, 20, 0, 0)
+    delta = dt - epoch
+    cycle_idx = int(delta.total_seconds() // (48 * 3600))
+    return f"c_{cycle_idx}"
 
 
 def _serialize_numbers(nums: list[int]) -> str:
@@ -1436,11 +1438,13 @@ async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
     if existing:
         return existing
 
-    week_start = now - timedelta(days=now.weekday())
-    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_end = week_start + timedelta(days=6, hours=23, minutes=59)
-    draw_start = week_start + timedelta(days=6, hours=LOTTERY_DRAW_START_HOUR_UTC)
-    draw_end = week_start + timedelta(days=6, hours=LOTTERY_DRAW_END_HOUR_UTC)
+    epoch = datetime(1970, 1, 1, 20, 0, 0)
+    delta = now - epoch
+    cycle_idx = int(delta.total_seconds() // (48 * 3600))
+    cycle_start = epoch + timedelta(hours=cycle_idx * 48)
+    
+    draw_start = cycle_start + timedelta(hours=46)
+    draw_end = cycle_start + timedelta(hours=48)
     if draw_end <= draw_start:
         draw_end = draw_start + timedelta(hours=2)
 
@@ -1452,7 +1456,7 @@ async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
         numbers_per_ticket=max(3, LOTTERY_NUMBERS_PER_TICKET),
         drawn_numbers="",
         prize_pool=Decimal("0"),
-        starts_at=week_start,
+        starts_at=cycle_start,
         draw_starts_at=draw_start,
         draw_ends_at=draw_end,
     )

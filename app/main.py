@@ -1,3 +1,7 @@
+from app.models import LotteryTicket, User
+from sqlalchemy import select
+from alembic import command
+from alembic.config import Config
 import asyncio
 from datetime import datetime
 from aiohttp import web
@@ -119,6 +123,50 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
         await asyncio.sleep(max(30, OFFER_SUBSCRIPTION_CHECK_INTERVAL_SECONDS))
 
 
+
+async def notify_lottery_started(bot: Bot, session, round_id: int):
+    tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
+    user_ids = list(set(t.user_id for t in tickets))
+    users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+    
+    msg = f"🎰 <b>Лотерея #{round_id} началась!</b>\n\nЗаходите в Live, чтобы следить за розыгрышем в прямом эфире."
+    for u in users:
+        try:
+            await bot.send_message(u.telegram_id, msg)
+        except Exception:
+            pass
+
+async def notify_lottery_results(bot: Bot, session, round_id: int):
+    tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
+    user_ids = list(set(t.user_id for t in tickets))
+    users = {u.id: u for u in (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()}
+    
+    # We want to notify everyone who bought a ticket.
+    # We have to figure out if they won based on ticket.matched_count
+    
+    user_results = {}
+    for t in tickets:
+        if t.user_id not in user_results:
+            user_results[t.user_id] = {"won": False, "matched": 0}
+        user_results[t.user_id]["matched"] = max(user_results[t.user_id]["matched"], t.matched_count)
+        if t.reward_paid:
+            user_results[t.user_id]["won"] = True
+
+    for uid, data in user_results.items():
+        u = users.get(uid)
+        if not u:
+            continue
+        
+        if data["won"]:
+            msg = f"🎉 <b>Поздравляем!</b> Ваш билет в лотерее #{round_id} оказался выигрышным!\nНаграда зачислена на ваш баланс."
+        else:
+            msg = f"😢 Лотерея #{round_id} завершена. К сожалению, ваш билет не выиграл.\nНе расстраивайтесь, повезет в следующий раз!"
+            
+        try:
+            await bot.send_message(u.telegram_id, msg)
+        except Exception:
+            pass
+
 async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
     while not stop_event.is_set():
         try:
@@ -130,6 +178,7 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                     round_obj.status = "drawing"
                     await session.commit()
                     log_info(logger, f"Lottery round #{round_obj.id} moved to drawing")
+                    await notify_lottery_started(bot, session, round_obj.id)
 
                 if round_obj.status == "drawing" and utc_now >= round_obj.draw_ends_at:
                     while round_obj.status == "drawing":
@@ -141,6 +190,7 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                         logger,
                         f"Lottery round #{round_obj.id} settled: {stats}",
                     )
+                    await notify_lottery_results(bot, session, round_obj.id)
         except Exception as e:
             log_info(logger, f"Lottery worker warning: {e}")
 
@@ -182,18 +232,196 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     html = """
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><title>Lottery Live</title></head>
-<body style="font-family:Arial;max-width:900px;margin:20px auto;">
-  <h2>Lottery Live Draw</h2>
-  <p>Transparency page: state updates every 2 seconds.</p>
-  <pre id="state">loading...</pre>
-  <script>
-    async function tick() {
-      const res = await fetch('/lottery/state');
-      const data = await res.json();
-      document.getElementById('state').textContent = JSON.stringify(data, null, 2);
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Lottery Live</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--tg-theme-bg-color, #ffffff);
+      color: var(--tg-theme-text-color, #000000);
     }
-    setInterval(tick, 2000);
+    .header { text-align: center; margin-bottom: 20px; }
+    .status-badge {
+      display: inline-block;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: bold;
+      background-color: var(--tg-theme-hint-color, #999);
+      color: var(--tg-theme-button-text-color, #fff);
+    }
+    .status-open { background-color: #34c759; }
+    .status-drawing { background-color: #ff9500; animation: pulse 1s infinite alternate; }
+    .status-completed { background-color: #007aff; }
+    @keyframes pulse {
+      from { opacity: 1; }
+      to { opacity: 0.6; }
+    }
+    .prize-pool {
+      font-size: 28px;
+      font-weight: 800;
+      margin: 15px 0;
+      color: var(--tg-theme-button-color, #3390ec);
+    }
+    .balls-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 30px;
+      min-height: 60px;
+    }
+    .ball {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #ffd700, #ff9500);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      font-weight: bold;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    }
+    @keyframes popIn {
+      from { transform: scale(0); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .card {
+      background-color: var(--tg-theme-secondary-bg-color, #f0f0f0);
+      border-radius: 15px;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      font-size: 15px;
+      border-bottom: 1px solid var(--tg-theme-hint-color, #ccc);
+      padding-bottom: 5px;
+    }
+    .info-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h2>🏆 Лотерея <span id="round-id">...</span></h2>
+      <div id="status-badge" class="status-badge">Загрузка...</div>
+    </div>
+    <div style="text-align: center; margin: 20px 0;">
+      <div style="font-size: 14px; color: var(--tg-theme-hint-color);">Призовой фонд</div>
+      <div class="prize-pool" id="prize-pool">0.00 🪙</div>
+    </div>
+    <div class="info-row">
+      <span style="color: var(--tg-theme-hint-color);">Цена билета:</span>
+      <strong id="ticket-price">-</strong>
+    </div>
+    <div class="info-row">
+      <span style="color: var(--tg-theme-hint-color);">Куплено билетов:</span>
+      <strong id="tickets-count">-</strong>
+    </div>
+    <div class="info-row">
+      <span style="color: var(--tg-theme-hint-color);">Старт розыгрыша:</span>
+      <strong id="draw-time">-</strong>
+    </div>
+  </div>
+
+  <h3 style="text-align: center; margin-top: 30px;">Выпавшие числа</h3>
+  <div class="balls-container" id="balls-container">
+  </div>
+
+  <script>
+    window.Telegram.WebApp.ready();
+    window.Telegram.WebApp.expand();
+
+    let lastRoundId = null;
+
+    function updateUI(data) {
+        document.getElementById('round-id').innerText = '#' + data.id;
+        
+        let statusText = '';
+        let badgeClass = 'status-badge ';
+        if (data.status === 'open') {
+            statusText = 'Открыта';
+            badgeClass += 'status-open';
+        } else if (data.status === 'drawing') {
+            statusText = 'Идет розыгрыш!';
+            badgeClass += 'status-drawing';
+        } else if (data.status === 'completed') {
+            statusText = 'Завершена';
+            badgeClass += 'status-completed';
+        }
+        
+        const badge = document.getElementById('status-badge');
+        badge.innerText = statusText;
+        badge.className = badgeClass;
+
+        document.getElementById('prize-pool').innerText = data.prize_pool + ' 🪙';
+        document.getElementById('ticket-price').innerText = data.ticket_price + ' 🪙';
+        document.getElementById('tickets-count').innerText = data.tickets_count;
+        
+        // Data contains ISO UTC string without Z if we don't append it, assuming the API returns valid string.
+        let drawDateStr = data.draw_starts_at;
+        if (!drawDateStr.endsWith('Z')) drawDateStr += 'Z';
+        const drawDate = new Date(drawDateStr);
+        document.getElementById('draw-time').innerText = drawDate.toLocaleString();
+
+        const container = document.getElementById('balls-container');
+        
+        if (lastRoundId !== data.id) {
+            container.innerHTML = '';
+            lastRoundId = data.id;
+        }
+
+        if (data.drawn_numbers && data.drawn_numbers.length > 0) {
+            const currentBalls = container.querySelectorAll('.ball').length;
+            if (data.drawn_numbers.length > currentBalls) {
+                // remove "no numbers" message if exists
+                if (container.querySelector('.no-numbers')) {
+                    container.innerHTML = '';
+                }
+                for (let i = currentBalls; i < data.drawn_numbers.length; i++) {
+                    const ball = document.createElement('div');
+                    ball.className = 'ball';
+                    ball.innerText = data.drawn_numbers[i];
+                    container.appendChild(ball);
+                    if (window.Telegram.WebApp.HapticFeedback) {
+                        window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+                    }
+                }
+            } else if (data.drawn_numbers.length < currentBalls) {
+                container.innerHTML = ''; // should not happen unless round changed, but handled above
+            }
+        } else {
+            if (container.children.length === 0) {
+                container.innerHTML = '<div class="no-numbers" style="color: var(--tg-theme-hint-color); font-size: 14px; text-align:center; width:100%;">Пока нет чисел...</div>';
+            }
+        }
+    }
+
+    async function tick() {
+      try {
+        const res = await fetch('/lottery/state');
+        if(res.ok) {
+            const data = await res.json();
+            updateUI(data);
+        }
+      } catch (e) {
+        console.error('Fetch error:', e);
+      }
+    }
+    
+    setInterval(tick, 1000);
     tick();
   </script>
 </body>
@@ -214,8 +442,6 @@ async def _notify_admins_started(bot: Bot) -> None:
         except Exception:
             pass
 
-from alembic import command
-from alembic.config import Config
 
 async def on_startup(app):
     bot = app['bot']
