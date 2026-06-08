@@ -1,3 +1,6 @@
+import os
+from sqlalchemy import func
+from app.models import Video
 from app.models import LotteryTicket, User
 from sqlalchemy import select
 from alembic import command
@@ -431,6 +434,45 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
 
 
 
+
+async def api_sextok_feed(request: web.Request) -> web.Response:
+    async with async_session() as session:
+        # Fetch up to 10 random approved videos
+        videos = (await session.execute(
+            select(Video).where(Video.status == "approved")
+            .order_by(func.random()).limit(10)
+        )).scalars().all()
+        
+        data = [{"id": v.id, "author": v.uploader_user_id} for v in videos]
+        return web.json_response({"videos": data})
+
+async def api_video_stream(request: web.Request) -> web.Response:
+    video_id = request.match_info.get("id")
+    if not video_id or not video_id.isdigit():
+        return web.Response(status=400, text="Invalid ID")
+        
+    async with async_session() as session:
+        video = await session.get(Video, int(video_id))
+        if not video:
+            return web.Response(status=404, text="Not found")
+            
+    bot = request.app['bot']
+    cache_dir = "video_cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    file_path_local = os.path.join(cache_dir, f"{video.telegram_file_unique_id}.mp4")
+    
+    if not os.path.exists(file_path_local):
+        try:
+            tg_file = await bot.get_file(video.telegram_file_id)
+            await bot.download_file(tg_file.file_path, file_path_local)
+        except TelegramBadRequest as e:
+            # File might be larger than 20MB
+            return web.Response(status=400, text=f"TG API Error: {str(e)}. File might be >20MB.")
+        except Exception as e:
+            return web.Response(status=500, text=str(e))
+            
+    return web.FileResponse(file_path_local)
+
 async def sextok_page_handler(request: web.Request) -> web.Response:
     html = """
 <!doctype html>
@@ -441,54 +483,117 @@ async def sextok_page_handler(request: web.Request) -> web.Response:
   <title>SexTok</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    body {
-      margin: 0; padding: 0; background-color: #000; color: #fff;
-      font-family: -apple-system, sans-serif; overflow: hidden;
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, sans-serif;}
+    .feed {
+      width: 100%; height: 100%; overflow-y: scroll; scroll-snap-type: y mandatory; scroll-behavior: smooth;
     }
     .video-container {
-      width: 100vw; height: 100vh;
-      display: flex; justify-content: center; align-items: center;
-      position: relative;
+      width: 100%; height: 100%; scroll-snap-align: start; position: relative;
+      display: flex; justify-content: center; align-items: center; background: #111;
     }
-    .placeholder {
-      text-align: center; font-size: 24px; font-weight: bold; color: #666;
+    video {
+      width: 100%; height: 100%; object-fit: cover; cursor: pointer;
     }
     .overlay {
-      position: absolute; bottom: 50px; right: 20px;
-      display: flex; flex-direction: column; gap: 20px;
+      position: absolute; bottom: 80px; right: 15px; display: flex; flex-direction: column; gap: 20px; z-index: 10;
     }
     .btn {
-      width: 50px; height: 50px; border-radius: 50%;
-      background: rgba(255, 255, 255, 0.2);
-      display: flex; justify-content: center; align-items: center;
-      font-size: 24px; cursor: pointer;
+      width: 45px; height: 45px; background: rgba(255,255,255,0.2); border-radius: 50%;
+      display: flex; justify-content: center; align-items: center; color: white; font-size: 20px;
+      backdrop-filter: blur(5px); cursor: pointer;
     }
-    .btn:active { background: rgba(255, 255, 255, 0.4); }
+    .loading {
+      position: absolute; color: rgba(255,255,255,0.5); font-size: 16px; z-index: 1; pointer-events: none;
+    }
+    .mute-btn {
+      position: absolute; top: 20px; right: 20px; width: 40px; height: 40px; background: rgba(0,0,0,0.5); 
+      color: white; border-radius: 50%; display: flex; justify-content: center; align-items: center; z-index: 10;
+      cursor: pointer; backdrop-filter: blur(5px);
+    }
   </style>
 </head>
 <body>
-  <div class="video-container" id="vc">
-    <div class="placeholder">Swipe Up / Down<br><span style="font-size:14px">Coming Soon...</span></div>
-    <div class="overlay">
-      <div class="btn">❤️</div>
-      <div class="btn">💸</div>
-      <div class="btn">⏭</div>
-    </div>
+  <div class="feed" id="feed">
+     <div style="color:white; text-align:center; padding-top: 50vh;">Загрузка ленты...</div>
   </div>
   <script>
-    window.Telegram.WebApp.ready();
-    window.Telegram.WebApp.expand();
-    
-    // Add simple swipe detection just for UI feedback
-    let startY = 0;
-    document.addEventListener('touchstart', e => startY = e.touches[0].clientY);
-    document.addEventListener('touchend', e => {
-        let endY = e.changedTouches[0].clientY;
-        if(startY - endY > 50) {
-            window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
-            document.querySelector('.placeholder').innerHTML = "Loading Next Video...<br><span style='font-size:14px'>API Integration Required</span>";
+     window.Telegram.WebApp.ready();
+     window.Telegram.WebApp.expand();
+     
+     let isMuted = true;
+
+     async function loadFeed() {
+        try {
+            const res = await fetch('/api/sextok/feed');
+            const data = await res.json();
+            const feed = document.getElementById('feed');
+            feed.innerHTML = ''; // clear loading
+            
+            if(data.videos.length === 0) {
+                feed.innerHTML = '<div style="color:white; text-align:center; padding-top: 50vh;">Нет доступных видео.<br>Загрузите видео в бота!</div>';
+                return;
+            }
+
+            data.videos.forEach(v => {
+                const container = document.createElement('div');
+                container.className = 'video-container';
+                container.innerHTML = `
+                    <div class="loading">Загрузка видео...</div>
+                    <video src="/api/video/${v.id}" loop playsinline preload="metadata" muted></video>
+                    <div class="mute-btn" onclick="toggleMute(event)">🔇</div>
+                    <div class="overlay">
+                        <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('Функция лайков в разработке!')">❤️</div>
+                        <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('Донаты автору в разработке!')">💸</div>
+                    </div>
+                `;
+                
+                const vid = container.querySelector('video');
+                vid.addEventListener('click', () => {
+                    if(vid.paused) vid.play();
+                    else vid.pause();
+                });
+                
+                vid.addEventListener('loadeddata', () => {
+                    const l = container.querySelector('.loading');
+                    if(l) l.remove();
+                });
+
+                feed.appendChild(container);
+            });
+            setupObserver();
+        } catch(e) {
+            document.getElementById('feed').innerHTML = '<div style="color:red; text-align:center; padding-top: 50vh;">Ошибка загрузки видео.</div>';
         }
-    });
+     }
+     
+     window.toggleMute = function(e) {
+         if(e) e.stopPropagation();
+         isMuted = !isMuted;
+         document.querySelectorAll('video').forEach(v => v.muted = isMuted);
+         document.querySelectorAll('.mute-btn').forEach(btn => btn.innerText = isMuted ? '🔇' : '🔊');
+     };
+
+     function setupObserver() {
+        const videos = document.querySelectorAll('video');
+        const observer = new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+                if(entry.isIntersecting) {
+                    entry.target.muted = isMuted;
+                    let playPromise = entry.target.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(error => {
+                            console.log('Autoplay prevented:', error);
+                        });
+                    }
+                } else {
+                    entry.target.pause();
+                    entry.target.currentTime = 0;
+                }
+            });
+        }, { threshold: 0.6 });
+        videos.forEach(v => observer.observe(v));
+     }
+     loadFeed();
   </script>
 </body>
 </html>
