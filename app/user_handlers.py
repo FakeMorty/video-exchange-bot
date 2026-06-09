@@ -536,7 +536,7 @@ async def show_profile(message: Message):
             vip_str = f"\n👑 VIP до: {user.vip_until.strftime('%d.%m.%Y')}"
 
         level = user.level
-        xp_spent = sum(calc_level_xp_required(l) for l in range(1, level))
+        xp_spent = sum(calc_level_xp_required(lvl) for lvl in range(1, level))
         xp_current = user.xp - xp_spent
         xp_needed = calc_level_xp_required(level)
         progress = max(0, min(10, int((xp_current / max(xp_needed, 1)) * 10)))
@@ -578,7 +578,7 @@ async def show_level(message: Message):
             return
 
         level = user.level
-        xp_spent = sum(calc_level_xp_required(l) for l in range(1, level))
+        xp_spent = sum(calc_level_xp_required(lvl) for lvl in range(1, level))
         xp_current = user.xp - xp_spent
         xp_needed = calc_level_xp_required(level)
         progress = max(0, min(10, int((xp_current / max(xp_needed, 1)) * 10)))
