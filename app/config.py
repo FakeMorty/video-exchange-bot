@@ -100,11 +100,6 @@ OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.
 # ============================
 
 # ============================
-# WATERMARK (ВОДЯНОЙ ЗНАК)
-# ============================
-ENABLE_WATERMARK = _get_bool("ENABLE_WATERMARK", True)
-WATERMARK_TEXT = _get_str("WATERMARK_TEXT", "@Wseksbot")
-
 # ============================
 # ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
 # ============================
@@ -118,11 +113,6 @@ REFERRAL_MILESTONES = {
 
 DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
 # ============================
-# WATERMARK (ВОДЯНОЙ ЗНАК)
-# ============================
-ENABLE_WATERMARK = _get_bool("ENABLE_WATERMARK", True)
-WATERMARK_TEXT = _get_str("WATERMARK_TEXT", "@Wseksbot")
-
 # ============================
 # ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
 # ============================
