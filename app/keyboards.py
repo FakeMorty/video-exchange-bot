@@ -143,36 +143,7 @@ def photo_actions_keyboard(photo_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def buy_coins_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 2 монеты (1 Star)", callback_data="buy:pack_1")],
-        [InlineKeyboardButton(text="💎 10 монет (5 Stars)", callback_data="buy:pack_5")],
-        [InlineKeyboardButton(text="💎 20 монет (10 Stars)", callback_data="buy:pack_10")],
-        [InlineKeyboardButton(text="💎 50 монет (25 Stars)", callback_data="buy:pack_25")],
-        [InlineKeyboardButton(text="💎 100 монет (50 Stars)", callback_data="buy:pack_50")],
-        [InlineKeyboardButton(text="⚡ Своя сумма Stars", callback_data="buy_custom")],
-    ])
 
-
-def vip_buy_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👑 Купить VIP", callback_data="buy_vip")],
-    ])
-
-
-# =========================
-# ОФФЕРЫ
-# =========================
-def offers_list_keyboard(offers: list) -> InlineKeyboardMarkup:
-    buttons = []
-    for o in offers:
-        icon = "✅" if o.is_active else "❌"
-        rent_icon = " 📣" if getattr(o, "is_rentable", False) else ""
-        buttons.append([InlineKeyboardButton(
-            text=f"{icon}{rent_icon} {o.title[:35]}",
-            callback_data=f"offer_open:{o.id}"
-        )])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup:
@@ -339,3 +310,16 @@ def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
         buttons.append(InlineKeyboardButton(text=em, callback_data=cb_data))
         
     return InlineKeyboardMarkup(inline_keyboard=[buttons[:3], buttons[3:]])
+
+
+def buy_coins_keyboard(packs: dict) -> InlineKeyboardMarkup:
+    buttons = []
+    for p_id, p_data in packs.items():
+        buttons.append([InlineKeyboardButton(text=f"💎 {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy_{p_id}")])
+    buttons.append([InlineKeyboardButton(text="⚡ Своя сумма Stars", callback_data="buy_custom")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def vip_buy_keyboard(price: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"⭐️ Купить за {price} Stars", callback_data="buy_vip")]
+    ])

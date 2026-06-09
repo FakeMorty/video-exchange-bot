@@ -451,3 +451,11 @@ class LotteryTicket(Base):
 
     round: Mapped["LotteryRound"] = relationship(back_populates="tickets")
     user: Mapped["User"] = relationship(back_populates="lottery_tickets")
+
+class ActiveSale(Base):
+    __tablename__ = "active_sales"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discount_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+    applies_to: Mapped[str] = mapped_column(String(50), nullable=False)
+    end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    announcement: Mapped[str] = mapped_column(Text, nullable=True)

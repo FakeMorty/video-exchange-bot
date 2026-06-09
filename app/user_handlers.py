@@ -418,12 +418,25 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 
         admin_flag = is_any_admin(message.from_user.id, user)
         vip_str = " 👑" if is_vip(user) else ""
-        await message.answer(
+        import os
+        from aiogram.types import FSInputFile
+        msg_text = (
             f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
-            f"💰 Баланс: <b>{user.balance}</b> монет",
-            parse_mode="HTML",
-            reply_markup=main_menu(is_admin=admin_flag)
+            f"💰 Баланс: <b>{user.balance}</b> монет"
         )
+        if os.path.exists("app/banner.jpg"):
+            await message.answer_photo(
+                photo=FSInputFile("app/banner.jpg"),
+                caption=msg_text,
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+        else:
+            await message.answer(
+                msg_text,
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
 
 
 

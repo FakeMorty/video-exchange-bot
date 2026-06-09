@@ -2906,3 +2906,164 @@ async def process_remove_admin(message: Message, state: FSMContext):
     except Exception:
         pass
     await state.clear()
+
+
+class SaleState(StatesGroup):
+    waiting_percent = State()
+    waiting_scope = State()
+    waiting_duration = State()
+    waiting_text = State()
+
+@router.callback_query(F.data == "admin_sales")
+async def admin_sales_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    from app.services import get_active_sale
+    async with async_session() as session:
+        sale = await get_active_sale(session)
+    
+    text = "🛍 <b>Управление акциями</b>\n\n"
+    if sale:
+        text += (
+            f"🟢 <b>Текущая акция активна!</b>\n"
+            f"Скидка: <b>{sale.discount_percent}%</b>\n"
+            f"Действует на: <b>{sale.applies_to}</b>\n"
+            f"Закончится: <b>{sale.end_date.strftime('%d.%m.%Y %H:%M')} UTC</b>\n"
+            f"Текст:\n<i>{sale.announcement}</i>\n\n"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🛑 Завершить акцию", callback_data="admin_sale_stop")],
+            [InlineKeyboardButton(text="◀ В меню", callback_data="admin_center")]
+        ])
+    else:
+        text += "🔴 В данный момент нет активных акций."
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать акцию", callback_data="admin_sale_create")],
+            [InlineKeyboardButton(text="◀ В меню", callback_data="admin_center")]
+        ])
+
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_sale_stop")
+async def admin_sale_stop(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        return
+    
+    from app.services import get_active_sale
+    async with async_session() as session:
+        sale = await get_active_sale(session)
+        if sale:
+            from datetime import datetime
+            sale.end_date = datetime.utcnow()
+            await session.commit()
+            await callback.answer("✅ Акция досрочно завершена!", show_alert=True)
+        else:
+            await callback.answer("Акция уже неактивна.", show_alert=True)
+    
+    await admin_sales_start(callback, None)
+
+@router.callback_query(F.data == "admin_sale_create")
+async def admin_sale_create(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        return
+    await state.set_state(SaleState.waiting_percent)
+    await _safe_edit(callback, "Введите процент скидки (от 1 до 99):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Отмена", callback_data="admin_center")]
+    ]))
+
+@router.message(SaleState.waiting_percent)
+async def admin_sale_percent(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число от 1 до 99.")
+        return
+    pct = int(message.text)
+    if pct < 1 or pct > 99:
+        await message.answer("Процент должен быть от 1 до 99.")
+        return
+    await state.update_data(discount_percent=pct)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="На всё", callback_data="sale_scope:all")],
+        [InlineKeyboardButton(text="Только VIP", callback_data="sale_scope:vip")],
+        [InlineKeyboardButton(text="Только Монеты", callback_data="sale_scope:coins")],
+        [InlineKeyboardButton(text="Отмена", callback_data="admin_center")]
+    ])
+    await state.set_state(SaleState.waiting_scope)
+    await message.answer("Выберите, на что действует скидка:", reply_markup=kb)
+
+@router.callback_query(SaleState.waiting_scope, F.data.startswith("sale_scope:"))
+async def admin_sale_scope(callback: CallbackQuery, state: FSMContext):
+    scope = callback.data.split(":")[1]
+    await state.update_data(applies_to=scope)
+    await state.set_state(SaleState.waiting_duration)
+    await _safe_edit(callback, "Введите длительность акции в часах (например, 24):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Отмена", callback_data="admin_center")]
+    ]))
+    await callback.answer()
+
+@router.message(SaleState.waiting_duration)
+async def admin_sale_duration(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("Пожалуйста, введите количество часов числом.")
+        return
+    hours = int(message.text)
+    if hours < 1:
+        await message.answer("Минимум 1 час.")
+        return
+    await state.update_data(duration_hours=hours)
+    
+    await state.set_state(SaleState.waiting_text)
+    await message.answer(
+        "Напишите текст рекламного объявления (поддерживается HTML).\n"
+        "Это сообщение будет разослано всем пользователям вместе с картинкой-флаером."
+    )
+
+@router.message(SaleState.waiting_text)
+async def admin_sale_finish(message: Message, state: FSMContext):
+    data = await state.get_data()
+    from datetime import datetime, timedelta
+    from app.models import ActiveSale
+    import os
+    from aiogram.types import FSInputFile
+    
+    end_date = datetime.utcnow() + timedelta(hours=data["duration_hours"])
+    
+    async with async_session() as session:
+        sale = ActiveSale(
+            discount_percent=data["discount_percent"],
+            applies_to=data["applies_to"],
+            end_date=end_date,
+            announcement=message.text
+        )
+        session.add(sale)
+        await session.commit()
+    
+    await state.clear()
+    await message.answer(f"✅ Акция успешно создана и будет действовать до {end_date.strftime('%d.%m.%Y %H:%M')} UTC!")
+    
+    # Trigger broadcast to all users
+    # In a real heavy app we'd use a background worker, but for MVP we loop here
+    async with async_session() as session:
+        from app.models import User
+        from sqlalchemy import select
+        users = (await session.execute(select(User))).scalars().all()
+    
+    import asyncio
+    sent = 0
+    await message.answer("⏳ Начинаю рассылку флаера всем пользователям...")
+    for u in users:
+        try:
+            if os.path.exists("app/flyer_sale.jpg"):
+                await message.bot.send_photo(u.telegram_id, photo=FSInputFile("app/flyer_sale.jpg"), caption=message.text, parse_mode="HTML")
+            else:
+                await message.bot.send_message(u.telegram_id, message.text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+        
+    await message.answer(f"✅ Рассылка завершена. Доставлено: {sent} пользователям.")
+

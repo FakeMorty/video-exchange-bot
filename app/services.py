@@ -1,3 +1,4 @@
+import math
 import uuid
 import random
 from datetime import datetime, timedelta
@@ -5,6 +6,7 @@ from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
+    ActiveSale,
     User, Video, VideoView, VideoRating, Payment,
     Offer, OfferParticipation, OfferRental,
     Comment, ContentReaction, GameHistory,
@@ -1661,3 +1663,27 @@ async def get_random_active_offer(session: AsyncSession) -> "Offer | None":
 
 def should_inject_ad_in_video() -> bool:
     return random.random() < SMART_AD_VIDEO_CHANCE
+
+
+async def get_active_sale(session: AsyncSession):
+    stmt = select(ActiveSale).where(ActiveSale.end_date > func.now()).order_by(ActiveSale.id.desc()).limit(1)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+async def get_current_prices(session: AsyncSession):
+    from app.config import VIP_PRICE_STARS, STARS_PACKAGES
+    sale = await get_active_sale(session)
+    vip_price = int(VIP_PRICE_STARS)
+    packs = {}
+    for k, v in STARS_PACKAGES.items():
+        packs[k] = {"stars": v["stars"], "coins": v["coins"], "title": v["title"]}
+        
+    if sale:
+        discount = sale.discount_percent / 100.0
+        if sale.applies_to in ("all", "vip"):
+            vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
+        if sale.applies_to in ("all", "coins"):
+            for k in packs:
+                packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
+                
+    return vip_price, packs, sale
