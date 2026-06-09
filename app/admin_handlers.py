@@ -292,11 +292,34 @@ async def db_open(callback: CallbackQuery):
         body = "Нет строк."
     else:
         lines = []
-        for i, row in enumerate(rows, 1):
-            lines.append(f"<b>{offset + i}.</b>")
+        for row in rows:
+            # Try to infer a natural "title" for the record
+            row_id = row.get("id", "?")
+            title = ""
+            
+            if "telegram_id" in row and "username" in row:
+                title = f"Юзер @{row.get('username') or '?'}"
+            elif "telegram_file_id" in row:
+                title = f"Видео/Фото от {row.get('uploader_user_id')}"
+            elif "action" in row:
+                title = f"Действие: {row.get('action')}"
+            elif "amount" in row and "source" in row:
+                title = f"Транзакция: {row.get('amount')}"
+            elif "title" in row:
+                title = f"Оффер: {row.get('title')}"
+            
+            lines.append(f"<b>#{row_id}</b> <i>{escape(title)}</i>")
+            
+            # Format attributes compactly
+            attrs = []
             for key, value in row.items():
-                lines.append(f"  <b>{escape(str(key))}</b>: {escape(_format_db_value(value))}")
+                if key == "id" or value is None:
+                    continue
+                attrs.append(f"<b>{escape(str(key))}</b>: {escape(_format_db_value(value))}")
+            
+            lines.append("  " + " | ".join(attrs))
             lines.append("")
+            
         body = "\n".join(lines).rstrip()
 
     text_out = (
