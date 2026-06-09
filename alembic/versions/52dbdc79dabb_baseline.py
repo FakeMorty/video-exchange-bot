@@ -1,15 +1,15 @@
-"""Proper baseline with all constraints
+"""baseline
 
-Revision ID: ab31a565cca0
+Revision ID: 52dbdc79dabb
 Revises: 
-Create Date: 2026-06-09 07:45:53.675168
+Create Date: 2026-06-09 08:30:22.776210
 """
 from alembic import op
 import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = 'ab31a565cca0'
+revision = '52dbdc79dabb'
 down_revision = None
 branch_labels = None
 depends_on = None
