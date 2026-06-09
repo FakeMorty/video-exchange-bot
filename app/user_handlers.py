@@ -10,7 +10,6 @@ from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    BufferedInputFile,
     Message, CallbackQuery,
     LabeledPrice, PreCheckoutQuery,
     InlineKeyboardMarkup, InlineKeyboardButton
@@ -175,8 +174,6 @@ def _cooldown_ok(
 # STATES
 # =========================
 
-class CaptchaState(StatesGroup):
-    waiting_for_text = State()
 
 class NicknameState(StatesGroup):
     waiting_nickname = State()
@@ -352,21 +349,15 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             result = await activate_promocode(session, user.id, promo_code)
             await message.answer(result)
             if not user.agreed_to_rules:
-                from captcha.image import ImageCaptcha
-                import string
-                import random
-                
-                image = ImageCaptcha(width=280, height=90)
-                captcha_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
-                data = image.generate(captcha_text)
-                
-                await state.update_data(captcha_text=captcha_text)
-                await state.set_state(CaptchaState.waiting_for_text)
-                
-                photo = BufferedInputFile(data.getvalue(), filename="captcha.png")
-                await message.answer_photo(
-                    photo=photo,
-                    caption="🤖 <b>Проверка на робота!</b>\n\nПожалуйста, введите код с картинки, чтобы продолжить:"
+                from app.keyboards import rules_keyboard
+                await message.answer(
+                    "📋 <b>Правила бота</b>\n\n"
+                    "1. Нельзя публиковать запрещённый или шок-контент.\n"
+                    "2. Нельзя использовать баги и накручивать награды.\n"
+                    "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
+                    "Нажмите кнопку ниже, чтобы принять правила.",
+                    parse_mode="HTML",
+                    reply_markup=rules_keyboard()
                 )
                 return
             admin_flag = is_any_admin(message.from_user.id, user)
@@ -394,21 +385,15 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             return
 
         if not user.agreed_to_rules:
-            from captcha.image import ImageCaptcha
-            import string
-            import random
-            
-            image = ImageCaptcha(width=280, height=90)
-            captcha_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
-            data = image.generate(captcha_text)
-            
-            await state.update_data(captcha_text=captcha_text)
-            await state.set_state(CaptchaState.waiting_for_text)
-            
-            photo = BufferedInputFile(data.getvalue(), filename="captcha.png")
-            await message.answer_photo(
-                photo=photo,
-                caption="🤖 <b>Проверка на робота!</b>\n\nПожалуйста, введите код с картинки, чтобы продолжить:"
+            from app.keyboards import rules_keyboard
+            await message.answer(
+                "📋 <b>Правила бота</b>\n\n"
+                "1. Нельзя публиковать запрещённый или шок-контент.\n"
+                "2. Нельзя использовать баги и накручивать награды.\n"
+                "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
+                "Нажмите кнопку ниже, чтобы принять правила.",
+                parse_mode="HTML",
+                reply_markup=rules_keyboard()
             )
             return
 
@@ -419,6 +404,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                     callback_data="set_nickname_start"
                 )]
             ])
+            from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
             await message.answer(
                 "👋 Добро пожаловать!\n\n"
                 "⚠️ Перед началом нужно установить ник.\n"
@@ -439,44 +425,6 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             reply_markup=main_menu(is_admin=admin_flag)
         )
 
-
-
-@router.message(CaptchaState.waiting_for_text)
-async def process_captcha(message: Message, state: FSMContext):
-    data = await state.get_data()
-    correct_text = data.get("captcha_text", "")
-    
-    if message.text and message.text.strip().upper() == correct_text.upper():
-        async with async_session() as session:
-            user = await get_user(session, message.from_user.id)
-            if user:
-                user.agreed_to_rules = True
-                await session.commit()
-        
-        await state.clear()
-        await message.answer("✅ Вы успешно прошли проверку! Добро пожаловать!")
-        from app.keyboards import main_menu
-        await message.answer(
-            "🚀 Используйте меню ниже для навигации.",
-            reply_markup=main_menu(is_admin=is_any_admin(message.from_user.id, user))
-        )
-    else:
-        from captcha.image import ImageCaptcha
-        import string
-        import random
-        from aiogram.types import BufferedInputFile
-        
-        image = ImageCaptcha(width=280, height=90)
-        new_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
-        new_data = image.generate(new_text)
-        
-        await state.update_data(captcha_text=new_text)
-        photo = BufferedInputFile(new_data.getvalue(), filename="captcha.png")
-        
-        await message.answer_photo(
-            photo=photo,
-            caption="❌ <b>Неверный код.</b>\n\nПопробуйте еще раз. Введите код с новой картинки:"
-        )
 
 
 @router.callback_query(F.data == "accept_rules")
