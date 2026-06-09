@@ -43,7 +43,6 @@ from app.config import (
     ADMINS,
 )
 
-PHOTO_UPLOAD_REWARD = Decimal("0.1")
 
 
 # ============================
@@ -357,6 +356,7 @@ async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
     v.status = "approved"
     uploader = await get_user_by_id(session, v.uploader_user_id)
     if uploader:
+        from app.config import PHOTO_UPLOAD_REWARD
         reward = PHOTO_UPLOAD_REWARD if v.content_type == "photo" else to_decimal(UPLOAD_REWARD)
         await log_balance_change(session, uploader, reward, "upload_approved", source_id=v.id)
         uploader.balance += reward
@@ -887,7 +887,7 @@ async def verify_offer_subscription(session: AsyncSession, user_id: int,
             source_id=offer_id,
         )
         user.balance += additional
-        part.reward_given = to_decimal(offer.reward_final)
+        part.reward_given = to_decimal(additional)
 
     await session.commit()
     return True
@@ -941,7 +941,7 @@ async def get_offer_participations_for_subscription_audit(
             OfferParticipation.reward_given > 0,
             OfferParticipation.unsubscribed_penalized_at.is_(None),
         )
-        .order_by(OfferParticipation.checked_at.desc().nullslast())
+        .order_by(OfferParticipation.checked_at.asc().nullsfirst())
         .limit(limit)
     )).scalars().all()
 

@@ -102,8 +102,8 @@ OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.
 # ============================
 # WATERMARK (ВОДЯНОЙ ЗНАК)
 # ============================
-ENABLE_WATERMARK = True
-WATERMARK_TEXT = "@Wseksbot"
+ENABLE_WATERMARK = _get_bool("ENABLE_WATERMARK", True)
+WATERMARK_TEXT = _get_str("WATERMARK_TEXT", "@Wseksbot")
 
 # ============================
 # ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
@@ -120,8 +120,8 @@ DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
 # ============================
 # WATERMARK (ВОДЯНОЙ ЗНАК)
 # ============================
-ENABLE_WATERMARK = True
-WATERMARK_TEXT = "@Wseksbot"
+ENABLE_WATERMARK = _get_bool("ENABLE_WATERMARK", True)
+WATERMARK_TEXT = _get_str("WATERMARK_TEXT", "@Wseksbot")
 
 # ============================
 # ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
@@ -295,7 +295,7 @@ LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
 LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
 LOTTERY_DRAW_START_HOUR_UTC = _get_int("LOTTERY_DRAW_START_HOUR_UTC", 18)
 LOTTERY_DRAW_END_HOUR_UTC = _get_int("LOTTERY_DRAW_END_HOUR_UTC", 20)
-LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "change-me-secret")
+LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "super-secret-key-12345")
 
 # ============================
 # ЛУТБОКСЫ

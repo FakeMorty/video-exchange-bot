@@ -445,19 +445,20 @@ async def api_sextok_feed(request: web.Request) -> web.Response:
             data = [{"id": v.id, "author": v.uploader_user_id} for v in videos]
             headers = {"Access-Control-Allow-Origin": "*"}
             return web.json_response({"videos": data}, headers=headers)
-    except Exception as e:
-        import traceback
-        return web.json_response({"error": str(e), "trace": traceback.format_exc()}, status=500)
+    except Exception:
+        return web.json_response({"error": "Internal Server Error"}, status=500)
 
 async def api_video_stream(request: web.Request) -> web.Response:
     video_id = request.match_info.get("id")
     if not video_id or not video_id.isdigit():
         return web.Response(status=400, text="Invalid ID")
         
-    async with async_session() as session:
-        video = await session.get(Video, int(video_id))
+        async with async_session() as session:
+            video = await session.get(Video, int(video_id))
         if not video:
             return web.Response(status=404, text="Not found")
+        if video.status != "approved" or video.content_type != "video":
+            return web.Response(status=403, text="Forbidden")
             
     bot = request.app['bot']
     cache_dir = "video_cache"
@@ -669,6 +670,9 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
+    from app.middlewares import BanCheckMiddleware
+    dp.message.middleware(BanCheckMiddleware())
+    dp.callback_query.middleware(BanCheckMiddleware())
     dp.include_router(user_router)
     dp.include_router(admin_router)
 

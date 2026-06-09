@@ -3,6 +3,7 @@ FROM python:3.13-slim
 # Устанавливаем системные зависимости для сборки (если нужны) и работы PostgreSQL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Создаем не-root пользователя
@@ -26,4 +27,4 @@ RUN chown -R botuser:botuser /app
 USER botuser
 
 # Команда для запуска бота
-CMD ["python", "app/main.py"]
+CMD ["python", "-m", "app.main"]

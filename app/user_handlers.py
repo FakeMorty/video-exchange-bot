@@ -1,3 +1,4 @@
+from html import escape
 import uuid
 import random
 import asyncio
@@ -435,6 +436,9 @@ async def accept_rules(callback: CallbackQuery):
             await callback.answer()
             return
         user.agreed_to_rules = True
+        from app.services import process_referral_reward
+        if user.referred_by_user_id:
+            await process_referral_reward(session, user.id)
         await session.commit()
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -858,7 +862,7 @@ async def cb_comments(callback: CallbackQuery):
             for c in comments:
                 u = await get_user_by_id(session, c.user_id)
                 name = get_display_name(u) if u else "???"
-                text += f"👤 <b>{name}</b>: {c.text}\n"
+                text += f"👤 <b>{escape(name)}</b>: {escape(c.text)}\n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -2125,7 +2129,7 @@ async def game_pay_session(callback: CallbackQuery):
             await session.commit()
             await callback.answer("✅ Сессия продлена (админ).", show_alert=True)
             return
-        ok = await pay_for_game_session(session, callback.from_user.id)
+        ok = await pay_for_game_session(session, user.id)
         if ok:
             await callback.answer("✅ Сессия продлена! Ещё 5 игр.", show_alert=True)
         else:
@@ -2133,7 +2137,7 @@ async def game_pay_session(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=None)
 
 
-@router.callback_query(F.data == "game_dice")
+@router.callback_query(F.data == "dice_menu")
 async def game_dice(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -2284,7 +2288,7 @@ async def coinflip_bet(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "game_guess")
+@router.callback_query(F.data == "guess_menu")
 async def game_guess(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -2933,7 +2937,7 @@ async def feedback_submit(message: Message, state: FSMContext):
                     f"Обращение: <code>#{feedback.id}</code>\n"
                     f"Пользователь: {author_name}\n"
                     f"TG ID: <code>{message.from_user.id}</code>\n\n"
-                    f"{text_value}"
+                    f"{escape(text_value)}"
                 ),
                 parse_mode="HTML",
             )
@@ -3169,8 +3173,6 @@ async def cmd_health(message: Message):
         "• bot: running",
     )
 
-
-@router.message(Command("selfcheck"))
 
 @router.message(Command("version"))
 async def cmd_version(message: Message):

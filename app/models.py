@@ -1,9 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import (
+    func,
     BigInteger, String, Numeric, Boolean,
     Integer, DateTime, ForeignKey, UniqueConstraint, Text, Date,
-    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from typing import List
@@ -169,13 +169,13 @@ class VideoView(Base):
     watched_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
-        server_default=text("NOW()"),
+        server_default=func.now(),
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
-        server_default=text("NOW()"),
+        server_default=func.now(),
     )
 
     user: Mapped["User"] = relationship(back_populates="views")
@@ -318,6 +318,9 @@ class GameHistory(Base):
 
 class DailyQuestProgress(Base):
     __tablename__ = "daily_quest_progress"
+    __table_args__ = (
+        UniqueConstraint("user_id", "quest_type", "quest_date", name="uq_user_quest_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
@@ -390,6 +393,9 @@ class Promocode(Base):
 class PromocodeActivation(Base):
     """Запись об активации промокода."""
     __tablename__ = "promocode_activations"
+    __table_args__ = (
+        UniqueConstraint("promocode_id", "user_id", name="uq_promo_user"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     promocode_id: Mapped[int] = mapped_column(

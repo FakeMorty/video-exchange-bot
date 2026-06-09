@@ -1944,7 +1944,7 @@ async def admin_offers_menu(callback: CallbackQuery):
         )).scalar_one()
         active_count = (await session.execute(
             select(func.count(Offer.id)).where(
-                Offer.is_active == True,
+                Offer.is_active,
                 Offer.status == "approved"
             )
         )).scalar_one()
@@ -2190,7 +2190,7 @@ async def _finish_offer_creation(
 ):
     data = await state.get_data()
     async with async_session() as session:
-        offer = await admin_create_offer(
+        await admin_create_offer(
             session,
             title=data["title"],
             description=data["description"],
@@ -2301,7 +2301,7 @@ async def admin_offers_active(callback: CallbackQuery):
     async with async_session() as session:
         offers = (await session.execute(
             select(Offer).where(
-                Offer.is_active == True,
+                Offer.is_active,
                 Offer.status == "approved"
             ).order_by(desc(Offer.created_at))
         )).scalars().all()
@@ -2789,7 +2789,7 @@ async def list_admins(callback: CallbackQuery):
         return
     async with async_session() as session:
         admins = (await session.execute(
-            select(User).where(User.is_admin == True)
+            select(User).where(User.is_admin)
         )).scalars().all()
 
     text = "👮 <b>Администраторы бота:</b>\n\n"
