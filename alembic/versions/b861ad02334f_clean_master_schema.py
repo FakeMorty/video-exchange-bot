@@ -1,15 +1,15 @@
-"""baseline
+"""clean_master_schema
 
-Revision ID: 52dbdc79dabb
+Revision ID: b861ad02334f
 Revises: 
-Create Date: 2026-06-09 08:30:22.776210
+Create Date: 2026-06-09 08:41:18.830366
 """
 from alembic import op
 import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '52dbdc79dabb'
+revision = 'b861ad02334f'
 down_revision = None
 branch_labels = None
 depends_on = None

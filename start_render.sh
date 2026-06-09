@@ -8,7 +8,7 @@ python -m compileall app >/dev/null 2>&1 || true
 
 # Always run migrations before starting
 # If alembic head fails because of a missing old migration, we stamp it directly
-python -m alembic stamp head || true
+python reset_alembic.py || true
 python -m alembic upgrade head || true
 
 exec python -m app.main
