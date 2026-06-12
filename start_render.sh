@@ -7,8 +7,9 @@ python -m pip install --upgrade pip
 python -m compileall app >/dev/null 2>&1 || true
 
 # Always run migrations before starting
-# If alembic head fails because of a missing old migration, we stamp it directly
 python reset_alembic.py || true
-python -m alembic upgrade head || true
+
+# Применяем миграции (fallback на прямой скрипт если alembic сломается)
+python -m alembic upgrade head || python fix_db.py || true
 
 exec python -m app.main
