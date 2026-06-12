@@ -56,41 +56,41 @@ for _x in ADMINS_RAW.split(","):
 PORT = _get_int("PORT", 10000)
 
 # ============================
-# ЭКОНОМИКА — БОЛЬШИЕ ЧИСЛА ("МИЛЛИОНЫ")
+# ЭКОНОМИКА — КРАСИВЫЕ И ПРИЯТНЫЕ ЦИФРЫ
 # ============================
 
-# Стартовый баланс (сразу чувствуется "много")
-STARTING_BALANCE = _get_float("STARTING_BALANCE", 2500.0)
+# Стартовый баланс (приятно и солидно)
+STARTING_BALANCE = _get_float("STARTING_BALANCE", 1000.0)
 
-# Просмотр видео — теперь ощутимо
-WATCH_COST = _get_float("WATCH_COST", 180.0)
+# Просмотр видео
+WATCH_COST = _get_float("WATCH_COST", 50.0)
 
-# Награда за загрузку (достойная)
-UPLOAD_REWARD = _get_float("UPLOAD_REWARD", 450.0)
-PHOTO_UPLOAD_REWARD = _get_float("PHOTO_UPLOAD_REWARD", 180.0)
+# Награда за загрузку
+UPLOAD_REWARD = _get_float("UPLOAD_REWARD", 200.0)
+PHOTO_UPLOAD_REWARD = _get_float("PHOTO_UPLOAD_REWARD", 100.0)
 
 # Рефералы
-REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 750.0)
-REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 400.0)
+REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 300.0)
+REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 150.0)
 
 # Курс Stars → монеты
-STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 25.0)
+STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 30.0)
 
-# Пакеты Stars (теперь "миллионы")
+# Пакеты Stars (красивые и запоминающиеся)
 STARS_PACKAGES = {
-    "pack_1":   {"stars": 1,   "coins": 25,    "title": "25 монет"},
-    "pack_5":   {"stars": 5,   "coins": 130,   "title": "130 монет"},
-    "pack_10":  {"stars": 10,  "coins": 270,   "title": "270 монет"},
-    "pack_25":  {"stars": 25,  "coins": 680,   "title": "680 монет"},
-    "pack_50":  {"stars": 50,  "coins": 1400,  "title": "1400 монет"},
-    "pack_100": {"stars": 100, "coins": 2900,  "title": "2900 монет"},
+    "pack_1":   {"stars": 1,   "coins": 30,   "title": "30 монет"},
+    "pack_5":   {"stars": 5,   "coins": 160,  "title": "160 монет"},
+    "pack_10":  {"stars": 10,  "coins": 320,  "title": "320 монет"},
+    "pack_25":  {"stars": 25,  "coins": 850,  "title": "850 монет"},
+    "pack_50":  {"stars": 50,  "coins": 1700, "title": "1700 монет"},
+    "pack_100": {"stars": 100, "coins": 3500, "title": "3500 монет"},
 }
 
 # Пакеты за реальные деньги
 MONEY_PACKAGES = {
-    "money_99":  {"amount": 9900,  "coins": 3500,   "title": "3500 монет"},
-    "money_199": {"amount": 19900, "coins": 8000,   "title": "8000 монет"},
-    "money_499": {"amount": 49900, "coins": 22000,  "title": "22000 монет"},
+    "money_99":  {"amount": 9900,  "coins": 3000,   "title": "3000 монет"},
+    "money_199": {"amount": 19900, "coins": 7000,   "title": "7000 монет"},
+    "money_499": {"amount": 49900, "coins": 18000,  "title": "18000 монет"},
 }
 
 # Интервал показа офферов
@@ -131,7 +131,7 @@ DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
 # Бесплатные игры
 FREE_GAMES_PER_SESSION = 5
 GAME_SESSION_HOURS = 6
-GAME_SESSION_COST = 800.0             # монет за продление сессии (ощутимо)
+GAME_SESSION_COST = 500.0             # монет за продление сессии
 
 # ============================
 # ЕЖЕДНЕВНЫЙ БОНУС (ПРОГРЕССИВНЫЙ)
@@ -170,18 +170,18 @@ DICE_MIN_BET = _get_int("DICE_MIN_BET", 1)
 DICE_MAX_BET = _get_int("DICE_MAX_BET", 50)
 
 # ============================
-# КВЕСТЫ (НА РУССКОМ)
+# КВЕСТЫ (НА РУССКОМ) — красивые награды
 # ============================
 DAILY_QUESTS = [
-    {"type": "watch", "target": 3, "reward": 20, "desc": "Посмотреть 3 видео"},
-    {"type": "upload", "target": 1, "reward": 30, "desc": "Загрузить 1 видео или фото"},
-    {"type": "rate", "target": 3, "reward": 10, "desc": "Оценить 3 видео"},
-    {"type": "comment", "target": 2, "reward": 20, "desc": "Написать 2 комментария"},
-    {"type": "react", "target": 5, "reward": 10, "desc": "Поставить 5 реакций"},
+    {"type": "watch", "target": 3, "reward": 50, "desc": "Посмотреть 3 видео"},
+    {"type": "upload", "target": 1, "reward": 150, "desc": "Загрузить 1 видео или фото"},
+    {"type": "rate", "target": 3, "reward": 30, "desc": "Оценить 3 видео"},
+    {"type": "comment", "target": 2, "reward": 50, "desc": "Написать 2 комментария"},
+    {"type": "react", "target": 5, "reward": 30, "desc": "Поставить 5 реакций"},
 ]
 PREMIUM_DAILY_QUESTS = [
-    {"type": "watch", "target": 10, "reward": 80, "desc": "VIP: Посмотреть 10 видео"},
-    {"type": "comment", "target": 5, "reward": 50, "desc": "VIP: Написать 5 комментариев"},
+    {"type": "watch", "target": 10, "reward": 200, "desc": "VIP: Посмотреть 10 видео"},
+    {"type": "comment", "target": 5, "reward": 150, "desc": "VIP: Написать 5 комментариев"},
 ]
 
 REACTION_TYPES = ["👍", "❤", "🔥", "😁", "😢"]
@@ -193,23 +193,23 @@ COMMENTS_PER_10_MIN = _get_int("COMMENTS_PER_10_MIN", 5)
 COMMENT_MIN_INTERVAL_SEC = _get_int("COMMENT_MIN_INTERVAL_SEC", 15)
 
 # ============================
-# НАГРАДЫ ЗА ТОПЫ
+# НАГРАДЫ ЗА ТОПЫ (красивые)
 # ============================
-WEEKLY_TOP1_REWARD = _get_float("WEEKLY_TOP1_REWARD", 500.0)
-WEEKLY_TOP2_REWARD = _get_float("WEEKLY_TOP2_REWARD", 250.0)
-WEEKLY_TOP3_REWARD = _get_float("WEEKLY_TOP3_REWARD", 150.0)
+WEEKLY_TOP1_REWARD = _get_float("WEEKLY_TOP1_REWARD", 1000.0)
+WEEKLY_TOP2_REWARD = _get_float("WEEKLY_TOP2_REWARD", 500.0)
+WEEKLY_TOP3_REWARD = _get_float("WEEKLY_TOP3_REWARD", 300.0)
 
 # ============================
-# ПРОДВИЖЕНИЕ (теперь "миллионы")
+# ПРОДВИЖЕНИЕ (красивые цены)
 # ============================
-PIN_OFFER_COST = _get_float("PIN_OFFER_COST", 8000.0)
-BUMP_VIDEO_COST = _get_float("BUMP_VIDEO_COST", 2500.0)
+PIN_OFFER_COST = _get_float("PIN_OFFER_COST", 5000.0)
+BUMP_VIDEO_COST = _get_float("BUMP_VIDEO_COST", 1500.0)
 
 # ============================
-# НИКНЕЙМ (теперь ощутимая, но не запредельная цена)
+# НИКНЕЙМ (красивая и ощутимая цена)
 # ============================
 NICKNAME_FIRST_FREE = True
-NICKNAME_CHANGE_COST = _get_float("NICKNAME_CHANGE_COST", 2500.0)
+NICKNAME_CHANGE_COST = _get_float("NICKNAME_CHANGE_COST", 1500.0)
 NICKNAME_MIN_LENGTH = 3
 NICKNAME_MAX_LENGTH = 20
 
@@ -279,9 +279,9 @@ PROMO_ACTIVATE_COOLDOWN_SECONDS = _get_int("PROMO_ACTIVATE_COOLDOWN_SECONDS", 10
 GUESS_JACKPOT_CHANCE = _get_float("GUESS_JACKPOT_CHANCE", 0.01)
 GUESS_JACKPOT_MULTIPLIER = _get_int("GUESS_JACKPOT_MULTIPLIER", 20)
 
-# Лотерея-лото
+# Лотерея-лото (красивая цена)
 ENABLE_LOTTERY = _get_bool("ENABLE_LOTTERY", True)
-LOTTERY_TICKET_PRICE = _get_float("LOTTERY_TICKET_PRICE", 250.0)
+LOTTERY_TICKET_PRICE = _get_float("LOTTERY_TICKET_PRICE", 150.0)
 LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
 LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
 LOTTERY_DRAW_START_HOUR_UTC = _get_int("LOTTERY_DRAW_START_HOUR_UTC", 18)
@@ -289,10 +289,10 @@ LOTTERY_DRAW_END_HOUR_UTC = _get_int("LOTTERY_DRAW_END_HOUR_UTC", 20)
 LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "super-secret-key-12345")
 
 # ============================
-# ЛУТБОКСЫ (теперь "миллионы")
+# ЛУТБОКСЫ (красивые цены)
 # ============================
 ENABLE_LOOTBOXES = _get_bool("ENABLE_LOOTBOXES", True)
 # Цена лутбокса за монеты
-LOOTBOX_COIN_PRICE = _get_float("LOOTBOX_COIN_PRICE", 1200.0)
+LOOTBOX_COIN_PRICE = _get_float("LOOTBOX_COIN_PRICE", 800.0)
 # Цена лутбокса за Stars
-LOOTBOX_STAR_PRICE = _get_int("LOOTBOX_STAR_PRICE", 50)
+LOOTBOX_STAR_PRICE = _get_int("LOOTBOX_STAR_PRICE", 30)
