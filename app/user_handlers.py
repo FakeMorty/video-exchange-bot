@@ -47,7 +47,7 @@ from app.config import (
 from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
-    DailyQuestProgress, GameHistory, OfferRental, Offer, Promocode,
+    DailyQuestProgress, GameHistory, Offer, Promocode,
 )
 from app.services import (
     get_or_create_user, get_user, get_user_by_id,
@@ -1754,9 +1754,9 @@ async def offers_rent_list(callback: CallbackQuery):
         async with async_session() as session:
             try:
                 active_count = (await session.execute(
-                    select(func.count(OfferRental.id)).where(
-                        OfferRental.offer_id == o.id,
-                        OfferRental.status.in_(["active", "pending"])
+                    select(func.count(None  # OfferRental removed.id)).where(
+                        None  # OfferRental removed.offer_id == o.id,
+                        None  # OfferRental removed.status.in_(["active", "pending"])
                     )
                 )).scalar_one()
             except Exception:
@@ -1819,9 +1819,9 @@ async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
             return
 
         active_count = (await session.execute(
-            select(func.count(OfferRental.id)).where(
-                OfferRental.offer_id == offer_id,
-                OfferRental.status.in_(["active", "pending"])
+            select(func.count(None  # OfferRental removed.id)).where(
+                None  # OfferRental removed.offer_id == offer_id,
+                None  # OfferRental removed.status.in_(["active", "pending"])
             )
         )).scalar_one()
         slots_left = offer.max_simultaneous_rentals - active_count
