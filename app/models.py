@@ -56,9 +56,7 @@ class User(Base):
     action_logs: Mapped[List["UserActionLog"]] = relationship(back_populates="user")
     balance_logs: Mapped[List["BalanceLog"]] = relationship(back_populates="user")
     user_offers: Mapped[List["Offer"]] = relationship(back_populates="creator")
-    rentals: Mapped[List["OfferRental"]] = relationship(
-        back_populates="renter", foreign_keys="OfferRental.renter_user_id"
-    )
+    # rentals отключены (система аренды удалена)
     ad_state: Mapped["UserAdState"] = relationship(back_populates="user", uselist=False)
     created_promocodes: Mapped[List["Promocode"]] = relationship(back_populates="creator")
     activated_promocodes: Mapped[List["PromocodeActivation"]] = relationship(back_populates="user")

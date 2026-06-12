@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
     ActiveSale, Event,
     User, Video, VideoView, VideoRating, Payment,
-    Offer, OfferParticipation, OfferRental,
+    Offer, OfferParticipation,
     Comment, ContentReaction, GameHistory,
     GameSession,
     UserActionLog, BalanceLog, UserAdState,
@@ -973,93 +973,7 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
     return offer
 
 
-async def count_active_rentals(session: AsyncSession) -> int:
-    try:
-        return (await session.execute(
-            select(func.count(OfferRental.id)).where(OfferRental.status == "active")
-        )).scalar_one()
-    except Exception:
-        return 0
-
-
-async def expire_old_rentals(session: AsyncSession) -> int:
-    try:
-        now = datetime.utcnow()
-        expired = (await session.execute(
-            select(OfferRental).where(
-                OfferRental.status == "active",
-                OfferRental.expires_at <= now
-            )
-        )).scalars().all()
-        for r in expired:
-            r.status = "expired"
-        await session.commit()
-        return len(expired)
-    except Exception:
-        return 0
-
-
-async def create_offer_rental(session: AsyncSession, offer_id: int, user_id: int,
-                              channel_title: str, channel_url: str,
-                              rent_days: int) -> tuple["OfferRental | None", str | None]:
-    if rent_days < OFFER_MIN_RENT_DAYS or rent_days > OFFER_MAX_RENT_DAYS:
-        return None, f"Аренда от {OFFER_MIN_RENT_DAYS} до {OFFER_MAX_RENT_DAYS} дней."
-    offer = await get_offer_by_id(session, offer_id)
-    if not offer:
-        return None, "Оффер не найден."
-    if not offer.is_rentable:
-        return None, "Этот оффер нельзя арендовать."
-    if not offer.is_active:
-        return None, "Оффер не активен."
-    active_count = (await session.execute(
-        select(func.count(OfferRental.id)).where(
-            OfferRental.offer_id == offer_id,
-            OfferRental.status.in_(["active", "pending"])
-        )
-    )).scalar_one()
-    if active_count >= offer.max_simultaneous_rentals:
-        return None, "Все слоты аренды заняты."
-    existing = (await session.execute(
-        select(OfferRental).where(
-            OfferRental.offer_id == offer_id,
-            OfferRental.renter_user_id == user_id,
-            OfferRental.status.in_(["pending", "active"])
-        )
-    )).scalar_one_or_none()
-    if existing:
-        return None, "У вас уже есть аренда этого оффера."
-
-    cost = to_decimal(offer.rent_cost_per_day) * rent_days
-    user = await get_user_by_id(session, user_id)
-    if not user:
-        return None, "Пользователь не найден."
-    if user.balance < cost:
-        return None, f"Недостаточно монет. Нужно: {cost}, у вас: {user.balance}"
-
-    await log_balance_change(session, user, -cost, "offer_rental", source_id=offer_id,
-                             details=f"rent_days={rent_days}")
-    user.balance -= cost
-    rental = OfferRental(
-        offer_id=offer_id,
-        renter_user_id=user_id,
-        renter_channel_title=channel_title,
-        renter_channel_url=channel_url,
-        rent_days=rent_days,
-        cost_paid=cost,
-        status="pending",
-    )
-    session.add(rental)
-    await session.commit()
-    return rental, None
-
-
-async def get_user_rentals(session: AsyncSession, user_id: int) -> list["OfferRental"]:
-    return (await session.execute(
-        select(OfferRental)
-        .where(OfferRental.renter_user_id == user_id)
-        .order_by(desc(OfferRental.created_at))
-        .limit(10)
-    )).scalars().all()
+# Система аренды слотов отключена (OfferRental удалена)
 
 
 # ============================
@@ -1135,24 +1049,14 @@ async def get_admin_extended_stats(session: AsyncSession) -> dict:
     total_game_profit = (await session.execute(
         select(func.sum(GameHistory.result))
     )).scalar_one() or Decimal("0")
-    try:
-        active_rentals = (await session.execute(
-            select(func.count(OfferRental.id)).where(OfferRental.status == "active")
-        )).scalar_one()
-        total_rent_income = (await session.execute(
-            select(func.sum(BalanceLog.amount)).where(BalanceLog.source == "offer_rental")
-        )).scalar_one() or Decimal("0")
-    except Exception:
-        active_rentals = 0
-        total_rent_income = Decimal("0")
     return {
         "users": users, "vip": vip, "with_nickname": with_nickname,
         "comments": comments, "reactions": reactions, "games": games,
-        "offers": offers, "active_rentals": active_rentals,
+        "offers": offers, "active_rentals": 0,
         "total_balance_in_system": total_balance,
         "total_admin_given": total_admin_given,
         "total_game_profit": total_game_profit,
-        "total_rent_income": total_rent_income,
+        "total_rent_income": Decimal("0"),
     }
 
 

@@ -17,9 +17,9 @@ from sqlalchemy import select, func, desc, text
 from app.config import ADMINS, OFFER_DEFAULT_RENT_COST_PER_DAY, ENABLE_ADMIN_BROADCAST
 from app.db import async_session
 from app.models import (
+
     Base,
     User, Video, Offer, BalanceLog, GameHistory,
-    OfferRental, OfferParticipation
     , TrustedUploader
 )
 from app.services import (
@@ -718,9 +718,6 @@ async def inv_export_ai(callback: CallbackQuery):
 
         try:
             rental_rows = (await session.execute(
-                select(OfferRental, User)
-                .join(User, User.id == OfferRental.renter_user_id)
-                .order_by(desc(OfferRental.created_at))
                 .limit(20)
             )).all()
         except Exception:
@@ -818,9 +815,6 @@ async def inv_export_ai_pdf(callback: CallbackQuery):
 
         try:
             rental_rows = (await session.execute(
-                select(OfferRental, User)
-                .join(User, User.id == OfferRental.renter_user_id)
-                .order_by(desc(OfferRental.created_at))
                 .limit(20)
             )).all()
         except Exception:
@@ -2362,9 +2356,6 @@ async def admin_review_offer(callback: CallbackQuery):
         active_rentals_count = 0
         try:
             active_rentals_count = (await session.execute(
-                select(func.count(OfferRental.id)).where(
-                    OfferRental.offer_id == offer_id,
-                    OfferRental.status == "active"
                 )
             )).scalar_one()
         except Exception:
@@ -2567,10 +2558,6 @@ async def admin_rentals_menu(callback: CallbackQuery):
         try:
             active_count = await count_active_rentals(session)
             recent_rentals = (await session.execute(
-                select(OfferRental, User, Offer)
-                .join(User, User.id == OfferRental.renter_user_id)
-                .join(Offer, Offer.id == OfferRental.offer_id)
-                .order_by(desc(OfferRental.created_at))
                 .limit(10)
             )).all()
         except Exception:
@@ -2622,7 +2609,6 @@ async def admin_review_rental(callback: CallbackQuery):
     async with async_session() as session:
         try:
             rental = (await session.execute(
-                select(OfferRental).where(OfferRental.id == rental_id)
             )).scalar_one_or_none()
         except Exception:
             rental = None
@@ -2675,7 +2661,6 @@ async def approve_rental_cb(callback: CallbackQuery):
     async with async_session() as session:
         try:
             rental = (await session.execute(
-                select(OfferRental).where(OfferRental.id == rental_id)
             )).scalar_one_or_none()
             if not rental:
                 await callback.answer("Не найдено.", show_alert=True)
@@ -2710,7 +2695,6 @@ async def reject_rental_cb(callback: CallbackQuery):
     async with async_session() as session:
         try:
             rental = (await session.execute(
-                select(OfferRental).where(OfferRental.id == rental_id)
             )).scalar_one_or_none()
             if not rental:
                 await callback.answer("Не найдено.", show_alert=True)
