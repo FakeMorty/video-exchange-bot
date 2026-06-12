@@ -93,6 +93,7 @@ from app.keyboards import (
     BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY,
 )
+from app.user_offer_handlers import user_offers_menu
 from app.logger import get_logger
 
 logger = get_logger(__name__)

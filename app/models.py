@@ -249,19 +249,20 @@ class Offer(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     channel_url: Mapped[str] = mapped_column(Text, nullable=False)
-    reward_preview: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("5"))
-    reward_final: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("35"))
-    penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("40"))
+    reward_preview: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("50"))
+    reward_final: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("350"))
+    penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("400"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="approved")
-    is_rentable: Mapped[bool] = mapped_column(Boolean, default=False)
-    rent_cost_per_day: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
-    max_simultaneous_rentals: Mapped[int] = mapped_column(Integer, default=1)
+    
+    # Новые поля для пользовательских офферов
+    duration_days: Mapped[int] = mapped_column(Integer, default=30)           # на сколько дней создан оффер
+    placement_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))  # сколько заплатил создатель
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     creator: Mapped["User"] = relationship(back_populates="user_offers")
     participations: Mapped[List["OfferParticipation"]] = relationship(back_populates="offer")
-    rentals: Mapped[List["OfferRental"]] = relationship(back_populates="offer")
 
 
 class OfferParticipation(Base):
@@ -282,24 +283,7 @@ class OfferParticipation(Base):
     offer: Mapped["Offer"] = relationship(back_populates="participations")
 
 
-class OfferRental(Base):
-    __tablename__ = "offer_rentals"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False, index=True)
-    renter_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    renter_channel_title: Mapped[str] = mapped_column(String(255), nullable=False)
-    renter_channel_url: Mapped[str] = mapped_column(Text, nullable=False)
-    rent_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    cost_paid: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    renter: Mapped["User"] = relationship(
-        back_populates="rentals", foreign_keys=[renter_user_id]
-    )
-    offer: Mapped["Offer"] = relationship(back_populates="rentals")
+# OfferRental удалена — система аренды слотов отключена
 
 
 class GameHistory(Base):
