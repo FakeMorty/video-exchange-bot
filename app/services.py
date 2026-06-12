@@ -1619,3 +1619,19 @@ async def get_active_events(session: AsyncSession):
     ).order_by(Event.discount_percent.desc())
     result = await session.execute(stmt)
     return result.scalars().all()
+
+
+# ============================
+# STUBS FOR DISABLED RENTAL SYSTEM (to prevent import errors)
+# ============================
+async def count_active_rentals(session):
+    return 0
+
+async def expire_old_rentals(session):
+    return 0
+
+async def create_offer_rental(session, offer_id, user_id, channel_title, channel_url, rent_days):
+    return None, "Rental system is disabled in this version."
+
+async def get_user_rentals(session, user_id):
+    return []

@@ -1754,10 +1754,7 @@ async def offers_rent_list(callback: CallbackQuery):
         async with async_session() as session:
             try:
                 active_count = (await session.execute(
-                    select(func.count(None  # OfferRental removed.id)).where(
-                        None  # OfferRental removed.offer_id == o.id,
-                        None  # OfferRental removed.status.in_(["active", "pending"])
-                    )
+                    select(func.count()).where(False)
                 )).scalar_one()
             except Exception:
                 pass
@@ -1818,12 +1815,7 @@ async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Аренда недоступна.", show_alert=True)
             return
 
-        active_count = (await session.execute(
-            select(func.count(None  # OfferRental removed.id)).where(
-                None  # OfferRental removed.offer_id == offer_id,
-                None  # OfferRental removed.status.in_(["active", "pending"])
-            )
-        )).scalar_one()
+        active_count = 0  # Rentals system disabled - always 0 slots used
         slots_left = offer.max_simultaneous_rentals - active_count
 
     if slots_left <= 0:

@@ -17,10 +17,9 @@ from sqlalchemy import select, func, desc, text
 from app.config import ADMINS, OFFER_DEFAULT_RENT_COST_PER_DAY, ENABLE_ADMIN_BROADCAST
 from app.db import async_session
 from app.models import (
-
     Base,
     User, Video, Offer, BalanceLog, GameHistory,
-    , TrustedUploader
+    TrustedUploader
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
@@ -716,12 +715,7 @@ async def inv_export_ai(callback: CallbackQuery):
             .limit(20)
         )).all()
 
-        try:
-            rental_rows = (await session.execute(
-                .limit(20)
-            )).all()
-        except Exception:
-            rental_rows = []
+        rental_rows = []  # Rentals disabled
 
     report = "=== ОТЧЁТ ДЛЯ АНАЛИЗА ===\n"
     report += f"Дата: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n\n"
@@ -813,12 +807,7 @@ async def inv_export_ai_pdf(callback: CallbackQuery):
             .limit(20)
         )).all()
 
-        try:
-            rental_rows = (await session.execute(
-                .limit(20)
-            )).all()
-        except Exception:
-            rental_rows = []
+        rental_rows = []  # Rentals disabled
 
     report = "=== ОТЧЁТ ДЛЯ АНАЛИЗА ===\n"
     report += f"Дата: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n\n"
@@ -2354,12 +2343,11 @@ async def admin_review_offer(callback: CallbackQuery):
         )).scalar_one()
 
         active_rentals_count = 0
-        try:
-            active_rentals_count = (await session.execute(
-                )
-            )).scalar_one()
-        except Exception:
-            pass
+        # Rentals system is disabled, so skip count
+        # try:
+        #     active_rentals_count = (await session.execute(...)).scalar_one()
+        # except Exception:
+        #     pass
 
     is_rentable = getattr(offer, "is_rentable", False)
     rent_cost = getattr(offer, "rent_cost_per_day", 0)
@@ -2555,14 +2543,8 @@ async def admin_rentals_menu(callback: CallbackQuery):
         await callback.answer()
         return
     async with async_session() as session:
-        try:
-            active_count = await count_active_rentals(session)
-            recent_rentals = (await session.execute(
-                .limit(10)
-            )).all()
-        except Exception:
-            active_count = 0
-            recent_rentals = []
+        active_count = 0
+        recent_rentals = []  # Rentals disabled
 
     text = f"🔑 <b>Управление арендой</b>\n\nАктивных аренд: {active_count}\n\n"
 
