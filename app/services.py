@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
-    ActiveSale,
+    ActiveSale, Event,
     User, Video, VideoView, VideoRating, Payment,
     Offer, OfferParticipation, OfferRental,
     Comment, ContentReaction, GameHistory,
@@ -1673,11 +1673,29 @@ async def get_active_sale(session: AsyncSession):
 async def get_current_prices(session: AsyncSession):
     from app.config import VIP_PRICE_STARS, STARS_PACKAGES
     sale = await get_active_sale(session)
+    active_events = await get_active_events(session)
+    
     vip_price = int(VIP_PRICE_STARS)
     packs = {}
     for k, v in STARS_PACKAGES.items():
         packs[k] = {"stars": v["stars"], "coins": v["coins"], "title": v["title"]}
-        
+    
+    # Применяем скидки от событий
+    total_discount = 0
+    for ev in active_events:
+        total_discount = max(total_discount, ev.discount_percent)
+    
+    if total_discount > 0:
+        discount = total_discount / 100.0
+        # Применяем на VIP если есть событие с applies_vip
+        if any(e.applies_vip for e in active_events):
+            vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
+        # Применяем на монеты если есть событие с applies_coins
+        if any(e.applies_coins for e in active_events):
+            for k in packs:
+                packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
+    
+    # Также применяем старую систему ActiveSale
     if sale:
         discount = sale.discount_percent / 100.0
         if sale.applies_to in ("all", "vip"):
@@ -1687,3 +1705,13 @@ async def get_current_prices(session: AsyncSession):
                 packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
                 
     return vip_price, packs, sale
+
+
+async def get_active_events(session: AsyncSession):
+    """Получить все активные события"""
+    stmt = select(Event).where(
+        Event.is_active == True,
+        Event.end_date > func.now()
+    ).order_by(Event.discount_percent.desc())
+    result = await session.execute(stmt)
+    return result.scalars().all()

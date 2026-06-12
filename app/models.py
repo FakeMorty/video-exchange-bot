@@ -452,6 +452,7 @@ class LotteryTicket(Base):
     round: Mapped["LotteryRound"] = relationship(back_populates="tickets")
     user: Mapped["User"] = relationship(back_populates="lottery_tickets")
 
+
 class ActiveSale(Base):
     __tablename__ = "active_sales"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -459,3 +460,34 @@ class ActiveSale(Base):
     applies_to: Mapped[str] = mapped_column(String(50), nullable=False)
     end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     announcement: Mapped[str] = mapped_column(Text, nullable=True)
+
+
+# ============================
+# НОВЫЕ СОБЫТИЯ (EVENTS) — гибкая система скидок
+# ============================
+class Event(Base):
+    """
+    Событие с гибкой настройкой скидок.
+    Применяется к покупкам VIP, монет, лутбоксов и т.д.
+    """
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    discount_percent: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-99
+    duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Гибкие флаги применения
+    applies_vip: Mapped[bool] = mapped_column(Boolean, default=False)
+    applies_coins: Mapped[bool] = mapped_column(Boolean, default=False)
+    applies_lootbox: Mapped[bool] = mapped_column(Boolean, default=False)
+    applies_cases: Mapped[bool] = mapped_column(Boolean, default=False)  # если будут кейсы
+
+    start_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    creator: Mapped["User"] = relationship(foreign_keys=[created_by])
