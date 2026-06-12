@@ -468,8 +468,8 @@ class Event(Base):
     applies_lootbox: Mapped[bool] = mapped_column(Boolean, default=False)
     applies_cases: Mapped[bool] = mapped_column(Boolean, default=False)  # если будут кейсы
 
-    # Опциональная картинка
-    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Опциональная картинка (telegram_file_id)
+    image_file_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     start_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)

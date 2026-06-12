@@ -194,11 +194,17 @@ async def event_image(message: Message, state: FSMContext):
     if not await _check_admin(message.from_user.id):
         return
     
-    img = message.text.strip()
-    if img.lower() == "пропустить":
-        await state.update_data(image_url=None)
+    if message.photo:
+        # Берём самое большое фото
+        file_id = message.photo[-1].file_id
+        await state.update_data(image_file_id=file_id)
     else:
-        await state.update_data(image_url=img)
+        text = (message.text or "").strip().lower()
+        if text in ["пропустить", "нет", "skip", "no"]:
+            await state.update_data(image_file_id=None)
+        else:
+            await message.answer("🖼 Пожалуйста, отправьте фото или напишите 'пропустить'")
+            return
     
     await state.set_state(EventCreationState.confirm)
     
@@ -212,8 +218,10 @@ async def event_image(message: Message, state: FSMContext):
         f"💰 Скидка: <b>{data['discount_percent']}%</b>\n"
         f"📅 Длительность: <b>{data['duration_days']} дней</b>\n"
     )
-    if data.get("image_url"):
-        summary += f"🖼 Картинка: {data['image_url']}\n"
+    if data.get("image_file_id"):
+        summary += "🖼 Картинка: ✅ прикреплена\n"
+    else:
+        summary += "🖼 Картинка: ❌ нет\n"
     summary += "\nПрименяется к:\n"
     for k, v in applies.items():
         icon = "✅" if v else "❌"
@@ -242,7 +250,7 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
             applies_coins=applies.get("coins", False),
             applies_lootbox=applies.get("lootbox", False),
             applies_cases=applies.get("cases", False),
-            image_url=data.get("image_url"),
+            image_file_id=data.get("image_file_id"),
             start_date=start,
             end_date=end,
             is_active=True,
@@ -267,7 +275,7 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
 
 
 async def _broadcast_event_start(bot, event: Event):
-    """Рассылка события"""
+    """Рассылка события (с поддержкой фото по file_id)"""
     async with async_session() as session:
         users = (await session.execute(
             select(User.telegram_id).where(User.status == "active")
@@ -290,8 +298,8 @@ async def _broadcast_event_start(bot, event: Event):
     sent = 0
     for tg_id in users:
         try:
-            if event.image_url:
-                await bot.send_photo(tg_id, photo=event.image_url, caption=text, parse_mode="HTML")
+            if event.image_file_id:
+                await bot.send_photo(tg_id, photo=event.image_file_id, caption=text, parse_mode="HTML")
             else:
                 await bot.send_message(tg_id, text, parse_mode="HTML")
             sent += 1
