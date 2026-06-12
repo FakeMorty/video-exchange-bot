@@ -25,6 +25,7 @@ from app.config import (
 from app.db import engine, init_db, async_session
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
+from app.admin_events_handlers import router as events_router
 from app.logger import setup_logging, get_logger, log_info
 from app.services import (
     get_offer_participations_for_subscription_audit,
