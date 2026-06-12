@@ -511,6 +511,10 @@ async def show_profile(message: Message):
             [InlineKeyboardButton(
                 text="✏️ Сменить ник",
                 callback_data="set_nickname_start"
+            )],
+            [InlineKeyboardButton(
+                text="🛍 Донатный магазин",
+                callback_data="donation_shop"
             )]
         ])
         text = (
