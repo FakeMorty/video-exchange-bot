@@ -1,7 +1,7 @@
 """add_events_table
 
 Revision ID: add_events_001
-Revises: b861ad02334f
+Revises: 0c4bad721113
 Create Date: 2026-06-12
 """
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 
 revision = 'add_events_001'
-down_revision = 'b861ad02334f'
+down_revision = '0c4bad721113'
 branch_labels = None
 depends_on = None
 
@@ -22,13 +22,13 @@ def upgrade() -> None:
         sa.Column('description', sa.Text(), nullable=True),
         sa.Column('discount_percent', sa.Integer(), nullable=False),
         sa.Column('duration_days', sa.Integer(), nullable=False),
-        sa.Column('applies_vip', sa.Boolean(), nullable=False, default=False),
-        sa.Column('applies_coins', sa.Boolean(), nullable=False, default=False),
-        sa.Column('applies_lootbox', sa.Boolean(), nullable=False, default=False),
-        sa.Column('applies_cases', sa.Boolean(), nullable=False, default=False),
+        sa.Column('applies_vip', sa.Boolean(), nullable=False, server_default='false'),
+        sa.Column('applies_coins', sa.Boolean(), nullable=False, server_default='false'),
+        sa.Column('applies_lootbox', sa.Boolean(), nullable=False, server_default='false'),
+        sa.Column('applies_cases', sa.Boolean(), nullable=False, server_default='false'),
         sa.Column('start_date', sa.DateTime(), nullable=False),
         sa.Column('end_date', sa.DateTime(), nullable=False),
-        sa.Column('is_active', sa.Boolean(), nullable=False, default=True),
+        sa.Column('is_active', sa.Boolean(), nullable=False, server_default='true'),
         sa.Column('created_by', sa.Integer(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),

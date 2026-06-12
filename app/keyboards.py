@@ -57,6 +57,7 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⚡ Авто-модерация (доверенные)", callback_data="admin_auto_moderation")],
         [InlineKeyboardButton(text="🤝 Доверенные авторы", callback_data="admin_trusted_uploaders")],
         [InlineKeyboardButton(text="📢 Офферы и реклама", callback_data="admin_offers_menu")],
+        [InlineKeyboardButton(text="🎉 События и акции", callback_data="admin_events_menu")],
         [InlineKeyboardButton(text="💬 Обращения пользователей", callback_data="admin_feedback_menu")],
         [InlineKeyboardButton(text="🕵️ Расследование", callback_data="admin_investigation")],
     ]
@@ -143,7 +144,18 @@ def photo_actions_keyboard(photo_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-
+def offers_list_keyboard(offers) -> InlineKeyboardMarkup:
+    """Создаёт клавиатуру со списком офферов"""
+    buttons = []
+    for offer in offers[:10]:  # Ограничиваем 10 офферами
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📢 {offer.title[:40]}",
+                callback_data=f"offer_open:{offer.id}"
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="btn_offers_back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup:
@@ -187,10 +199,6 @@ def games_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
-
-
-
-
 
 
 # =========================
@@ -298,6 +306,7 @@ def admin_db_keyboard(tables) -> InlineKeyboardMarkup:
     kb.append([InlineKeyboardButton(text="🔙 Админ-центр", callback_data="admin_center")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
+
 def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
     emojis = ["🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑"]
     options = random.sample([e for e in emojis if e != target_emoji], 5)
@@ -318,6 +327,7 @@ def buy_coins_keyboard(packs: dict) -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(text=f"💎 {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy_{p_id}")])
     buttons.append([InlineKeyboardButton(text="⚡ Своя сумма Stars", callback_data="buy_custom")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def vip_buy_keyboard(price: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
