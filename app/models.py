@@ -281,7 +281,19 @@ class OfferParticipation(Base):
     offer: Mapped["Offer"] = relationship(back_populates="participations")
 
 
-# OfferRental удалена — система аренды слотов отключена
+class OfferRental(Base):
+    """Заглушка - система аренды отключена, но модель оставлена для совместимости"""
+    __tablename__ = "offer_rentals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False)
+    renter_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    renter_channel_title: Mapped[str] = mapped_column(String(255), nullable=False)
+    renter_channel_url: Mapped[str] = mapped_column(Text, nullable=False)
+    rent_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_paid: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class GameHistory(Base):
