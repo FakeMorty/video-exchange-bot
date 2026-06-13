@@ -1,17 +1,20 @@
 """
-Robust DB fix script.
+Final Database and Code Stability Fix.
 """
 import asyncio
-from app.db import engine
+import os
 from sqlalchemy import text
+from app.db import engine
 
 async def fix_database():
-    print("🔧 Fixing DB structure...")
+    print("🔧 Starting Final DB Fix...")
     
     is_sqlite = engine.url.drivername == "sqlite+aiosqlite"
     
-    async with engine.begin() as conn:
-        # 1. Events Table
+    # We use separate connections to avoid transaction aborts
+    async with engine.connect() as conn:
+        # 1. Fix Events Table
+        print("Checking events table...")
         if is_sqlite:
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS events (
@@ -28,7 +31,7 @@ async def fix_database():
                     start_date TIMESTAMP NOT NULL,
                     end_date TIMESTAMP NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
-                    created_by INTEGER REFERENCES users(id),
+                    created_by INTEGER,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """))
@@ -48,21 +51,32 @@ async def fix_database():
                     start_date TIMESTAMP NOT NULL,
                     end_date TIMESTAMP NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT true,
-                    created_by INTEGER REFERENCES users(id),
+                    created_by INTEGER,
                     created_at TIMESTAMP NOT NULL DEFAULT NOW()
                 )
             """))
-        print("✅ Events table OK")
+        await conn.commit()
         
-        # 2. Offers update
+        # Ensure image_file_id exists if table was created by older script
+        try:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN image_file_id TEXT"))
+            await conn.commit()
+            print("✅ Added image_file_id to events")
+        except:
+            pass # Already exists
+            
+        # 2. Fix Offers Table
+        print("Checking offers table...")
         for col, col_type in [("duration_days", "INTEGER NOT NULL DEFAULT 30"), ("placement_cost", "NUMERIC(10,2) NOT NULL DEFAULT 0")]:
             try:
                 await conn.execute(text(f"ALTER TABLE offers ADD COLUMN {col} {col_type}"))
+                await conn.commit()
             except:
                 pass # Already exists
-        print("✅ Offers columns updated")
+        print("✅ Offers columns checked")
         
-        # 3. Active Sale Table (just in case)
+        # 3. Fix Active Sales Table
+        print("Checking active_sales table...")
         if is_sqlite:
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS active_sales (
@@ -83,6 +97,7 @@ async def fix_database():
                     announcement TEXT
                 )
             """))
+        await conn.commit()
         print("✅ ActiveSale table OK")
 
     print("🎉 DB fix complete!")

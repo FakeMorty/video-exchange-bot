@@ -650,11 +650,11 @@ async def on_startup(app):
     bot = app['bot']
     await init_db()
     
-    # ПРИНУДИТЕЛЬНОЕ ИСПРАВЛЕНИЕ БД
-    from fix_db import fix_database
+    # ПРИНУДИТЕЛЬНОЕ ИСПРАВЛЕНИЕ БД (PostgreSQL Robust version)
+    from fix_db_v2 import fix_database
     try:
         await fix_database()
-        log_info(logger, "Database structure fixed")
+        log_info(logger, "Database structure final check complete")
     except Exception as e:
         log_info(logger, f"Database fix warning: {e}")
 
