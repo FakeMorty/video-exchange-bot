@@ -937,20 +937,23 @@ async def mod_approve(callback: CallbackQuery):
         if not video:
             await callback.answer("Уже обработано.", show_alert=True)
             return
+        
         uploader = await get_user_by_id(session, video.uploader_user_id)
         if uploader:
+            content_name = "фото" if video.content_type == "photo" else "видео"
             try:
                 await callback.bot.send_message(
                     uploader.telegram_id,
-                    f"✅ Ваше видео #{video_id} одобрено! Монеты начислены."
+                    f"✅ Ваше {content_name} #{video_id} одобрено! Монеты начислены."
                 )
             except Exception:
                 pass
 
-    # Редактируем сообщение с видео, добавляя статус
+    # Редактируем сообщение с медиа, добавляя статус
     try:
+        content_name_up = "ФОТО" if video.content_type == "photo" else "ВИДЕО"
         await callback.message.edit_caption(
-            caption=f"✅ #{video_id} — ОДОБРЕНО",
+            caption=f"✅ #{video_id} — {content_name_up} ОДОБРЕНО",
             reply_markup=admin_after_action_keyboard()
         )
     except Exception:
@@ -1052,19 +1055,23 @@ async def admin_approve_all(callback: CallbackQuery):
                     count += 1
                     uploader = await get_user_by_id(session, video.uploader_user_id)
                     if uploader:
-                        uploader_notifications[uploader.telegram_id] = uploader_notifications.get(uploader.telegram_id, 0) + 1
+                        if uploader.telegram_id not in uploader_notifications:
+                            uploader_notifications[uploader.telegram_id] = {"count": 0, "type": video.content_type}
+                        uploader_notifications[uploader.telegram_id]["count"] += 1
                 else:
-                    break
-            except Exception:
+                    continue
+            except Exception as e:
+                print(f"[ApproveAll] Error approving {video.id}: {e}")
                 errors += 1
-                break
+                continue
 
     import asyncio
-    for tg_id, approved_count in uploader_notifications.items():
+    for tg_id, info in uploader_notifications.items():
+        approved_count = info["count"]
         try:
             await callback.bot.send_message(
                 tg_id,
-                f"✅ Одобрено {approved_count} ваших видео/фото! Монеты начислены."
+                f"✅ Одобрено {approved_count} ваших публикаций! Монеты начислены."
             )
         except Exception:
             pass
@@ -1278,15 +1285,22 @@ async def admin_auto_moderation(callback: CallbackQuery):
                     approved += 1
                     uploader = await get_user_by_id(session, video.uploader_user_id)
                     if uploader:
+                        content_name = "фото" if video.content_type == "photo" else "видео"
                         try:
                             await callback.bot.send_message(
                                 uploader.telegram_id,
-                                f"✅ Ваше видео #{video.id} одобрено! Монеты начислены."
+                                f"✅ Ваше {content_name} #{video.id} одобрено! Монеты начислены."
                             )
                         except Exception:
                             pass
-            except Exception:
-                break
+                else:
+                    # If approve_video returned None, it's not pending anymore
+                    continue
+            except Exception as e:
+                print(f"[AutoMod] Error approving {video.id}: {e}")
+                # We don't break, just try next one (though next loop might get same if status didn't change)
+                # But since approve_video sets status, it should work unless it crashes BEFORE setting status.
+                continue
 
     async with async_session() as session:
         remaining = await count_pending_videos(session)

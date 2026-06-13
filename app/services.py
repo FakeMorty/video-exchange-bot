@@ -358,12 +358,15 @@ async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
     v.status = "approved"
     uploader = await get_user_by_id(session, v.uploader_user_id)
     if uploader:
-        from app.config import PHOTO_UPLOAD_REWARD
-        reward = PHOTO_UPLOAD_REWARD if v.content_type == "photo" else to_decimal(UPLOAD_REWARD)
+        from app.config import PHOTO_UPLOAD_REWARD, UPLOAD_REWARD
+        is_photo = v.content_type == "photo"
+        reward_val = PHOTO_UPLOAD_REWARD if is_photo else UPLOAD_REWARD
+        reward = to_decimal(reward_val)
+        
         await log_balance_change(session, uploader, reward, "upload_approved", source_id=v.id)
         uploader.balance += reward
         await log_user_action(session, uploader.id, "video_approved",
-                              f"video_id={v.id}, reward={reward}")
+                              f"id={v.id}, type={v.content_type}, reward={reward}")
     await session.commit()
     return v
 
