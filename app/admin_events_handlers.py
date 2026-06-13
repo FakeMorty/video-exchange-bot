@@ -89,7 +89,7 @@ async def admin_events_menu(callback: CallbackQuery):
 
 
 async def _check_admin(tg_id: int) -> bool:
-    from app.admin_handlers import check_admin
+    from app.utils.admin import check_admin
     return await check_admin(tg_id)
 
 
