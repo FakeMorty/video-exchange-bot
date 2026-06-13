@@ -77,6 +77,7 @@ from app.services import (
     can_show_offer_to_user, mark_offer_shown,
     get_random_active_offer, should_inject_ad_in_video,
     open_lootbox_for_coins, open_lootbox_for_stars,
+    get_current_prices,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -573,35 +574,40 @@ async def show_level(message: Message):
 # =========================
 @router.message(F.text == BTN_VIP)
 async def show_vip(message: Message):
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        if not user:
-            return
-        if not await require_nickname(message, user):
-            return
+    try:
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                return
+            if not await require_nickname(message, user):
+                return
 
-        if is_vip(user):
-            await message.answer(
-                f"👑 <b>Вы VIP!</b>\n\n"
-                f"До: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
-                f"Привилегии:\n"
-                f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-                f"• Скидка 50% на просмотр\n"
-                f"• VIP квесты",
-                parse_mode="HTML"
-            )
-        else:
-            await message.answer(
-                f"👑 <b>VIP статус</b>\n\n"
-                f"Стоимость: <b>{VIP_PRICE_STARS} Stars</b>\n"
-                f"Длительность: {VIP_DURATION_DAYS} дней\n\n"
-                f"Привилегии:\n"
-                f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-                f"• Скидка 50% на просмотр\n"
-                f"• VIP квесты",
-                parse_mode="HTML",
-                reply_markup=vip_buy_keyboard()
-            )
+            if is_vip(user):
+                await message.answer(
+                    f"👑 <b>Вы VIP!</b>\n\n"
+                    f"До: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
+                    f"Привилегии:\n"
+                    f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
+                    f"• Скидка 50% на просмотр\n"
+                    f"• VIP квесты",
+                    parse_mode="HTML"
+                )
+            else:
+                vip_price, packs, sale = await get_current_prices(session)
+                await message.answer(
+                    f"👑 <b>VIP статус</b>\n\n"
+                    f"Стоимость: <b>{vip_price} Stars</b>\n"
+                    f"Длительность: {VIP_DURATION_DAYS} дней\n\n"
+                    f"Привилегии:\n"
+                    f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
+                    f"• Скидка 50% на просмотр\n"
+                    f"• VIP квесты",
+                    parse_mode="HTML",
+                    reply_markup=vip_buy_keyboard(vip_price)
+                )
+    except Exception as e:
+        logger.exception("Error in show_vip")
+        await message.answer("⚠️ Ошибка при получении информации о VIP.")
 
 
 @router.callback_query(F.data == "buy_vip")
@@ -1152,32 +1158,38 @@ async def btn_referrals(message: Message):
 # =========================
 @router.message(F.text == BTN_BUY)
 async def btn_buy(message: Message):
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        if not user:
-            return
-        if not await require_nickname(message, user):
-            return
+    try:
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                return
+            if not await require_nickname(message, user):
+                return
 
-    # Динамический курс
-    bonus_text = ""
-    if DYNAMIC_STAR_DISCOUNT_ENABLED:
-        try:
-            start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
-            now_h = datetime.utcnow().hour
-            if start_h <= now_h < end_h:
-                bonus_text = f"\n🔥 <b>Сейчас действует бонус +{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}% монет!</b>"
-            else:
-                bonus_text = f"\n💡 Часы бонуса: {start_h}:00–{end_h}:00 UTC (+{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}%)"
-        except Exception:
-            pass
-    bonus_text += f"\n🎁 Первая покупка дня: +{FIRST_PURCHASE_DAILY_BONUS} монет бонусом."
+            vip_price, packs, sale = await get_current_prices(session)
 
-    await message.answer(
-        f"💳 <b>Пополнение баланса</b>{bonus_text}\n\nВыберите пакет:",
-        parse_mode="HTML",
-        reply_markup=buy_coins_keyboard()
-    )
+        # Динамический курс
+        bonus_text = ""
+        if DYNAMIC_STAR_DISCOUNT_ENABLED:
+            try:
+                start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
+                now_h = datetime.utcnow().hour
+                if start_h <= now_h < end_h:
+                    bonus_text = f"\n🔥 <b>Сейчас действует бонус +{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}% монет!</b>"
+                else:
+                    bonus_text = f"\n💡 Часы бонуса: {start_h}:00–{end_h}:00 UTC (+{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}%)"
+            except Exception:
+                pass
+        bonus_text += f"\n🎁 Первая покупка дня: +{FIRST_PURCHASE_DAILY_BONUS} монет бонусом."
+
+        await message.answer(
+            f"💳 <b>Пополнение баланса</b>{bonus_text}\n\nВыберите пакет:",
+            parse_mode="HTML",
+            reply_markup=buy_coins_keyboard(packs)
+        )
+    except Exception as e:
+        logger.exception("Error in btn_buy")
+        await message.answer("⚠️ Ошибка при получении пакетов пополнения.")
 
 
 @router.callback_query(F.data.startswith("buy:"))

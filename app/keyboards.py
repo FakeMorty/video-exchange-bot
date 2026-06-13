@@ -325,7 +325,7 @@ def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
 def buy_coins_keyboard(packs: dict) -> InlineKeyboardMarkup:
     buttons = []
     for p_id, p_data in packs.items():
-        buttons.append([InlineKeyboardButton(text=f"💎 {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy_{p_id}")])
+        buttons.append([InlineKeyboardButton(text=f"💎 {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
     buttons.append([InlineKeyboardButton(text="⚡ Своя сумма Stars", callback_data="buy_custom")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
