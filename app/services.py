@@ -442,11 +442,13 @@ async def get_random_video_for_user(session: AsyncSession, user_id: int) -> "Vid
 
 
 async def get_random_photo_for_user(session: AsyncSession, user_id: int) -> "Video | None":
+    viewed = select(VideoView.video_id).where(VideoView.user_id == user_id)
     return (await session.execute(
         select(Video).where(
             Video.status == "approved",
             Video.content_type == "photo",
             Video.uploader_user_id != user_id,
+            ~Video.id.in_(viewed)
         ).order_by(func.random()).limit(1)
     )).scalar_one_or_none()
 
