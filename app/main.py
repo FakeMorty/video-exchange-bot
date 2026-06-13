@@ -649,6 +649,15 @@ async def _notify_admins_started(bot: Bot) -> None:
 async def on_startup(app):
     bot = app['bot']
     await init_db()
+    
+    # ПРИНУДИТЕЛЬНОЕ ИСПРАВЛЕНИЕ БД
+    from fix_db import fix_database
+    try:
+        await fix_database()
+        log_info(logger, "Database structure fixed")
+    except Exception as e:
+        log_info(logger, f"Database fix warning: {e}")
+
     try:
         def run_migrations():
             alembic_cfg = Config("alembic.ini")

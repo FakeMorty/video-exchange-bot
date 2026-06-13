@@ -1570,52 +1570,57 @@ def should_inject_ad_in_video() -> bool:
 
 
 async def get_active_sale(session: AsyncSession):
-    stmt = select(ActiveSale).where(ActiveSale.end_date > datetime.utcnow()).order_by(ActiveSale.id.desc()).limit(1)
+    stmt = select(ActiveSale).where(ActiveSale.end_date > func.now()).order_by(ActiveSale.id.desc()).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 async def get_current_prices(session: AsyncSession):
-    from app.config import VIP_PRICE_STARS, STARS_PACKAGES
-    sale = await get_active_sale(session)
-    active_events = await get_active_events(session)
-    
-    vip_price = int(VIP_PRICE_STARS)
-    packs = {}
-    for k, v in STARS_PACKAGES.items():
-        packs[k] = {"stars": v["stars"], "coins": v["coins"], "title": v["title"]}
-    
-    # Применяем скидки от событий
-    total_discount = 0
-    for ev in active_events:
-        total_discount = max(total_discount, ev.discount_percent)
-    
-    if total_discount > 0:
-        discount = total_discount / 100.0
-        # Применяем на VIP если есть событие с applies_vip
-        if any(e.applies_vip for e in active_events):
-            vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
-        # Применяем на монеты если есть событие с applies_coins
-        if any(e.applies_coins for e in active_events):
-            for k in packs:
-                packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
-    
-    # Также применяем старую систему ActiveSale
-    if sale:
-        discount = sale.discount_percent / 100.0
-        if sale.applies_to in ("all", "vip"):
-            vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
-        if sale.applies_to in ("all", "coins"):
-            for k in packs:
-                packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
-                
-    return vip_price, packs, sale
+    try:
+        from app.config import VIP_PRICE_STARS, STARS_PACKAGES
+        sale = await get_active_sale(session)
+        active_events = await get_active_events(session)
+        
+        vip_price = int(VIP_PRICE_STARS)
+        packs = {}
+        for k, v in STARS_PACKAGES.items():
+            packs[k] = {"stars": v["stars"], "coins": v["coins"], "title": v["title"]}
+        
+        # Применяем скидки от событий
+        total_discount = 0
+        if active_events:
+            for ev in active_events:
+                total_discount = max(total_discount, ev.discount_percent)
+        
+        if total_discount > 0:
+            discount = total_discount / 100.0
+            # Применяем на VIP если есть событие с applies_vip
+            if any(e.applies_vip for e in active_events):
+                vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
+            # Применяем на монеты если есть событие с applies_coins
+            if any(e.applies_coins for e in active_events):
+                for k in packs:
+                    packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
+        
+        # Также применяем старую систему ActiveSale
+        if sale:
+            discount = sale.discount_percent / 100.0
+            if sale.applies_to in ("all", "vip"):
+                vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
+            if sale.applies_to in ("all", "coins"):
+                for k in packs:
+                    packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
+                    
+        return vip_price, packs, sale
+    except Exception as e:
+        print(f"Error in get_current_prices: {e}")
+        raise
 
 
 async def get_active_events(session: AsyncSession):
     """Получить все активные события"""
     stmt = select(Event).where(
         Event.is_active == True,
-        Event.end_date > datetime.utcnow()
+        Event.end_date > func.now()
     ).order_by(Event.discount_percent.desc())
     result = await session.execute(stmt)
     return result.scalars().all()

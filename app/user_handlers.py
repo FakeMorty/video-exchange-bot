@@ -606,8 +606,10 @@ async def show_vip(message: Message):
                     reply_markup=vip_buy_keyboard(vip_price)
                 )
     except Exception as e:
-        logger.exception("Error in show_vip")
-        await message.answer(f"⚠️ Ошибка при получении информации о VIP: {str(e)}")
+        import traceback
+        err_detail = traceback.format_exc()
+        logger.error(f"Error in show_vip: {err_detail}")
+        await message.answer(f"⚠️ Ошибка при получении информации о VIP:\n<code>{escape(str(e))}</code>")
 
 
 @router.callback_query(F.data == "buy_vip")
@@ -1188,8 +1190,10 @@ async def btn_buy(message: Message):
             reply_markup=buy_coins_keyboard(packs)
         )
     except Exception as e:
-        logger.exception("Error in btn_buy")
-        await message.answer(f"⚠️ Ошибка при получении пакетов пополнения: {str(e)}")
+        import traceback
+        err_detail = traceback.format_exc()
+        logger.error(f"Error in btn_buy: {err_detail}")
+        await message.answer(f"⚠️ Ошибка при получении пакетов пополнения:\n<code>{escape(str(e))}</code>")
 
 
 @router.callback_query(F.data.startswith("buy:"))
