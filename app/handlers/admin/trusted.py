@@ -9,7 +9,7 @@ from sqlalchemy import select, desc
 from app.db import async_session
 from app.models import TrustedUploader, User
 from app.services import get_user, get_user_by_username, get_user_by_display_name, get_display_name
-from app.utils.admin import check_admin
+from app.utils.admin import check_admin, _safe_edit
 
 router = Router()
 

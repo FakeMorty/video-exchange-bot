@@ -12,7 +12,7 @@ from app.services import (
     get_user, get_user_by_id, get_user_by_username, get_user_by_display_name,
     update_user_balance, set_user_ban_status, get_user_dossier, log_user_action
 )
-from app.utils.admin import check_admin
+from app.utils.admin import check_admin, _safe_edit
 from app.keyboards import admin_after_action_keyboard
 
 router = Router()

@@ -10,7 +10,7 @@ from app.services import (
     get_next_pending_video, approve_video, reject_video,
     get_user_by_id, get_display_name
 )
-from app.utils.admin import check_admin
+from app.utils.admin import check_admin, _safe_edit
 from app.keyboards import moderation_keyboard, rejection_reason_keyboard, admin_after_action_keyboard
 
 router = Router()

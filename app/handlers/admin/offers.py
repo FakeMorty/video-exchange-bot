@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.db import async_session
 from app.models import User, Offer
 from app.services import admin_create_offer
-from app.utils.admin import check_admin
+from app.utils.admin import check_admin, _safe_edit
 from app.keyboards import admin_after_action_keyboard
 from app.config import ENABLE_ADMIN_BROADCAST
 

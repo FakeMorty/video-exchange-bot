@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.db import async_session
 from app.models import User
-from app.utils.admin import check_admin
+from app.utils.admin import check_admin, _safe_edit
 from app.config import ENABLE_ADMIN_BROADCAST
 
 router = Router()

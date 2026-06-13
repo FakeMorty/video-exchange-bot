@@ -11,7 +11,7 @@ from app.services import (
     get_admin_extended_stats, get_recent_feedback,
     count_pending_videos, count_active_rentals
 )
-from app.utils.admin import check_admin, is_super_admin
+from app.utils.admin import check_admin, is_super_admin, _safe_edit
 from app.keyboards import admin_main_keyboard, admin_db_keyboard, admin_after_action_keyboard
 
 router = Router()
