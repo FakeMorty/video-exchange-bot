@@ -98,7 +98,7 @@ async def user_offer_url(message: Message, state: FSMContext):
     
     await message.answer(
         "Шаг 4/7: Введите <b>предварительную награду</b> (монеты, выдаётся сразу):\n\n"
-        "Рекомендуется: 50, 100, 150",
+        "Рекомендуется: 500, 1000, 1500",
         parse_mode="HTML"
     )
 
@@ -116,7 +116,7 @@ async def user_offer_preview(message: Message, state: FSMContext):
     await state.set_state(UserOfferState.waiting_reward_final)
     await message.answer(
         "Шаг 5/7: Введите <b>итоговую награду</b> (после проверки подписки):\n\n"
-        "Рекомендуется: 350, 500, 800",
+        "Рекомендуется: 3500, 5000, 8000",
         parse_mode="HTML"
     )
 
@@ -137,7 +137,7 @@ async def user_offer_final(message: Message, state: FSMContext):
     max_penalty = (data["reward_preview"] + val) * Decimal("0.5")
     await message.answer(
         f"Шаг 6/7: Введите штраф за отписку (макс {max_penalty:.0f}):\n\n"
-        "Рекомендуется: 400-600",
+        "Рекомендуется: 4000-6000",
         parse_mode="HTML"
     )
 
@@ -239,7 +239,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 session,
                 user_id=user.id,
                 payload=payload,
-                stars_amount=int(cost * 2),  # примерный курс
+                stars_amount=int(cost / 500),  # Курс 500 монет за 1 Star
                 coins_amount=cost
             )
             await session.commit()
@@ -249,7 +249,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 description=f"Оффер «{data['title']}» на {data['duration_days']} дней",
                 payload=payload,
                 currency="XTR",
-                prices=[LabeledPrice(label="Размещение", amount=int(cost * 2))]
+                prices=[LabeledPrice(label="Размещение", amount=max(1, int(cost / 500)))]
             )
             await state.clear()
     

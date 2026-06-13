@@ -1440,7 +1440,7 @@ async def successful_payment(message: Message):
             icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
             await message.answer(
                 f"{icon} <b>Лутбокс открыт!</b>\n\n"
-                f"Выигрыш: <b>+{reward:.2f}</b> монет",
+                f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
                 parse_mode="HTML",
             )
     else:
@@ -1460,7 +1460,7 @@ async def successful_payment(message: Message):
         if payment:
             await message.answer(
                 f"✅ Оплата успешна!\n"
-                f"💰 Начислено: <b>{payment.coins_amount}</b> монет",
+                f"💰 Начислено: <b>{payment.coins_amount:,.0f}</b> монет".replace(',', ' '),
                 parse_mode="HTML"
             )
         else:
@@ -1472,7 +1472,7 @@ def _lootbox_kb() -> InlineKeyboardMarkup:
     star_price = int(LOOTBOX_STAR_PRICE)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"🪙 Купить за {coin_price:.0f} монет",
+            text=f"🪙 Купить за {coin_price:,.0f} монет".replace(',', ' '),
             callback_data="lootbox_buy:coins"
         )],
         [InlineKeyboardButton(
@@ -1492,7 +1492,7 @@ async def lootbox_menu(callback: CallbackQuery):
     star_price = int(LOOTBOX_STAR_PRICE)
     await callback.message.answer(
         "🎁 <b>Лутбоксы</b>\n\n"
-        f"Цена: <b>{coin_price:.0f}</b> монет или <b>{star_price}</b> Stars.\n"
+        f"Цена: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n".replace(',', ' ')
         "Внутри — случайный выигрыш монет.\n"
         "Редкие крупные выигрыши возможны, но не гарантированы.",
         parse_mode="HTML",
@@ -1521,7 +1521,7 @@ async def lootbox_buy(callback: CallbackQuery):
         icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
         await callback.message.answer(
             f"{icon} <b>Лутбокс открыт!</b>\n\n"
-            f"Выигрыш: <b>+{reward:.2f}</b> монет",
+            f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
             parse_mode="HTML",
             reply_markup=_lootbox_kb(),
         )
