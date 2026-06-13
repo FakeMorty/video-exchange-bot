@@ -57,7 +57,8 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⚡ Авто-модерация (доверенные)", callback_data="admin_auto_moderation")],
         [InlineKeyboardButton(text="🤝 Доверенные авторы", callback_data="admin_trusted_uploaders")],
         [InlineKeyboardButton(text="📢 Офферы и реклама", callback_data="admin_offers_menu")],
-        [InlineKeyboardButton(text="🎉 События и акции", callback_data="admin_events_menu")],
+        [InlineKeyboardButton(text="🎉 События", callback_data="admin_events_menu")],
+        [InlineKeyboardButton(text="🛍 Акции и скидки", callback_data="admin_sales")],
         [InlineKeyboardButton(text="💬 Обращения пользователей", callback_data="admin_feedback_menu")],
         [InlineKeyboardButton(text="🕵️ Расследование", callback_data="admin_investigation")],
     ]

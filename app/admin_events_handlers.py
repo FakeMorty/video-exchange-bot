@@ -7,6 +7,7 @@
 - Автоматическая рассылка
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -81,6 +82,7 @@ async def admin_events_menu(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Создать новое событие", callback_data="event_create_start")],
         [InlineKeyboardButton(text="📋 Все события", callback_data="event_list_all")],
+        [InlineKeyboardButton(text="🛍 Глобальные акции (Sale)", callback_data="admin_sales")],
         [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_center")]
     ])
 
