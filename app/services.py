@@ -1,10 +1,12 @@
 import math
+import asyncio
 import uuid
 import random
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.logger import get_logger, log_error
 from app.models import (
     ActiveSale, Event,
     User, Video, VideoView, VideoRating, Payment,
@@ -16,6 +18,9 @@ from app.models import (
     LotteryRound, LotteryTicket,
     LootboxOpen,
 )
+
+logger = get_logger(__name__)
+
 from app.config import (
     STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
     REFERRAL_REWARD_INVITER, STARS_PACKAGES, STARS_TO_COINS_RATE,
@@ -1617,7 +1622,7 @@ async def get_current_prices(session: AsyncSession):
                     
         return vip_price, packs, sale
     except Exception as e:
-        print(f"Error in get_current_prices: {e}")
+        log_error(logger, f"Error in get_current_prices: {e}")
         raise
 
 

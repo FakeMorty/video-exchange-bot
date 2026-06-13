@@ -650,13 +650,13 @@ async def on_startup(app):
     bot = app['bot']
     await init_db()
     
-    # ПРИНУДИТЕЛЬНОЕ ИСПРАВЛЕНИЕ БД (PostgreSQL Robust version)
-    from fix_db_v2 import fix_database
+    # DB Maintenance
+    from app.utils.db_fix import fix_database
     try:
         await fix_database()
-        log_info(logger, "Database structure final check complete")
+        log_info(logger, "Database maintenance complete")
     except Exception as e:
-        log_info(logger, f"Database fix warning: {e}")
+        log_exception(logger, f"Database maintenance error: {e}")
 
     try:
         def run_migrations():
@@ -664,12 +664,12 @@ async def on_startup(app):
             command.upgrade(alembic_cfg, "head")
         
         await asyncio.to_thread(run_migrations)
-        log_info(logger, "Migrations applied")
+        log_info(logger, "Alembic migrations synced")
     except Exception as e:
-        log_info(logger, f"Migrations warning: {e}")
+        log_warning(logger, f"Migration sync skipped: {e}")
         
     await _notify_admins_started(bot)
-    log_info(logger, "Bot started, DB initialized")
+    log_info(logger, "Service initialized")
 
 
 async def main():

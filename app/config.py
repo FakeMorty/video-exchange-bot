@@ -56,10 +56,10 @@ for _x in ADMINS_RAW.split(","):
 PORT = _get_int("PORT", 10000)
 
 # ============================
-# ЭКОНОМИКА — КРАСИВЫЕ И ПРИЯТНЫЕ ЦИФРЫ
+# ЭКОНОМИКА
 # ============================
 
-# Стартовый баланс (приятно и солидно)
+# Стартовый баланс
 STARTING_BALANCE = _get_float("STARTING_BALANCE", 1000.0)
 
 # Просмотр видео
@@ -76,7 +76,7 @@ REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 150.0)
 # Курс Stars → монеты
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 30.0)
 
-# Пакеты Stars (красивые и запоминающиеся)
+# Пакеты Stars
 STARS_PACKAGES = {
     "pack_1":   {"stars": 1,   "coins": 30,   "title": "30 монет"},
     "pack_5":   {"stars": 5,   "coins": 160,  "title": "160 монет"},
@@ -97,11 +97,6 @@ MONEY_PACKAGES = {
 OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.5)
 
 # ============================
-# ЛИМИТЫ
-# ============================
-
-# ============================
-# ============================
 # ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
 # ============================
 REFERRAL_MILESTONES = {
@@ -113,20 +108,6 @@ REFERRAL_MILESTONES = {
 }
 
 DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
-# ============================
-# ============================
-# ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
-# ============================
-REFERRAL_MILESTONES = {
-    3: {"type": "coins", "amount": 100.0, "desc": "100 монет"},
-    5: {"type": "lootbox", "amount": 1, "desc": "1 Лутбокс"},
-    10: {"type": "coins", "amount": 300.0, "desc": "300 монет"},
-    15: {"type": "lootbox", "amount": 3, "desc": "3 Лутбокса"},
-    20: {"type": "vip", "amount": 7, "desc": "VIP на 7 дней"},
-}
-
-DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
-
 
 # Бесплатные игры
 FREE_GAMES_PER_SESSION = 5
@@ -170,7 +151,7 @@ DICE_MIN_BET = _get_int("DICE_MIN_BET", 1)
 DICE_MAX_BET = _get_int("DICE_MAX_BET", 50)
 
 # ============================
-# КВЕСТЫ (НА РУССКОМ) — красивые награды
+# КВЕСТЫ (НА РУССКОМ)
 # ============================
 DAILY_QUESTS = [
     {"type": "watch", "target": 3, "reward": 50, "desc": "Посмотреть 3 видео"},
@@ -193,20 +174,20 @@ COMMENTS_PER_10_MIN = _get_int("COMMENTS_PER_10_MIN", 5)
 COMMENT_MIN_INTERVAL_SEC = _get_int("COMMENT_MIN_INTERVAL_SEC", 15)
 
 # ============================
-# НАГРАДЫ ЗА ТОПЫ (красивые)
+# НАГРАДЫ ЗА ТОПЫ
 # ============================
 WEEKLY_TOP1_REWARD = _get_float("WEEKLY_TOP1_REWARD", 1000.0)
 WEEKLY_TOP2_REWARD = _get_float("WEEKLY_TOP2_REWARD", 500.0)
 WEEKLY_TOP3_REWARD = _get_float("WEEKLY_TOP3_REWARD", 300.0)
 
 # ============================
-# ПРОДВИЖЕНИЕ (красивые цены)
+# ПРОДВИЖЕНИЕ
 # ============================
 PIN_OFFER_COST = _get_float("PIN_OFFER_COST", 5000.0)
 BUMP_VIDEO_COST = _get_float("BUMP_VIDEO_COST", 1500.0)
 
 # ============================
-# НИКНЕЙМ (красивая и ощутимая цена)
+# НИКНЕЙМ
 # ============================
 NICKNAME_FIRST_FREE = True
 NICKNAME_CHANGE_COST = _get_float("NICKNAME_CHANGE_COST", 1500.0)
@@ -223,29 +204,21 @@ OFFER_MAX_RENT_DAYS = 30
 # ============================
 # ПРОМОКОДЫ (ЗА STARS)
 # ============================
-# Стоимость создания: Stars = (сумма_монет * кол-во_использований) * RATE
-# с учётом оптовой скидки при большом количестве использований
-PROMOCODE_CREATION_STAR_RATE = 0.5             # Stars за 1 монету * 1 использование
-PROMOCODE_BULK_DISCOUNT_THRESHOLD = 10         # от скольки использований действует скидка
-PROMOCODE_BULK_DISCOUNT_RATE = 0.8             # множитель стоимости при опте (20% скидка)
-
-# Процент от потраченных активировавшими монет, который получает создатель (0 = отключено)
+PROMOCODE_CREATION_STAR_RATE = 0.5
+PROMOCODE_BULK_DISCOUNT_THRESHOLD = 10
+PROMOCODE_BULK_DISCOUNT_RATE = 0.8
 PROMOCODE_CREATOR_BONUS_PERCENT = 5.0
 
-# Ограничения при создании
-PROMOCODE_MAX_AMOUNT = 10000                    # макс. монет в одном промокоде
-PROMOCODE_MAX_USES = 100                       # макс. использований
-PROMOCODE_MAX_HOURS = 168                      # макс. срок действия (7 дней)
+PROMOCODE_MAX_AMOUNT = 10000
+PROMOCODE_MAX_USES = 100
+PROMOCODE_MAX_HOURS = 168
 
 # ============================
 # ДИНАМИЧЕСКИЙ КУРС ПОКУПКИ МОНЕТ
 # ============================
 DYNAMIC_STAR_DISCOUNT_ENABLED = True
-# Часы действия бонуса (UTC), например "17-20"
 DYNAMIC_STAR_DISCOUNT_HOURS = "17-20"
-# Множитель получаемых монет в эти часы (1.5 = +50%)
 DYNAMIC_STAR_DISCOUNT_MULTIPLIER = 1.5
-# Бонус монет за первую покупку дня (любой пакет)
 FIRST_PURCHASE_DAILY_BONUS = 50.0
 
 # ============================
@@ -279,7 +252,7 @@ PROMO_ACTIVATE_COOLDOWN_SECONDS = _get_int("PROMO_ACTIVATE_COOLDOWN_SECONDS", 10
 GUESS_JACKPOT_CHANCE = _get_float("GUESS_JACKPOT_CHANCE", 0.01)
 GUESS_JACKPOT_MULTIPLIER = _get_int("GUESS_JACKPOT_MULTIPLIER", 20)
 
-# Лотерея-лото (красивая цена)
+# Лотерея-лото
 ENABLE_LOTTERY = _get_bool("ENABLE_LOTTERY", True)
 LOTTERY_TICKET_PRICE = _get_float("LOTTERY_TICKET_PRICE", 150.0)
 LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
@@ -289,10 +262,8 @@ LOTTERY_DRAW_END_HOUR_UTC = _get_int("LOTTERY_DRAW_END_HOUR_UTC", 20)
 LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "super-secret-key-12345")
 
 # ============================
-# ЛУТБОКСЫ (красивые цены)
+# ЛУТБОКСЫ
 # ============================
 ENABLE_LOOTBOXES = _get_bool("ENABLE_LOOTBOXES", True)
-# Цена лутбокса за монеты
 LOOTBOX_COIN_PRICE = _get_float("LOOTBOX_COIN_PRICE", 800.0)
-# Цена лутбокса за Stars
 LOOTBOX_STAR_PRICE = _get_int("LOOTBOX_STAR_PRICE", 30)

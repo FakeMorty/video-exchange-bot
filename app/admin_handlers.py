@@ -38,7 +38,10 @@ from app.keyboards import (
     rejection_reason_keyboard, admin_after_action_keyboard,
     admin_db_keyboard,
 )
+from app.logger import get_logger, log_info, log_error
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
+
+logger = get_logger(__name__)
 
 router = Router()
 
