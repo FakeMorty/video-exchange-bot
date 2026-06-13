@@ -25,7 +25,6 @@ from app.config import (
 from app.db import engine, init_db, async_session
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
-from app.admin_events_handlers import router as events_router
 from app.user_offer_handlers import router as user_offer_router
 from app.donation_shop import router as donation_router
 from app.logger import setup_logging, get_logger, log_info
@@ -678,7 +677,6 @@ async def main():
     dp.callback_query.middleware(BanCheckMiddleware())
     dp.include_router(user_router)
     dp.include_router(admin_router)
-    dp.include_router(events_router)
     dp.include_router(user_offer_router)
     dp.include_router(donation_router)
 

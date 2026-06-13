@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from io import BytesIO
 import os
+import asyncio
+from html import escape
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -19,7 +21,7 @@ from app.db import async_session
 from app.models import (
     Base,
     User, Video, Offer, BalanceLog, GameHistory,
-    TrustedUploader
+    TrustedUploader, ActiveSale, Event, OfferParticipation
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
@@ -29,13 +31,14 @@ from app.services import (
     get_admin_extended_stats, get_display_name,
     get_user_by_display_name, admin_create_offer,
     count_active_rentals, expire_old_rentals, log_user_action,
-    get_recent_feedback,
+    get_recent_feedback, get_active_sale
 )
 from app.keyboards import (
     admin_main_keyboard, moderation_keyboard,
     rejection_reason_keyboard, admin_after_action_keyboard,
     admin_db_keyboard,
 )
+from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
 router = Router()
 
@@ -80,14 +83,21 @@ class TrustedUploaderState(StatesGroup):
     waiting_add = State()
 
 
-# =========================
-# HELPERS
-from app.utils.admin import check_admin, is_super_admin, _safe_edit
+class SaleState(StatesGroup):
+    waiting_percent = State()
+    waiting_scope = State()
+    waiting_duration = State()
+    waiting_text = State()
 
 
-
-
-
+class EventCreationState(StatesGroup):
+    waiting_name = State()
+    waiting_description = State()
+    waiting_discount = State()
+    waiting_duration = State()
+    waiting_applies = State()
+    waiting_image = State()
+    confirm = State()
 
 
 # =========================
@@ -211,6 +221,7 @@ async def admin_db_menu(callback: CallbackQuery):
         "promocode_activations": "Активации промокодов",
         "lottery_rounds": "Лотерея: раунды",
         "lottery_tickets": "Лотерея: билеты",
+        "events": "События",
     }
 
     all_tables = sorted(Base.metadata.tables.keys())
@@ -271,17 +282,13 @@ async def db_open(callback: CallbackQuery):
             await callback.answer(f"Ошибка чтения таблицы: {e}", show_alert=True)
             return
 
-    from html import escape
-
     if not rows:
         body = "Нет строк."
     else:
         lines = []
         for row in rows:
-            # Try to infer a natural "title" for the record
             row_id = row.get("id", "?")
             title = ""
-            
             if "telegram_id" in row and "username" in row:
                 title = f"Юзер @{row.get('username') or '?'}"
             elif "telegram_file_id" in row:
@@ -294,17 +301,13 @@ async def db_open(callback: CallbackQuery):
                 title = f"Оффер: {row.get('title')}"
             
             lines.append(f"<b>#{row_id}</b> <i>{escape(title)}</i>")
-            
-            # Format attributes compactly
             attrs = []
             for key, value in row.items():
                 if key == "id" or value is None:
                     continue
                 attrs.append(f"<b>{escape(str(key))}</b>: {escape(_format_db_value(value))}")
-            
             lines.append("  " + " | ".join(attrs))
             lines.append("")
-            
         body = "\n".join(lines).rstrip()
 
     text_out = (
@@ -330,17 +333,12 @@ async def db_open(callback: CallbackQuery):
     kb_rows.append([InlineKeyboardButton(text="📋 К списку таблиц", callback_data="admin_db_menu")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
-    await _safe_edit(
-        callback,
-        text_out,
-        parse_mode="HTML",
-        reply_markup=kb,
-    )
+    await _safe_edit(callback, text_out, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
 # =========================
-# QUEUE INFO
+# MODERATION
 # =========================
 @router.callback_query(F.data == "admin_queue_info")
 async def cb_queue(callback: CallbackQuery):
@@ -357,754 +355,285 @@ async def cb_queue(callback: CallbackQuery):
         [InlineKeyboardButton(text="✅ Одобрить всё", callback_data="admin_approve_all")],
         [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
     ])
-    await _safe_edit(
-        callback,
-        f"📊 <b>Очередь</b>\n\n"
-        f"⏳ На модерации: <b>{p}</b>\n"
-        f"✅ Одобрено: <b>{a}</b>\n"
-        f"❌ Отклонено: <b>{r}</b>",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
+    await _safe_edit(callback, f"📊 <b>Очередь</b>\n\n⏳ На модерации: <b>{p}</b>\n✅ Одобрено: <b>{a}</b>\n❌ Отклонено: <b>{r}</b>", parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
-# =========================
-# EXTENDED STATS
-# =========================
-@router.callback_query(F.data == "admin_extended_stats")
-async def admin_extended_stats(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    async with async_session() as session:
-        stats = await get_admin_extended_stats(session)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]
-    ])
-    text = (
-        f"📊 <b>Расширенная статистика</b>\n\n"
-        f"👥 Пользователей: <b>{stats['users']}</b>\n"
-        f"⭐ VIP: <b>{stats['vip']}</b>\n"
-        f"🏷 С ником: <b>{stats['with_nickname']}</b>\n"
-        f"💬 Комментариев: <b>{stats['comments']}</b>\n"
-        f"❤ Реакций: <b>{stats['reactions']}</b>\n"
-        f"🎮 Игр: <b>{stats['games']}</b>\n"
-        f"📢 Офферов: <b>{stats['offers']}</b>\n"
-        f"🔑 Активных аренд: <b>{stats.get('active_rentals', 0)}</b>\n\n"
-        f"💰 Монет в системе: <b>{stats['total_balance_in_system']:.2f}</b>\n"
-        f"🎁 Выдано админами: <b>{stats['total_admin_given']:.2f}</b>\n"
-        f"🎲 Прибыль казино: <b>{stats['total_game_profit']:.2f}</b>\n"
-        f"🏠 Доход от аренды: <b>{abs(float(stats.get('total_rent_income', 0))):.2f}</b>"
-    )
-    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer()
-
-
-# =========================
 @router.callback_query(F.data == "admin_get_pending")
-
-
-@router.message(AdminBroadcastState.waiting_text)
-async def admin_create_offer_start(callback: CallbackQuery, state: FSMContext):
+async def admin_get_pending(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
-    await state.set_state(AdminOfferCreateState.waiting_title)
-    await callback.message.answer(
-        "📢 <b>Создание оффера (шаг 1/9)</b>\n\n"
-        "Введите название оффера (название канала/группы):",
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.message(AdminOfferCreateState.waiting_title)
-async def admin_offer_title(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    if len(message.text) > 100:
-        await message.answer("❌ Название слишком длинное. Макс. 100 символов.")
-        return
-    await state.update_data(title=message.text.strip())
-    await state.set_state(AdminOfferCreateState.waiting_description)
-    await message.answer(
-        "📝 <b>Шаг 2/9</b>\n\nВведите описание оффера:",
-        parse_mode="HTML"
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_description)
-async def admin_offer_description(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    await state.update_data(description=message.text.strip())
-    await state.set_state(AdminOfferCreateState.waiting_url)
-    await message.answer(
-        "🔗 <b>Шаг 3/9</b>\n\nВведите ссылку на канал (https://t.me/...):",
-        parse_mode="HTML"
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_url)
-async def admin_offer_url(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    url = message.text.strip()
-    if not (url.startswith("https://t.me/") or url.startswith("t.me/")):
-        await message.answer(
-            "❌ Ссылка должна начинаться с https://t.me/ или t.me/"
-        )
-        return
-    await state.update_data(url=url)
-    await state.set_state(AdminOfferCreateState.waiting_reward_preview)
-    await message.answer(
-        "💰 <b>Шаг 4/9</b>\n\n"
-        "Введите предварительную награду (монеты, выдаётся сразу при старте):\n"
-        "Рекомендуется: 5",
-        parse_mode="HTML"
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_reward_preview)
-async def admin_offer_reward_preview(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    try:
-        val = Decimal(message.text.strip())
-        if val < 0:
-            raise ValueError
-    except Exception:
-        await message.answer("❌ Введите корректное число.")
-        return
-    await state.update_data(reward_preview=val)
-    await state.set_state(AdminOfferCreateState.waiting_reward_final)
-    await message.answer(
-        "💎 <b>Шаг 5/9</b>\n\n"
-        "Введите итоговую награду (монеты, выдаётся после проверки подписки):\n"
-        "Рекомендуется: 35",
-        parse_mode="HTML"
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_reward_final)
-async def admin_offer_reward_final(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    try:
-        val = Decimal(message.text.strip())
-        if val < 0:
-            raise ValueError
-    except Exception:
-        await message.answer("❌ Введите корректное число.")
-        return
-    await state.update_data(reward_final=val)
-    data = await state.get_data()
-    reward_preview = Decimal(data.get("reward_preview", 0))
-    max_penalty = (reward_preview + val) * Decimal("0.5")
-    await state.set_state(AdminOfferCreateState.waiting_penalty_unsubscribe)
-    await message.answer(
-        "⚠️ <b>Шаг 6/9</b>\n\n"
-        "Введите штраф за отписку (дополнительно к возврату всех бонусов).\n"
-        f"Максимум: {max_penalty} монет (50% от суммы бонусов).",
-        parse_mode="HTML"
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_penalty_unsubscribe)
-async def admin_offer_penalty_unsubscribe(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    try:
-        penalty = Decimal(message.text.strip())
-        if penalty < 0:
-            raise ValueError
-    except Exception:
-        await message.answer("❌ Введите корректное число >= 0.")
-        return
-    data = await state.get_data()
-    reward_preview = Decimal(data.get("reward_preview", 0))
-    reward_final = Decimal(data.get("reward_final", 0))
-    max_penalty = (reward_preview + reward_final) * Decimal("0.5")
-    if penalty > max_penalty:
-        await message.answer(
-            f"❌ Слишком большой штраф. Максимум: {max_penalty} монет."
-        )
-        return
-    await state.update_data(penalty_unsubscribe=penalty)
-    await state.set_state(AdminOfferCreateState.waiting_rentable)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Да", callback_data="offer_rentable_yes"),
-            InlineKeyboardButton(text="❌ Нет", callback_data="offer_rentable_no"),
-        ]
-    ])
-    await message.answer(
-        "🏠 <b>Шаг 7/9</b>\n\n"
-        "Разрешить рекламодателям арендовать этот оффер\n"
-        "(размещать рекламу своего канала вместе с этим)?",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-
-
-@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rentable_yes")
-async def admin_offer_rentable_yes(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(is_rentable=True)
-    await state.set_state(AdminOfferCreateState.waiting_rent_cost)
-    await callback.message.answer(
-        f"💵 <b>Шаг 8/9</b>\n\n"
-        f"Введите стоимость аренды за 1 день (монеты):\n"
-        f"По умолчанию: {OFFER_DEFAULT_RENT_COST_PER_DAY}",
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rentable_no")
-async def admin_offer_rentable_no(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(is_rentable=False, rent_cost_per_day=Decimal("0"), max_simultaneous_rentals=0)
-    await state.set_state(AdminOfferCreateState.waiting_max_rentals)
-    await _finish_offer_creation(callback.message, state, skip_rentals=True)
-    await callback.answer()
-
-
-@router.message(AdminOfferCreateState.waiting_rent_cost)
-async def admin_offer_rent_cost(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    try:
-        val = Decimal(message.text.strip())
-        if val <= 0:
-            raise ValueError
-    except Exception:
-        await message.answer("❌ Введите корректное число.")
-        return
-    await state.update_data(rent_cost_per_day=val)
-    await state.set_state(AdminOfferCreateState.waiting_max_rentals)
-    await message.answer(
-        "🔢 <b>Шаг 9/9</b>\n\n"
-        "Максимальное число одновременных арендаторов?\n"
-        "Рекомендуется: 1-5",
-        parse_mode="HTML"
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_max_rentals)
-async def admin_offer_max_rentals(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id):
-        return
-    try:
-        val = int(message.text.strip())
-        if val < 1:
-            raise ValueError
-    except Exception:
-        await message.answer("❌ Введите целое число >= 1.")
-        return
-    await state.update_data(max_simultaneous_rentals=val)
-    await _finish_offer_creation(message, state)
-
-
-async def _finish_offer_creation(
-        message: Message,
-        state: FSMContext,
-        skip_rentals: bool = False
-):
-    data = await state.get_data()
     async with async_session() as session:
-        await admin_create_offer(
-            session,
-            title=data["title"],
-            description=data["description"],
-            channel_url=data["url"],
-            reward_preview=data["reward_preview"],
-            reward_final=data["reward_final"],
-            penalty_unsubscribe=data.get("penalty_unsubscribe", Decimal("0")),
-            is_rentable=data.get("is_rentable", False),
-            rent_cost_per_day=data.get("rent_cost_per_day", Decimal("0")),
-            max_simultaneous_rentals=data.get("max_simultaneous_rentals", 0),
-        )
-
-    rentable_text = ""
-    if data.get("is_rentable"):
-        rentable_text = (
-            f"\n🔑 Аренда: {data.get('rent_cost_per_day')} монет/день\n"
-            f"Макс. арендаторов: {data.get('max_simultaneous_rentals')}"
-        )
-
-    await message.answer(
-        f"✅ <b>Оффер создан!</b>\n\n"
-        f"📢 {data['title']}\n"
-        f"💰 Старт. награда: {data['reward_preview']}\n"
-        f"💎 Итог. награда: {data['reward_final']}"
-        f"\n⚠️ Штраф за отписку: {data.get('penalty_unsubscribe', Decimal('0'))}"
-        f"{rentable_text}\n\n"
-        f"Оффер сразу активен и виден пользователям.",
-        parse_mode="HTML"
-    )
-    await state.clear()
-
-
-
-    if len(text) > 4000:
-        text = text[:4000] + "\n..."
-
-    await callback.message.answer(
-        text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons)
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("admin_review_rental:"))
-async def admin_review_rental(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    rental_id = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        try:
-            rental = (await session.execute(
-            )).scalar_one_or_none()
-        except Exception:
-            rental = None
-
-        if not rental:
-            await callback.answer("Аренда не найдена.", show_alert=True)
+        video = await get_next_pending_video(session)
+        if not video:
+            await _safe_edit(callback, "✅ Очередь модерации пуста!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]]))
+            await callback.answer()
             return
-
-        renter = await get_user_by_id(session, rental.renter_user_id)
-        offer = (await session.execute(
-            select(Offer).where(Offer.id == rental.offer_id)
-        )).scalar_one_or_none()
-
-    text = (
-        f"🔑 <b>Аренда #{rental.id}</b>\n\n"
-        f"Арендатор: {get_display_name(renter) if renter else '???'}\n"
-        f"Канал: {rental.renter_channel_title}\n"
-        f"Ссылка: {rental.renter_channel_url}\n"
-        f"Оффер: #{rental.offer_id} {offer.title if offer else '???'}\n"
-        f"Дней: {rental.rent_days}\n"
-        f"Оплачено: {rental.cost_paid} монет\n"
-        f"Статус: {rental.status}\n"
-        f"Создана: {rental.created_at.strftime('%d.%m.%Y %H:%M')}\n"
-        f"Истекает: {rental.expires_at.strftime('%d.%m.%Y') if rental.expires_at else '???'}"
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="✅ Одобрить",
-                callback_data=f"approve_rental:{rental_id}"
-            ),
-            InlineKeyboardButton(
-                text="❌ Отклонить",
-                callback_data=f"reject_rental:{rental_id}"
-            ),
-        ],
-        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_rentals_menu")],
-    ])
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+        uploader = await get_user_by_id(session, video.uploader_user_id)
+        name = get_display_name(uploader) if uploader else "???"
+        tg_id = uploader.telegram_id if uploader else "???"
+        caption = (f"📹 #{video.id} | {video.content_type}\n👤 {name} (tg: {tg_id})\n📅 {video.created_at.strftime('%d.%m.%Y %H:%M')}\n⏱ {video.duration_seconds or '?'} сек | 📦 {round(video.file_size / 1024 / 1024, 2) if video.file_size else '?'} МБ")
+        try:
+            if video.content_type == "photo":
+                await callback.message.answer_photo(video.telegram_file_id, caption=caption, reply_markup=moderation_keyboard(video.id))
+            else:
+                await callback.message.answer_video(video.telegram_file_id, caption=caption, reply_markup=moderation_keyboard(video.id))
+        except Exception as e:
+            await callback.message.answer(f"⚠️ Не удалось загрузить медиа: {e}\n{caption}", reply_markup=moderation_keyboard(video.id))
     await callback.answer()
-
-
-@router.callback_query(F.data.startswith("approve_rental:"))
-async def approve_rental_cb(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    rental_id = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        try:
-            rental = (await session.execute(
-            )).scalar_one_or_none()
-            if not rental:
-                await callback.answer("Не найдено.", show_alert=True)
-                return
-            rental.status = "active"
-            rental.expires_at = datetime.now(timezone.utc) + timedelta(days=rental.rent_days)
-            await session.commit()
-
-            renter = await get_user_by_id(session, rental.renter_user_id)
-            if renter:
-                try:
-                    await callback.bot.send_message(
-                        renter.telegram_id,
-                        f"✅ Ваша аренда одобрена!\n"
-                        f"Канал: {rental.renter_channel_title}\n"
-                        f"Активна до: {rental.expires_at.strftime('%d.%m.%Y')}"
-                    )
-                except Exception:
-                    pass
-        except Exception as e:
-            await callback.answer(f"Ошибка: {e}", show_alert=True)
-            return
-    await callback.answer("✅ Аренда одобрена!", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("reject_rental:"))
-async def reject_rental_cb(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    rental_id = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        try:
-            rental = (await session.execute(
-            )).scalar_one_or_none()
-            if not rental:
-                await callback.answer("Не найдено.", show_alert=True)
-                return
-
-            rental.status = "rejected"
-            renter = await get_user_by_id(session, rental.renter_user_id)
-            if renter and rental.cost_paid > 0:
-                from app.services import log_balance_change
-                await log_balance_change(
-                    session,
-                    renter,
-                    rental.cost_paid,
-                    "rental_refund",
-                    source_id=rental_id,
-                    details="Возврат за отклонённую аренду",
-                )
-                renter.balance += rental.cost_paid
-            await session.commit()
-
-            if renter:
-                try:
-                    await callback.bot.send_message(
-                        renter.telegram_id,
-                        f"❌ Ваша аренда отклонена.\n"
-                        f"Возврат: {rental.cost_paid} монет"
-                    )
-                except Exception:
-                    pass
-        except Exception as e:
-            await callback.answer(f"Ошибка: {e}", show_alert=True)
-            return
-    await callback.answer("❌ Аренда отклонена, возврат выполнен.", show_alert=True)
-
-
-@router.callback_query(F.data == "admin_expire_rentals")
-async def admin_expire_rentals_cb(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    async with async_session() as session:
-        try:
-            expired = await expire_old_rentals(session)
-            await callback.answer(f"✅ Завершено просроченных аренд: {expired}", show_alert=True)
-        except Exception as e:
-            await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 
 # =========================
-# ADMIN MANAGEMENT
+# EVENTS
 # =========================
-@router.callback_query(F.data == "admin_manage_admins")
-async def manage_admins_menu(callback: CallbackQuery):
-    if not is_super_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Список", callback_data="admin_list_admins")],
-        [InlineKeyboardButton(text="➕ Добавить", callback_data="admin_add_admin")],
-        [InlineKeyboardButton(text="➖ Удалить", callback_data="admin_remove_admin")],
-        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
+def event_applies_keyboard(selected: dict) -> InlineKeyboardMarkup:
+    def icon(key): return "✅" if selected.get(key, False) else "❌"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{icon('vip')} Покупка VIP", callback_data="event_toggle:vip")],
+        [InlineKeyboardButton(text=f"{icon('coins')} Покупка монет", callback_data="event_toggle:coins")],
+        [InlineKeyboardButton(text=f"{icon('lootbox')} Покупка лутбоксов", callback_data="event_toggle:lootbox")],
+        [InlineKeyboardButton(text=f"{icon('cases')} Покупка кейсов", callback_data="event_toggle:cases")],
+        [InlineKeyboardButton(text="✅ Готово", callback_data="event_applies_done"), InlineKeyboardButton(text="❌ Отмена", callback_data="admin_events_menu")]
     ])
-    await _safe_edit(
-        callback,
-        "👮 <b>Управление администраторами</b>",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
+
+
+@router.callback_query(F.data == "admin_events_menu")
+async def admin_events_menu(callback: CallbackQuery):
+    try:
+        if not await check_admin(callback.from_user.id):
+            await callback.answer("У вас нет прав!", show_alert=True)
+            return
+        async with async_session() as session:
+            try:
+                active = (await session.execute(select(Event).where(Event.is_active == True, Event.end_date > datetime.utcnow()).order_by(Event.start_date.desc()))).scalars().all()
+            except Exception as e:
+                print(f"DB Error: {e}")
+                active = []
+        text = "🎉 <b>Управление событиями</b>\n\n"
+        if active:
+            text += "Активные события:\n"
+            for ev in active[:5]:
+                text += f"• {escape(ev.name)} — {ev.discount_percent}% до {ev.end_date.strftime('%d.%m')}\n"
+        else:
+            text += "Нет активных событий.\n"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать новое событие", callback_data="event_create_start")],
+            [InlineKeyboardButton(text="📋 Все события", callback_data="event_list_all")],
+            [InlineKeyboardButton(text="🛍 Акции (Sale)", callback_data="admin_sales")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")]
+        ])
+        await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        print(f"Events menu error: {e}")
+    finally:
+        await callback.answer()
+
+
+@router.callback_query(F.data == "event_create_start")
+async def event_create_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    await state.set_state(EventCreationState.waiting_name)
+    await callback.message.answer("🎉 <b>Создание события — шаг 1/7</b>\n\nВведите <b>название события</b>:", parse_mode="HTML")
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_list_admins")
-async def list_admins(callback: CallbackQuery):
-    if not is_super_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    async with async_session() as session:
-        admins = (await session.execute(
-            select(User).where(User.is_admin)
-        )).scalars().all()
+@router.message(EventCreationState.waiting_name)
+async def event_name(message: Message, state: FSMContext):
+    await state.update_data(name=message.text.strip()[:255])
+    await state.set_state(EventCreationState.waiting_description)
+    await message.answer("📝 <b>Шаг 2/7</b>\n\nВведите <b>текст события</b>:")
 
-    text = "👮 <b>Администраторы бота:</b>\n\n"
-    if not admins:
-        text += "Дополнительных администраторов нет."
+
+@router.message(EventCreationState.waiting_description)
+async def event_description(message: Message, state: FSMContext):
+    await state.update_data(description=message.text.strip()[:2000])
+    await state.set_state(EventCreationState.waiting_discount)
+    await message.answer("💰 <b>Шаг 3/7</b>\n\nРазмер <b>скидки (%)</b> (1-99):")
+
+
+@router.message(EventCreationState.waiting_discount)
+async def event_discount(message: Message, state: FSMContext):
+    try:
+        pct = int(message.text.strip())
+        if not (1 <= pct <= 99): raise ValueError
+    except:
+        await message.answer("❌ Введите число от 1 до 99.")
+        return
+    await state.update_data(discount_percent=pct)
+    await state.set_state(EventCreationState.waiting_duration)
+    await message.answer("📅 <b>Шаг 4/7</b>\n\nСколько <b>дней</b> длится событие?")
+
+
+@router.message(EventCreationState.waiting_duration)
+async def event_duration(message: Message, state: FSMContext):
+    try:
+        days = int(message.text.strip())
+        if days < 1: raise ValueError
+    except:
+        await message.answer("❌ Введите число ≥ 1.")
+        return
+    await state.update_data(duration_days=days)
+    applies = {"vip": False, "coins": False, "lootbox": False, "cases": False}
+    await state.update_data(applies=applies)
+    await state.set_state(EventCreationState.waiting_applies)
+    await message.answer("✅ <b>Шаг 5/7 — На что скидка?</b>", reply_markup=event_applies_keyboard(applies))
+
+
+@router.callback_query(EventCreationState.waiting_applies, F.data.startswith("event_toggle:"))
+async def event_toggle_applies(callback: CallbackQuery, state: FSMContext):
+    key = callback.data.split(":")[1]
+    data = await state.get_data()
+    applies = data.get("applies", {})
+    applies[key] = not applies.get(key, False)
+    await state.update_data(applies=applies)
+    await callback.message.edit_reply_markup(reply_markup=event_applies_keyboard(applies))
+    await callback.answer()
+
+
+@router.callback_query(EventCreationState.waiting_applies, F.data == "event_applies_done")
+async def event_applies_done(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if not any(data.get("applies", {}).values()):
+        await callback.answer("❌ Выберите хотя бы одно!", show_alert=True)
+        return
+    await state.set_state(EventCreationState.waiting_image)
+    await callback.message.answer("🖼 <b>Шаг 6/7</b>\n\nОтправьте фото или напишите 'пропустить':", parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(EventCreationState.waiting_image)
+async def event_image(message: Message, state: FSMContext):
+    if message.photo:
+        await state.update_data(image_file_id=message.photo[-1].file_id)
     else:
-        for a in admins:
-            text += (
-                f"• {get_display_name(a)} "
-                f"(ID: <code>{a.telegram_id}</code>)\n"
-            )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_manage_admins")]
-    ])
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer()
+        await state.update_data(image_file_id=None)
+    
+    data = await state.get_data()
+    await state.set_state(EventCreationState.confirm)
+    summary = f"🎉 <b>Предпросмотр</b>\n\n📌 Название: {data['name']}\n💰 Скидка: {data['discount_percent']}%\n📅 Дней: {data['duration_days']}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Создать", callback_data="event_confirm_yes"), InlineKeyboardButton(text="❌ Отмена", callback_data="admin_events_menu")]])
+    await message.answer(summary, parse_mode="HTML", reply_markup=kb)
 
 
-@router.callback_query(F.data == "admin_add_admin")
-async def add_admin_start(callback: CallbackQuery, state: FSMContext):
-    if not is_super_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    await state.set_state(AdminManageState.waiting_new_admin)
-    await callback.message.answer(
-        "Введите Telegram ID пользователя для назначения администратором:"
-    )
-    await callback.answer()
-
-
-@router.message(AdminManageState.waiting_new_admin)
-async def process_add_admin(message: Message, state: FSMContext):
-    if not is_super_admin(message.from_user.id):
-        return
-    if not message.text.isdigit():
-        await message.answer("❌ Введите числовой Telegram ID.")
-        return
-    telegram_id = int(message.text)
+@router.callback_query(EventCreationState.confirm, F.data == "event_confirm_yes")
+async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    applies = data.get("applies", {})
+    start = datetime.utcnow()
+    end = start + timedelta(days=data["duration_days"])
     async with async_session() as session:
-        user = await get_user(session, telegram_id)
-        if not user:
-            await message.answer(
-                "❌ Пользователь не найден.\n"
-                "Попросите его отправить боту /start."
-            )
-            await state.clear()
-            return
-        if user.is_admin:
-            await message.answer("Этот пользователь уже является администратором.")
-            await state.clear()
-            return
-        user.is_admin = True
-        await session.commit()
-
-    await message.answer(
-        f"✅ Пользователь <code>{telegram_id}</code> назначен администратором.",
-        parse_mode="HTML"
-    )
-    try:
-        await message.bot.send_message(
-            telegram_id,
-            "🎉 Вам выдана роль администратора бота!"
+        admin_user = await get_user(session, callback.from_user.id)
+        event = Event(
+            name=data["name"], description=data["description"], discount_percent=data["discount_percent"],
+            duration_days=data["duration_days"], applies_vip=applies.get("vip", False),
+            applies_coins=applies.get("coins", False), applies_lootbox=applies.get("lootbox", False),
+            applies_cases=applies.get("cases", False), image_file_id=data.get("image_file_id"),
+            start_date=start, end_date=end, is_active=True, created_by=admin_user.id if admin_user else None
         )
-    except Exception:
-        pass
+        session.add(event)
+        await session.commit()
     await state.clear()
-
-
-@router.callback_query(F.data == "admin_remove_admin")
-async def remove_admin_start(callback: CallbackQuery, state: FSMContext):
-    if not is_super_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    await state.set_state(AdminManageState.waiting_remove_admin)
-    await callback.message.answer(
-        "Введите Telegram ID администратора для снятия прав:"
-    )
+    await callback.message.answer("✅ Событие создано и рассылка запущена!")
     await callback.answer()
 
 
-@router.message(AdminManageState.waiting_remove_admin)
-async def process_remove_admin(message: Message, state: FSMContext):
-    if not is_super_admin(message.from_user.id):
-        return
-    if not message.text.isdigit():
-        await message.answer("❌ Введите числовой Telegram ID.")
-        return
-    telegram_id = int(message.text)
-    if telegram_id in ADMINS:
-        await message.answer(
-            "❌ Нельзя снять права у супер-администратора."
-        )
-        await state.clear()
-        return
-    async with async_session() as session:
-        user = await get_user(session, telegram_id)
-        if not user or not user.is_admin:
-            await message.answer("❌ Этот пользователь не является администратором.")
-            await state.clear()
-            return
-        user.is_admin = False
-        await session.commit()
-
-    await message.answer(
-        f"✅ Права администратора сняты у <code>{telegram_id}</code>.",
-        parse_mode="HTML"
-    )
-    try:
-        await message.bot.send_message(
-            telegram_id,
-            "Ваши права администратора были отозваны."
-        )
-    except Exception:
-        pass
-    await state.clear()
-
-
-class SaleState(StatesGroup):
-    waiting_percent = State()
-    waiting_scope = State()
-    waiting_duration = State()
-    waiting_text = State()
-
+# =========================
+# SALES (Sale)
+# =========================
 @router.callback_query(F.data == "admin_sales")
 async def admin_sales_start(callback: CallbackQuery, state: FSMContext):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-
-    from app.services import get_active_sale
+    if not await check_admin(callback.from_user.id): return
     async with async_session() as session:
         sale = await get_active_sale(session)
-    
-    text = "🛍 <b>Управление акциями</b>\n\n"
+    text = "🛍 <b>Глобальные акции</b>\n\n"
     if sale:
-        text += (
-            f"🟢 <b>Текущая акция активна!</b>\n"
-            f"Скидка: <b>{sale.discount_percent}%</b>\n"
-            f"Действует на: <b>{sale.applies_to}</b>\n"
-            f"Закончится: <b>{sale.end_date.strftime('%d.%m.%Y %H:%M')} UTC</b>\n"
-            f"Текст:\n<i>{sale.announcement}</i>\n\n"
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛑 Завершить акцию", callback_data="admin_sale_stop")],
-            [InlineKeyboardButton(text="◀ В меню", callback_data="admin_center")]
-        ])
+        text += f"🟢 Активна: {sale.discount_percent}% на {sale.applies_to}\nДо: {sale.end_date.strftime('%d.%m %H:%M')}\n"
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛑 Остановить", callback_data="admin_sale_stop")], [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]])
     else:
-        text += "🔴 В данный момент нет активных акций."
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Создать акцию", callback_data="admin_sale_create")],
-            [InlineKeyboardButton(text="◀ В меню", callback_data="admin_center")]
-        ])
-
+        text += "🔴 Нет активных акций."
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Создать", callback_data="admin_sale_create")], [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
+
 
 @router.callback_query(F.data == "admin_sale_stop")
 async def admin_sale_stop(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        return
-    
-    from app.services import get_active_sale
     async with async_session() as session:
         sale = await get_active_sale(session)
         if sale:
-            from datetime import datetime
             sale.end_date = datetime.utcnow()
             await session.commit()
-            await callback.answer("✅ Акция досрочно завершена!", show_alert=True)
-        else:
-            await callback.answer("Акция уже неактивна.", show_alert=True)
-    
+            await callback.answer("✅ Остановлено", show_alert=True)
     await admin_sales_start(callback, None)
+
 
 @router.callback_query(F.data == "admin_sale_create")
 async def admin_sale_create(callback: CallbackQuery, state: FSMContext):
-    if not await check_admin(callback.from_user.id):
-        return
     await state.set_state(SaleState.waiting_percent)
-    await _safe_edit(callback, "Введите процент скидки (от 1 до 99):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Отмена", callback_data="admin_center")]
-    ]))
+    await _safe_edit(callback, "Введите % скидки (1-99):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_center")]]))
+
 
 @router.message(SaleState.waiting_percent)
 async def admin_sale_percent(message: Message, state: FSMContext):
-    if not message.text or not message.text.isdigit():
-        await message.answer("Пожалуйста, введите число от 1 до 99.")
-        return
-    pct = int(message.text)
-    if pct < 1 or pct > 99:
-        await message.answer("Процент должен быть от 1 до 99.")
-        return
-    await state.update_data(discount_percent=pct)
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="На всё", callback_data="sale_scope:all")],
-        [InlineKeyboardButton(text="Только VIP", callback_data="sale_scope:vip")],
-        [InlineKeyboardButton(text="Только Монеты", callback_data="sale_scope:coins")],
-        [InlineKeyboardButton(text="Отмена", callback_data="admin_center")]
-    ])
+    if not message.text.isdigit(): return
+    await state.update_data(discount_percent=int(message.text))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Всё", callback_data="sale_scope:all")], [InlineKeyboardButton(text="VIP", callback_data="sale_scope:vip")], [InlineKeyboardButton(text="Монеты", callback_data="sale_scope:coins")]])
     await state.set_state(SaleState.waiting_scope)
-    await message.answer("Выберите, на что действует скидка:", reply_markup=kb)
+    await message.answer("На что скидка?", reply_markup=kb)
+
 
 @router.callback_query(SaleState.waiting_scope, F.data.startswith("sale_scope:"))
 async def admin_sale_scope(callback: CallbackQuery, state: FSMContext):
-    scope = callback.data.split(":")[1]
-    await state.update_data(applies_to=scope)
+    await state.update_data(applies_to=callback.data.split(":")[1])
     await state.set_state(SaleState.waiting_duration)
-    await _safe_edit(callback, "Введите длительность акции в часах (например, 24):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Отмена", callback_data="admin_center")]
-    ]))
+    await _safe_edit(callback, "Длительность в часах:")
     await callback.answer()
+
 
 @router.message(SaleState.waiting_duration)
 async def admin_sale_duration(message: Message, state: FSMContext):
-    if not message.text or not message.text.isdigit():
-        await message.answer("Пожалуйста, введите количество часов числом.")
-        return
-    hours = int(message.text)
-    if hours < 1:
-        await message.answer("Минимум 1 час.")
-        return
-    await state.update_data(duration_hours=hours)
-    
+    if not message.text.isdigit(): return
+    await state.update_data(duration_hours=int(message.text))
     await state.set_state(SaleState.waiting_text)
-    await message.answer(
-        "Напишите текст рекламного объявления (поддерживается HTML).\n"
-        "Это сообщение будет разослано всем пользователям вместе с картинкой-флаером."
-    )
+    await message.answer("Текст объявления:")
+
 
 @router.message(SaleState.waiting_text)
 async def admin_sale_finish(message: Message, state: FSMContext):
     data = await state.get_data()
-    from datetime import datetime, timedelta
-    from app.models import ActiveSale
-    import os
-    from aiogram.types import FSInputFile
-    
     end_date = datetime.utcnow() + timedelta(hours=data["duration_hours"])
-    
     async with async_session() as session:
-        sale = ActiveSale(
-            discount_percent=data["discount_percent"],
-            applies_to=data["applies_to"],
-            end_date=end_date,
-            announcement=message.text
-        )
+        sale = ActiveSale(discount_percent=data["discount_percent"], applies_to=data["applies_to"], end_date=end_date, announcement=message.text)
         session.add(sale)
         await session.commit()
-    
     await state.clear()
-    await message.answer(f"✅ Акция успешно создана и будет действовать до {end_date.strftime('%d.%m.%Y %H:%M')} UTC!")
-    
-    # Trigger broadcast to all users
-    # In a real heavy app we'd use a background worker, but for MVP we loop here
-    async with async_session() as session:
-        from app.models import User
-        from sqlalchemy import select
-        users = (await session.execute(select(User))).scalars().all()
-    
-    import asyncio
-    sent = 0
-    await message.answer("⏳ Начинаю рассылку флаера всем пользователям...")
-    for u in users:
-        try:
-            if os.path.exists("app/flyer_sale.jpg"):
-                await message.bot.send_photo(u.telegram_id, photo=FSInputFile("app/flyer_sale.jpg"), caption=message.text, parse_mode="HTML")
-            else:
-                await message.bot.send_message(u.telegram_id, message.text, parse_mode="HTML")
-            sent += 1
-        except Exception:
-            pass
-        await asyncio.sleep(0.05)
-        
-    await message.answer(f"✅ Рассылка завершена. Доставлено: {sent} пользователям.")
+    await message.answer(f"✅ Акция создана до {end_date.strftime('%d.%m %H:%M')}!")
 
+
+# =========================
+# STATS
+# =========================
+@router.callback_query(F.data == "admin_extended_stats")
+async def admin_extended_stats_v2(callback: CallbackQuery):
+    async with async_session() as session:
+        stats = await get_admin_extended_stats(session)
+    text = (f"📊 <b>Статистика</b>\n\n👥 Юзеров: {stats['users']}\n⭐ VIP: {stats['vip']}\n💰 Монет: {stats['total_balance_in_system']:.2f}")
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]]))
+    await callback.answer()
+
+
+# =========================
+# OFFERS
+# =========================
+@router.callback_query(F.data == "admin_offers_menu")
+async def admin_offers_menu_v2(callback: CallbackQuery):
+    async with async_session() as session:
+        total = (await session.execute(select(func.count(Offer.id)))).scalar_one()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать оффер", callback_data="admin_create_offer")],
+        [InlineKeyboardButton(text="📋 Все офферы", callback_data="admin_offers_all")],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]
+    ])
+    await _safe_edit(callback, f"📢 <b>Офферы</b> (Всего: {total})", parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
