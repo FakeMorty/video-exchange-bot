@@ -130,21 +130,6 @@ async def admin_center(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_back")
-async def admin_back(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    sa = is_super_admin(callback.from_user.id)
-    await _safe_edit(
-        callback,
-        "⚙️ <b>Панель администратора</b>\n\nВыберите нужный раздел:",
-        parse_mode="HTML",
-        reply_markup=admin_main_keyboard(is_super=sa)
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data == "admin_feedback_menu")
 async def admin_feedback_menu(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id):
@@ -164,33 +149,16 @@ async def admin_feedback_menu(callback: CallbackQuery):
         await callback.answer()
         return
 
-    kind_name = {
-        "bug": "🐞 Баг",
-        "suggestion": "💡 Идея",
-        "praise": "❤️ Благодарность",
-    }
-    text_out = "💬 <b>Последние обращения пользователей</b>\n\n"
+    kind_name = {"bug": "🐞 Баг", "suggestion": "💡 Идея", "praise": "❤️ Благодарность"}
+    text_out = "💬 <b>Последние обращения</b>\n\n"
     for item in feedback_items:
-        preview = (item.text or "").strip().replace("\n", " ")
-        if len(preview) > 140:
-            preview = preview[:140] + "..."
-        text_out += (
-            f"#{item.id} {kind_name.get(item.kind, item.kind)}\n"
-            f"user_id={item.user_id} | {item.created_at.strftime('%d.%m %H:%M')}\n"
-            f"{preview}\n\n"
-        )
+        preview = (item.text or "").strip().replace("\n", " ")[:140]
+        text_out += f"#{item.id} {kind_name.get(item.kind, item.kind)}\nuser_id={item.user_id} | {item.created_at.strftime('%d.%m %H:%M')}\n{preview}\n\n"
 
-    if len(text_out) > 3900:
-        text_out = text_out[:3900] + "\n..."
-
-    await callback.message.answer(
-        text_out,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_feedback_menu")],
-            [InlineKeyboardButton(text="◀ К панели", callback_data="admin_center")],
-        ]),
-    )
+    await callback.message.answer(text_out, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_feedback_menu")],
+        [InlineKeyboardButton(text="◀ К панели", callback_data="admin_center")],
+    ]))
     await callback.answer()
 
 
@@ -199,140 +167,46 @@ async def admin_db_menu(callback: CallbackQuery):
     if not is_super_admin(callback.from_user.id):
         await callback.answer()
         return
-
-    table_labels: dict[str, str] = {
-        "users": "Пользователи",
-        "videos": "Контент (видео/фото)",
-        "video_views": "Просмотры",
-        "video_ratings": "Оценки",
-        "comments": "Комментарии",
-        "content_reactions": "Реакции",
-        "balance_logs": "Лог баланса",
-        "user_action_logs": "Лог действий",
-        "offers": "Офферы",
-        "offer_participations": "Участия в офферах",
-        "offer_rentals": "Аренда офферов",
-        "payments": "Платежи",
-        "feedback": "Обращения",
-        "games_history": "История игр",
-        "game_sessions": "Игровые сессии",
-        "daily_quest_progress": "Прогресс квестов",
-        "promocodes": "Промокоды",
-        "promocode_activations": "Активации промокодов",
-        "lottery_rounds": "Лотерея: раунды",
-        "lottery_tickets": "Лотерея: билеты",
-        "events": "События",
-    }
-
+    table_labels = {"users": "Пользователи", "videos": "Контент", "offers": "Офферы", "events": "События"}
     all_tables = sorted(Base.metadata.tables.keys())
     tables = [(t, table_labels.get(t, t)) for t in all_tables]
-    await _safe_edit(
-        callback,
-        "🗄 <b>База данных</b>\n\nВыберите таблицу для просмотра:",
-        parse_mode="HTML",
-        reply_markup=admin_db_keyboard(tables)
-    )
+    await _safe_edit(callback, "🗄 <b>База данных</b>", parse_mode="HTML", reply_markup=admin_db_keyboard(tables))
     await callback.answer()
 
 
 def _format_db_value(v) -> str:
-    if v is None:
-        return "—"
-    if isinstance(v, bool):
-        return "Да" if v else "Нет"
-    if isinstance(v, datetime):
-        return v.strftime("%d.%m.%Y %H:%M")
-    if isinstance(v, Decimal):
-        return f"{v:.2f}"
-    s = str(v)
-    s = s.replace("\n", " ").strip()
-    if len(s) > 80:
-        s = s[:80] + "…"
-    return s
+    if v is None: return "—"
+    if isinstance(v, bool): return "Да" if v else "Нет"
+    if isinstance(v, datetime): return v.strftime("%d.%m.%Y %H:%M")
+    if isinstance(v, Decimal): return f"{v:.2f}"
+    s = str(v).replace("\n", " ").strip()
+    return s[:80] + "…" if len(s) > 80 else s
 
 
 @router.callback_query(F.data.startswith("db_open:"))
 async def db_open(callback: CallbackQuery):
-    if not is_super_admin(callback.from_user.id):
-        await callback.answer()
-        return
+    if not is_super_admin(callback.from_user.id): return
     parts = callback.data.split(":")
-    if len(parts) != 3:
-        await callback.answer()
-        return
     table_name = parts[1]
-    try:
-        offset = max(0, int(parts[2]))
-    except Exception:
-        offset = 0
-    if table_name not in Base.metadata.tables:
-        await callback.answer("Таблица не найдена.", show_alert=True)
-        return
+    offset = int(parts[2]) if len(parts) > 2 else 0
     page_size = 8
 
     async with async_session() as session:
         try:
-            total = (await session.execute(
-                text(f'SELECT COUNT(*) FROM "{table_name}"')
-            )).scalar_one()
-            rows = (await session.execute(
-                text(f'SELECT * FROM "{table_name}" ORDER BY 1 DESC LIMIT {page_size} OFFSET {offset}')
-            )).mappings().all()
+            total = (await session.execute(text(f'SELECT COUNT(*) FROM "{table_name}"'))).scalar_one()
+            rows = (await session.execute(text(f'SELECT * FROM "{table_name}" ORDER BY 1 DESC LIMIT {page_size} OFFSET {offset}'))).mappings().all()
         except Exception as e:
-            await callback.answer(f"Ошибка чтения таблицы: {e}", show_alert=True)
+            await callback.answer(f"Ошибка: {e}", show_alert=True)
             return
 
-    if not rows:
-        body = "Нет строк."
-    else:
-        lines = []
-        for row in rows:
-            row_id = row.get("id", "?")
-            title = ""
-            if "telegram_id" in row and "username" in row:
-                title = f"Юзер @{row.get('username') or '?'}"
-            elif "telegram_file_id" in row:
-                title = f"Видео/Фото от {row.get('uploader_user_id')}"
-            elif "action" in row:
-                title = f"Действие: {row.get('action')}"
-            elif "amount" in row and "source" in row:
-                title = f"Транзакция: {row.get('amount')}"
-            elif "title" in row:
-                title = f"Оффер: {row.get('title')}"
-            
-            lines.append(f"<b>#{row_id}</b> <i>{escape(title)}</i>")
-            attrs = []
-            for key, value in row.items():
-                if key == "id" or value is None:
-                    continue
-                attrs.append(f"<b>{escape(str(key))}</b>: {escape(_format_db_value(value))}")
-            lines.append("  " + " | ".join(attrs))
-            lines.append("")
-        body = "\n".join(lines).rstrip()
-
-    text_out = (
-        f"🗄 <b>{escape(table_name)}</b>\n"
-        f"Всего строк: <b>{total}</b>\n"
-        f"Страница: <b>{(offset // page_size) + 1}</b>\n"
-        f"Показано: <b>{len(rows)}</b>\n\n"
-        f"{body}"
-    )
-    if len(text_out) > 3900:
-        text_out = text_out[:3900] + "\n..."
-
+    body = "\n".join([f"<b>#{r.get('id','?')}</b> | {escape(str(r)[:100])}" for r in rows]) if rows else "Нет строк."
+    text_out = f"🗄 <b>{escape(table_name)}</b>\nВсего: {total}\n\n{body}"
+    
     nav = []
-    if offset > 0:
-        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"db_open:{table_name}:{max(0, offset - page_size)}"))
-    if offset + page_size < total:
-        nav.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"db_open:{table_name}:{offset + page_size}"))
-
-    kb_rows = []
-    if nav:
-        kb_rows.append(nav)
-    kb_rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"db_open:{table_name}:{offset}")])
-    kb_rows.append([InlineKeyboardButton(text="📋 К списку таблиц", callback_data="admin_db_menu")])
-    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
-
+    if offset > 0: nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"db_open:{table_name}:{max(0, offset-page_size)}"))
+    if offset + page_size < total: nav.append(InlineKeyboardButton(text="➡️", callback_data=f"db_open:{table_name}:{offset+page_size}"))
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[nav, [InlineKeyboardButton(text="📋 Список", callback_data="admin_db_menu")]])
     await _safe_edit(callback, text_out, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
@@ -342,45 +216,77 @@ async def db_open(callback: CallbackQuery):
 # =========================
 @router.callback_query(F.data == "admin_queue_info")
 async def cb_queue(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
+    if not await check_admin(callback.from_user.id): return
     async with async_session() as session:
-        p = await count_pending_videos(session)
-        a = await count_approved_videos(session)
-        r = await count_rejected_videos(session)
-
+        p, a, r = await count_pending_videos(session), await count_approved_videos(session), await count_rejected_videos(session)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ Модерировать", callback_data="admin_get_pending")],
-        [InlineKeyboardButton(text="✅ Одобрить всё", callback_data="admin_approve_all")],
         [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
     ])
-    await _safe_edit(callback, f"📊 <b>Очередь</b>\n\n⏳ На модерации: <b>{p}</b>\n✅ Одобрено: <b>{a}</b>\n❌ Отклонено: <b>{r}</b>", parse_mode="HTML", reply_markup=kb)
+    await _safe_edit(callback, f"📊 <b>Очередь</b>\n\n⏳ Ожидает: {p}\n✅ Одобрено: {a}\n❌ Отклонено: {r}", parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
 @router.callback_query(F.data == "admin_get_pending")
 async def admin_get_pending(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
+    if not await check_admin(callback.from_user.id): return
     async with async_session() as session:
         video = await get_next_pending_video(session)
         if not video:
-            await _safe_edit(callback, "✅ Очередь модерации пуста!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]]))
+            await _safe_edit(callback, "✅ Очередь пуста!", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]]))
             await callback.answer()
             return
         uploader = await get_user_by_id(session, video.uploader_user_id)
         name = get_display_name(uploader) if uploader else "???"
-        tg_id = uploader.telegram_id if uploader else "???"
-        caption = (f"📹 #{video.id} | {video.content_type}\n👤 {name} (tg: {tg_id})\n📅 {video.created_at.strftime('%d.%m.%Y %H:%M')}\n⏱ {video.duration_seconds or '?'} сек | 📦 {round(video.file_size / 1024 / 1024, 2) if video.file_size else '?'} МБ")
+        caption = f"📹 #{video.id} | {video.content_type}\n👤 {name}\n📅 {video.created_at.strftime('%d.%m %H:%M')}"
         try:
             if video.content_type == "photo":
                 await callback.message.answer_photo(video.telegram_file_id, caption=caption, reply_markup=moderation_keyboard(video.id))
             else:
                 await callback.message.answer_video(video.telegram_file_id, caption=caption, reply_markup=moderation_keyboard(video.id))
-        except Exception as e:
-            await callback.message.answer(f"⚠️ Не удалось загрузить медиа: {e}\n{caption}", reply_markup=moderation_keyboard(video.id))
+        except:
+            await callback.message.answer(f"⚠️ Ошибка медиа #{video.id}\n{caption}", reply_markup=moderation_keyboard(video.id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mod_approve:"))
+async def mod_approve(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    video_id = int(callback.data.split(":")[1])
+    async with async_session() as session:
+        video = await approve_video(session, video_id)
+        if video:
+            uploader = await get_user_by_id(session, video.uploader_user_id)
+            if uploader:
+                try: await callback.bot.send_message(uploader.telegram_id, f"✅ Видео #{video_id} одобрено!")
+                except: pass
+    await _safe_edit(callback, f"✅ #{video_id} ОДОБРЕНО", reply_markup=admin_after_action_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mod_reject:"))
+async def mod_reject(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    video_id = int(callback.data.split(":")[1])
+    await _safe_edit(callback, f"Выберите причину отклонения #{video_id}:", reply_markup=rejection_reason_keyboard(video_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("reject_reason:"))
+async def reject_reason(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    parts = callback.data.split(":")
+    video_id, reason_key = int(parts[1]), parts[2]
+    reasons = {"duplicate": "Дубликат", "off_topic": "Не по теме", "forbidden": "Запрещёнка", "other": "Другое"}
+    reason_text = reasons.get(reason_key, reason_key)
+    async with async_session() as session:
+        video = await reject_video(session, video_id, reason_text)
+        if video:
+            uploader = await get_user_by_id(session, video.uploader_user_id)
+            if uploader:
+                try: await callback.bot.send_message(uploader.telegram_id, f"❌ Видео #{video_id} отклонено: {reason_text}")
+                except: pass
+    await _safe_edit(callback, f"❌ #{video_id} ОТКЛОНЕНО ({reason_text})", reply_markup=admin_after_action_keyboard())
     await callback.answer()
 
 
@@ -388,53 +294,36 @@ async def admin_get_pending(callback: CallbackQuery):
 # EVENTS
 # =========================
 def event_applies_keyboard(selected: dict) -> InlineKeyboardMarkup:
-    def icon(key): return "✅" if selected.get(key, False) else "❌"
+    def icon(k): return "✅" if selected.get(k) else "❌"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{icon('vip')} Покупка VIP", callback_data="event_toggle:vip")],
-        [InlineKeyboardButton(text=f"{icon('coins')} Покупка монет", callback_data="event_toggle:coins")],
-        [InlineKeyboardButton(text=f"{icon('lootbox')} Покупка лутбоксов", callback_data="event_toggle:lootbox")],
-        [InlineKeyboardButton(text=f"{icon('cases')} Покупка кейсов", callback_data="event_toggle:cases")],
+        [InlineKeyboardButton(text=f"{icon('vip')} VIP", callback_data="event_toggle:vip")],
+        [InlineKeyboardButton(text=f"{icon('coins')} Монеты", callback_data="event_toggle:coins")],
+        [InlineKeyboardButton(text=f"{icon('lootbox')} Лутбоксы", callback_data="event_toggle:lootbox")],
         [InlineKeyboardButton(text="✅ Готово", callback_data="event_applies_done"), InlineKeyboardButton(text="❌ Отмена", callback_data="admin_events_menu")]
     ])
 
 
 @router.callback_query(F.data == "admin_events_menu")
 async def admin_events_menu(callback: CallbackQuery):
-    try:
-        if not await check_admin(callback.from_user.id):
-            await callback.answer("У вас нет прав!", show_alert=True)
-            return
-        async with async_session() as session:
-            try:
-                active = (await session.execute(select(Event).where(Event.is_active == True, Event.end_date > datetime.utcnow()).order_by(Event.start_date.desc()))).scalars().all()
-            except Exception as e:
-                print(f"DB Error: {e}")
-                active = []
-        text = "🎉 <b>Управление событиями</b>\n\n"
-        if active:
-            text += "Активные события:\n"
-            for ev in active[:5]:
-                text += f"• {escape(ev.name)} — {ev.discount_percent}% до {ev.end_date.strftime('%d.%m')}\n"
-        else:
-            text += "Нет активных событий.\n"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Создать новое событие", callback_data="event_create_start")],
-            [InlineKeyboardButton(text="📋 Все события", callback_data="event_list_all")],
-            [InlineKeyboardButton(text="🛍 Акции (Sale)", callback_data="admin_sales")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")]
-        ])
-        await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
-    except Exception as e:
-        print(f"Events menu error: {e}")
-    finally:
-        await callback.answer()
+    if not await check_admin(callback.from_user.id): return
+    async with async_session() as session:
+        active = (await session.execute(select(Event).where(Event.is_active == True, Event.end_date > datetime.utcnow()).order_by(Event.start_date.desc()))).scalars().all()
+    text = "🎉 <b>События</b>\n\n" + ("\n".join([f"• {escape(ev.name)} ({ev.discount_percent}%)" for ev in active[:5]]) if active else "Нет активных событий.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать", callback_data="event_create_start")],
+        [InlineKeyboardButton(text="📋 Все", callback_data="event_list_all")],
+        [InlineKeyboardButton(text="🛍 Акции", callback_data="admin_sales")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")]
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "event_create_start")
 async def event_create_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     await state.set_state(EventCreationState.waiting_name)
-    await callback.message.answer("🎉 <b>Создание события — шаг 1/7</b>\n\nВведите <b>название события</b>:", parse_mode="HTML")
+    await callback.message.answer("🎉 <b>Шаг 1/7</b>\nВведите название:")
     await callback.answer()
 
 
@@ -442,42 +331,34 @@ async def event_create_start(callback: CallbackQuery, state: FSMContext):
 async def event_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text.strip()[:255])
     await state.set_state(EventCreationState.waiting_description)
-    await message.answer("📝 <b>Шаг 2/7</b>\n\nВведите <b>текст события</b>:")
+    await message.answer("📝 <b>Шаг 2/7</b>\nВведите описание:")
 
 
 @router.message(EventCreationState.waiting_description)
 async def event_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text.strip()[:2000])
     await state.set_state(EventCreationState.waiting_discount)
-    await message.answer("💰 <b>Шаг 3/7</b>\n\nРазмер <b>скидки (%)</b> (1-99):")
+    await message.answer("💰 <b>Шаг 3/7</b>\nСкидка (1-99%):")
 
 
 @router.message(EventCreationState.waiting_discount)
 async def event_discount(message: Message, state: FSMContext):
-    try:
-        pct = int(message.text.strip())
-        if not (1 <= pct <= 99): raise ValueError
-    except:
-        await message.answer("❌ Введите число от 1 до 99.")
+    if not message.text.isdigit() or not (1 <= int(message.text) <= 99):
+        await message.answer("Введите число 1-99")
         return
-    await state.update_data(discount_percent=pct)
+    await state.update_data(discount_percent=int(message.text))
     await state.set_state(EventCreationState.waiting_duration)
-    await message.answer("📅 <b>Шаг 4/7</b>\n\nСколько <b>дней</b> длится событие?")
+    await message.answer("📅 <b>Шаг 4/7</b>\nДлительность (дней):")
 
 
 @router.message(EventCreationState.waiting_duration)
 async def event_duration(message: Message, state: FSMContext):
-    try:
-        days = int(message.text.strip())
-        if days < 1: raise ValueError
-    except:
-        await message.answer("❌ Введите число ≥ 1.")
+    if not message.text.isdigit() or int(message.text) < 1:
+        await message.answer("Минимум 1 день")
         return
-    await state.update_data(duration_days=days)
-    applies = {"vip": False, "coins": False, "lootbox": False, "cases": False}
-    await state.update_data(applies=applies)
+    await state.update_data(duration_days=int(message.text), applies={"vip": False, "coins": False, "lootbox": False})
     await state.set_state(EventCreationState.waiting_applies)
-    await message.answer("✅ <b>Шаг 5/7 — На что скидка?</b>", reply_markup=event_applies_keyboard(applies))
+    await message.answer("✅ <b>Шаг 5/7</b>", reply_markup=event_applies_keyboard({"vip": False, "coins": False, "lootbox": False}))
 
 
 @router.callback_query(EventCreationState.waiting_applies, F.data.startswith("event_toggle:"))
@@ -495,15 +376,16 @@ async def event_toggle_applies(callback: CallbackQuery, state: FSMContext):
 async def event_applies_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     if not any(data.get("applies", {}).values()):
-        await callback.answer("❌ Выберите хотя бы одно!", show_alert=True)
+        await callback.answer("Выберите хоть что-то!", show_alert=True)
         return
     await state.set_state(EventCreationState.waiting_image)
-    await callback.message.answer("🖼 <b>Шаг 6/7</b>\n\nОтправьте фото или напишите 'пропустить':", parse_mode="HTML")
+    await callback.message.answer("🖼 <b>Шаг 6/7</b>\nФото или 'пропустить':")
     await callback.answer()
 
 
 @router.message(EventCreationState.waiting_image)
 async def event_image(message: Message, state: FSMContext):
+    # This handler must have priority!
     if message.photo:
         await state.update_data(image_file_id=message.photo[-1].file_id)
     else:
@@ -511,9 +393,8 @@ async def event_image(message: Message, state: FSMContext):
     
     data = await state.get_data()
     await state.set_state(EventCreationState.confirm)
-    summary = f"🎉 <b>Предпросмотр</b>\n\n📌 Название: {data['name']}\n💰 Скидка: {data['discount_percent']}%\n📅 Дней: {data['duration_days']}"
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Создать", callback_data="event_confirm_yes"), InlineKeyboardButton(text="❌ Отмена", callback_data="admin_events_menu")]])
-    await message.answer(summary, parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"🎉 <b>Подтверждение</b>\nНазвание: {data['name']}\nСкидка: {data['discount_percent']}%", parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(EventCreationState.confirm, F.data == "event_confirm_yes")
@@ -523,36 +404,25 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
     start = datetime.utcnow()
     end = start + timedelta(days=data["duration_days"])
     async with async_session() as session:
-        admin_user = await get_user(session, callback.from_user.id)
-        event = Event(
-            name=data["name"], description=data["description"], discount_percent=data["discount_percent"],
-            duration_days=data["duration_days"], applies_vip=applies.get("vip", False),
-            applies_coins=applies.get("coins", False), applies_lootbox=applies.get("lootbox", False),
-            applies_cases=applies.get("cases", False), image_file_id=data.get("image_file_id"),
-            start_date=start, end_date=end, is_active=True, created_by=admin_user.id if admin_user else None
-        )
-        session.add(event)
+        admin = await get_user(session, callback.from_user.id)
+        ev = Event(name=data["name"], description=data["description"], discount_percent=data["discount_percent"], duration_days=data["duration_days"], applies_vip=applies.get("vip", False), applies_coins=applies.get("coins", False), applies_lootbox=applies.get("lootbox", False), image_file_id=data.get("image_file_id"), start_date=start, end_date=end, is_active=True, created_by=admin.id if admin else None)
+        session.add(ev)
         await session.commit()
     await state.clear()
-    await callback.message.answer("✅ Событие создано и рассылка запущена!")
+    await callback.message.answer("✅ Событие создано!")
     await callback.answer()
 
 
 # =========================
-# SALES (Sale)
+# SALES
 # =========================
 @router.callback_query(F.data == "admin_sales")
 async def admin_sales_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     async with async_session() as session:
         sale = await get_active_sale(session)
-    text = "🛍 <b>Глобальные акции</b>\n\n"
-    if sale:
-        text += f"🟢 Активна: {sale.discount_percent}% на {sale.applies_to}\nДо: {sale.end_date.strftime('%d.%m %H:%M')}\n"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛑 Остановить", callback_data="admin_sale_stop")], [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]])
-    else:
-        text += "🔴 Нет активных акций."
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Создать", callback_data="admin_sale_create")], [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]])
+    text = "🛍 <b>Глобальные акции</b>\n\n" + (f"🟢 Активна: {sale.discount_percent}%" if sale else "🔴 Нет активных акций.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛑 Остановить", callback_data="admin_sale_stop")] if sale else [InlineKeyboardButton(text="➕ Создать", callback_data="admin_sale_create")], [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
@@ -564,30 +434,28 @@ async def admin_sale_stop(callback: CallbackQuery):
         if sale:
             sale.end_date = datetime.utcnow()
             await session.commit()
-            await callback.answer("✅ Остановлено", show_alert=True)
     await admin_sales_start(callback, None)
 
 
 @router.callback_query(F.data == "admin_sale_create")
 async def admin_sale_create(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SaleState.waiting_percent)
-    await _safe_edit(callback, "Введите % скидки (1-99):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_center")]]))
+    await _safe_edit(callback, "Введите % (1-99):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_center")]]))
 
 
 @router.message(SaleState.waiting_percent)
 async def admin_sale_percent(message: Message, state: FSMContext):
     if not message.text.isdigit(): return
     await state.update_data(discount_percent=int(message.text))
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Всё", callback_data="sale_scope:all")], [InlineKeyboardButton(text="VIP", callback_data="sale_scope:vip")], [InlineKeyboardButton(text="Монеты", callback_data="sale_scope:coins")]])
     await state.set_state(SaleState.waiting_scope)
-    await message.answer("На что скидка?", reply_markup=kb)
+    await message.answer("Сфера применения:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Все", callback_data="sale_scope:all")]]))
 
 
 @router.callback_query(SaleState.waiting_scope, F.data.startswith("sale_scope:"))
 async def admin_sale_scope(callback: CallbackQuery, state: FSMContext):
     await state.update_data(applies_to=callback.data.split(":")[1])
     await state.set_state(SaleState.waiting_duration)
-    await _safe_edit(callback, "Длительность в часах:")
+    await _safe_edit(callback, "Длительность (часов):")
     await callback.answer()
 
 
@@ -596,7 +464,7 @@ async def admin_sale_duration(message: Message, state: FSMContext):
     if not message.text.isdigit(): return
     await state.update_data(duration_hours=int(message.text))
     await state.set_state(SaleState.waiting_text)
-    await message.answer("Текст объявления:")
+    await message.answer("Текст рассылки:")
 
 
 @router.message(SaleState.waiting_text)
@@ -604,36 +472,91 @@ async def admin_sale_finish(message: Message, state: FSMContext):
     data = await state.get_data()
     end_date = datetime.utcnow() + timedelta(hours=data["duration_hours"])
     async with async_session() as session:
-        sale = ActiveSale(discount_percent=data["discount_percent"], applies_to=data["applies_to"], end_date=end_date, announcement=message.text)
-        session.add(sale)
+        session.add(ActiveSale(discount_percent=data["discount_percent"], applies_to=data["applies_to"], end_date=end_date, announcement=message.text))
         await session.commit()
     await state.clear()
-    await message.answer(f"✅ Акция создана до {end_date.strftime('%d.%m %H:%M')}!")
+    await message.answer("✅ Акция запущена!")
 
 
 # =========================
-# STATS
+# BROADCAST
 # =========================
-@router.callback_query(F.data == "admin_extended_stats")
-async def admin_extended_stats_v2(callback: CallbackQuery):
-    async with async_session() as session:
-        stats = await get_admin_extended_stats(session)
-    text = (f"📊 <b>Статистика</b>\n\n👥 Юзеров: {stats['users']}\n⭐ VIP: {stats['vip']}\n💰 Монет: {stats['total_balance_in_system']:.2f}")
-    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]]))
+@router.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    await state.set_state(AdminBroadcastState.waiting_text)
+    await callback.message.answer("📢 Введите текст рассылки (HTML):")
     await callback.answer()
 
 
-# =========================
-# OFFERS
-# =========================
-@router.callback_query(F.data == "admin_offers_menu")
-async def admin_offers_menu_v2(callback: CallbackQuery):
+@router.message(AdminBroadcastState.waiting_text)
+async def process_broadcast(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    text_val = message.text
+    await state.clear()
     async with async_session() as session:
-        total = (await session.execute(select(func.count(Offer.id)))).scalar_one()
+        users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
+    sent = 0
+    for tid in users:
+        try:
+            await message.bot.send_message(tid, f"📢 <b>Объявление:</b>\n\n{text_val}", parse_mode="HTML")
+            sent += 1
+            if sent % 20 == 0: await asyncio.sleep(0.5)
+        except: pass
+    await message.answer(f"✅ Рассылка завершена: {sent} пользователей.")
+
+
+# =========================
+# USER MGMT
+# =========================
+@router.callback_query(F.data == "admin_manage_users")
+async def admin_manage_users(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Создать оффер", callback_data="admin_create_offer")],
-        [InlineKeyboardButton(text="📋 Все офферы", callback_data="admin_offers_all")],
+        [InlineKeyboardButton(text="🔍 Досье", callback_data="admin_user_dossier")],
+        [InlineKeyboardButton(text="💰 Выдать монеты", callback_data="admin_give_coins")],
+        [InlineKeyboardButton(text="🚫 Бан", callback_data="admin_ban_user")],
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
+    ])
+    await _safe_edit(callback, "👥 <b>Управление пользователями</b>", parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_user_dossier")
+async def dossier_start(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminUserState.waiting_dossier_id)
+    await callback.message.answer("Введите ID или ник:")
+    await callback.answer()
+
+
+@router.message(AdminUserState.waiting_dossier_id)
+async def process_dossier(message: Message, state: FSMContext):
+    query = message.text.strip()
+    async with async_session() as session:
+        user = await get_user(session, int(query)) if query.isdigit() else await get_user_by_display_name(session, query)
+        if not user:
+            await message.answer("❌ Не найден")
+            return
+        d = await get_user_dossier(session, user.id)
+    text_out = f"📋 <b>Досье: {escape(get_display_name(user))}</b>\n💰 Баланс: {user.balance}\n📤 Загрузок: {d['videos_uploaded']}"
+    await message.answer(text_out, parse_mode="HTML")
+    await state.clear()
+
+
+@router.callback_query(F.data == "admin_extended_stats")
+async def admin_extended_stats(callback: CallbackQuery):
+    async with async_session() as session:
+        stats = await get_admin_extended_stats(session)
+    await _safe_edit(callback, f"📊 <b>Статистика</b>\n\n👥 Юзеров: {stats['users']}\n💰 Баланс: {stats['total_balance_in_system']:.2f}", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]]))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_offers_menu")
+async def admin_offers_menu(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать", callback_data="admin_create_offer")],
         [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]
     ])
-    await _safe_edit(callback, f"📢 <b>Офферы</b> (Всего: {total})", parse_mode="HTML", reply_markup=kb)
+    await _safe_edit(callback, "📢 <b>Офферы</b>", reply_markup=kb)
     await callback.answer()

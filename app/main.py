@@ -675,8 +675,8 @@ async def main():
     from app.middlewares import BanCheckMiddleware
     dp.message.middleware(BanCheckMiddleware())
     dp.callback_query.middleware(BanCheckMiddleware())
-    dp.include_router(user_router)
     dp.include_router(admin_router)
+    dp.include_router(user_router)
     dp.include_router(user_offer_router)
     dp.include_router(donation_router)
 
