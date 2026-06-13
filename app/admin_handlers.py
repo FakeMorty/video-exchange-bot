@@ -82,26 +82,12 @@ class TrustedUploaderState(StatesGroup):
 
 # =========================
 # HELPERS
-# =========================
-def is_super_admin(tid: int) -> bool:
-    return tid in ADMINS
+from app.utils.admin import check_admin, is_super_admin
 
 
-async def check_admin(tid: int) -> bool:
-    if tid in ADMINS:
-        return True
-    async with async_session() as session:
-        user = await get_user(session, tid)
-        if user and user.is_admin:
-            return True
-    return False
 
 
-async def _safe_edit(callback: CallbackQuery, text: str, **kwargs):
-    try:
-        await callback.message.edit_text(text, **kwargs)
-    except Exception:
-        await callback.message.answer(text, **kwargs)
+
 
 
 # =========================
