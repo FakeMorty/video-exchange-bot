@@ -2607,7 +2607,7 @@ async def _update_quest_progress(
             DailyQuestProgress.user_id == user_id,
             DailyQuestProgress.quest_type == quest_type,
             DailyQuestProgress.quest_date == today,
-            not DailyQuestProgress.completed
+            DailyQuestProgress.completed.is_(False)
         )
     )).scalars().all()
 
