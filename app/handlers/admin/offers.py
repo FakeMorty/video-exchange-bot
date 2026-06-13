@@ -175,3 +175,67 @@ async def admin_offer_reward_preview(message: Message, state: FSMContext):
         return
     await state.update_data(reward_preview=val)
     await state.set_state(AdminOfferCreateState.waiting_reward_final)
+    await message.answer(
+        "💎 <b>Шаг 5/9</b>\n\n"
+        "Введите итоговую награду (монеты, выдаётся после проверки подписки):\n"
+        "Рекомендуется: 35",
+        parse_mode="HTML"
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_reward_final)
+async def admin_offer_reward_final(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    try:
+        val = Decimal(message.text.strip())
+        if val < 0:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ Введите корректное число.")
+        return
+    await state.update_data(reward_final=val)
+    data = await state.get_data()
+    reward_preview = Decimal(data.get("reward_preview", 0))
+    max_penalty = (reward_preview + val) * Decimal("0.5")
+    await state.set_state(AdminOfferCreateState.waiting_penalty_unsubscribe)
+    await message.answer(
+        "⚠️ <b>Шаг 6/9</b>\n\n"
+        "Введите штраф за отписку (дополнительно к возврату всех бонусов).\n"
+        f"Максимум: {max_penalty} монет (50% от суммы бонусов).",
+        parse_mode="HTML"
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_penalty_unsubscribe)
+async def admin_offer_penalty_unsubscribe(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    try:
+        penalty = Decimal(message.text.strip())
+        if penalty < 0:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ Введите корректное число >= 0.")
+        return
+    data = await state.get_data()
+    reward_preview = Decimal(data.get("reward_preview", 0))
+    reward_final = Decimal(data.get("reward_final", 0))
+    max_penalty = (reward_preview + reward_final) * Decimal("0.5")
+    if penalty > max_penalty:
+        await message.answer(
+            f"❌ Слишком большой штраф. Максимум: {max_penalty} монет."
+        )
+        return
+    await state.update_data(penalty_unsubscribe=penalty)
+    await state.set_state(AdminOfferCreateState.waiting_rentable)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да", callback_data="offer_rentable_yes"),
+            InlineKeyboardButton(text="❌ Нет", callback_data="offer_rentable_no"),
+        ]
+    ])
+    await message.answer(
+        "🏠 <b>Шаг 7/9</b>\n\n"
+        "Разрешить рекламодателям арендовать этот оффер\n"
+        "(размещать рекламу своего канала вместе с этим)?",

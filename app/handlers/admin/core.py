@@ -1,5 +1,5 @@
 """
-Core admin panel (menu, stats, db, feedback).
+Core admin panel handlers.
 """
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -265,3 +265,67 @@ async def db_open(callback: CallbackQuery):
 # QUEUE INFO
 # =========================
 @router.callback_query(F.data == "admin_queue_info")
+async def cb_queue(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        p = await count_pending_videos(session)
+        a = await count_approved_videos(session)
+        r = await count_rejected_videos(session)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="▶ Модерировать", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text="✅ Одобрить всё", callback_data="admin_approve_all")],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
+    ])
+    await _safe_edit(
+        callback,
+        f"📊 <b>Очередь</b>\n\n"
+        f"⏳ На модерации: <b>{p}</b>\n"
+        f"✅ Одобрено: <b>{a}</b>\n"
+        f"❌ Отклонено: <b>{r}</b>",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+# =========================
+# EXTENDED STATS
+# =========================
+@router.callback_query(F.data == "admin_extended_stats")
+async def admin_extended_stats(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        stats = await get_admin_extended_stats(session)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]
+    ])
+    text = (
+        f"📊 <b>Расширенная статистика</b>\n\n"
+        f"👥 Пользователей: <b>{stats['users']}</b>\n"
+        f"⭐ VIP: <b>{stats['vip']}</b>\n"
+        f"🏷 С ником: <b>{stats['with_nickname']}</b>\n"
+        f"💬 Комментариев: <b>{stats['comments']}</b>\n"
+        f"❤ Реакций: <b>{stats['reactions']}</b>\n"
+        f"🎮 Игр: <b>{stats['games']}</b>\n"
+        f"📢 Офферов: <b>{stats['offers']}</b>\n"
+        f"🔑 Активных аренд: <b>{stats.get('active_rentals', 0)}</b>\n\n"
+        f"💰 Монет в системе: <b>{stats['total_balance_in_system']:.2f}</b>\n"
+        f"🎁 Выдано админами: <b>{stats['total_admin_given']:.2f}</b>\n"
+        f"🎲 Прибыль казино: <b>{stats['total_game_profit']:.2f}</b>\n"
+        f"🏠 Доход от аренды: <b>{abs(float(stats.get('total_rent_income', 0))):.2f}</b>"
+    )
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# =========================
+@router.callback_query(F.data == "admin_get_pending")
+
+
+@router.message(AdminBroadcastState.waiting_text)
