@@ -84,7 +84,10 @@ async def admin_events_menu(callback: CallbackQuery):
         [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_center")]
     ])
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
