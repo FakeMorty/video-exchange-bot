@@ -1570,7 +1570,7 @@ def should_inject_ad_in_video() -> bool:
 
 
 async def get_active_sale(session: AsyncSession):
-    stmt = select(ActiveSale).where(ActiveSale.end_date > func.now()).order_by(ActiveSale.id.desc()).limit(1)
+    stmt = select(ActiveSale).where(ActiveSale.end_date > datetime.utcnow()).order_by(ActiveSale.id.desc()).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -1615,7 +1615,7 @@ async def get_active_events(session: AsyncSession):
     """Получить все активные события"""
     stmt = select(Event).where(
         Event.is_active == True,
-        Event.end_date > func.now()
+        Event.end_date > datetime.utcnow()
     ).order_by(Event.discount_percent.desc())
     result = await session.execute(stmt)
     return result.scalars().all()

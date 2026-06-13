@@ -607,7 +607,7 @@ async def show_vip(message: Message):
                 )
     except Exception as e:
         logger.exception("Error in show_vip")
-        await message.answer("⚠️ Ошибка при получении информации о VIP.")
+        await message.answer(f"⚠️ Ошибка при получении информации о VIP: {str(e)}")
 
 
 @router.callback_query(F.data == "buy_vip")
@@ -1189,7 +1189,7 @@ async def btn_buy(message: Message):
         )
     except Exception as e:
         logger.exception("Error in btn_buy")
-        await message.answer("⚠️ Ошибка при получении пакетов пополнения.")
+        await message.answer(f"⚠️ Ошибка при получении пакетов пополнения: {str(e)}")
 
 
 @router.callback_query(F.data.startswith("buy:"))
