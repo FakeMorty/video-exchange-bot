@@ -239,3 +239,105 @@ async def admin_offer_penalty_unsubscribe(message: Message, state: FSMContext):
         "🏠 <b>Шаг 7/9</b>\n\n"
         "Разрешить рекламодателям арендовать этот оффер\n"
         "(размещать рекламу своего канала вместе с этим)?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
+@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rentable_yes")
+async def admin_offer_rentable_yes(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(is_rentable=True)
+    await state.set_state(AdminOfferCreateState.waiting_rent_cost)
+    await callback.message.answer(
+        f"💵 <b>Шаг 8/9</b>\n\n"
+        f"Введите стоимость аренды за 1 день (монеты):\n"
+        f"По умолчанию: {OFFER_DEFAULT_RENT_COST_PER_DAY}",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rentable_no")
+async def admin_offer_rentable_no(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(is_rentable=False, rent_cost_per_day=Decimal("0"), max_simultaneous_rentals=0)
+    await state.set_state(AdminOfferCreateState.waiting_max_rentals)
+    await _finish_offer_creation(callback.message, state, skip_rentals=True)
+    await callback.answer()
+
+
+@router.message(AdminOfferCreateState.waiting_rent_cost)
+async def admin_offer_rent_cost(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    try:
+        val = Decimal(message.text.strip())
+        if val <= 0:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ Введите корректное число.")
+        return
+    await state.update_data(rent_cost_per_day=val)
+    await state.set_state(AdminOfferCreateState.waiting_max_rentals)
+    await message.answer(
+        "🔢 <b>Шаг 9/9</b>\n\n"
+        "Максимальное число одновременных арендаторов?\n"
+        "Рекомендуется: 1-5",
+        parse_mode="HTML"
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_max_rentals)
+async def admin_offer_max_rentals(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    try:
+        val = int(message.text.strip())
+        if val < 1:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ Введите целое число >= 1.")
+        return
+    await state.update_data(max_simultaneous_rentals=val)
+    await _finish_offer_creation(message, state)
+
+
+async def _finish_offer_creation(
+        message: Message,
+        state: FSMContext,
+        skip_rentals: bool = False
+):
+    data = await state.get_data()
+    async with async_session() as session:
+        await admin_create_offer(
+            session,
+            title=data["title"],
+            description=data["description"],
+            channel_url=data["url"],
+            reward_preview=data["reward_preview"],
+            reward_final=data["reward_final"],
+            penalty_unsubscribe=data.get("penalty_unsubscribe", Decimal("0")),
+            is_rentable=data.get("is_rentable", False),
+            rent_cost_per_day=data.get("rent_cost_per_day", Decimal("0")),
+            max_simultaneous_rentals=data.get("max_simultaneous_rentals", 0),
+        )
+
+    rentable_text = ""
+    if data.get("is_rentable"):
+        rentable_text = (
+            f"\n🔑 Аренда: {data.get('rent_cost_per_day')} монет/день\n"
+            f"Макс. арендаторов: {data.get('max_simultaneous_rentals')}"
+        )
+
+    await message.answer(
+        f"✅ <b>Оффер создан!</b>\n\n"
+        f"📢 {data['title']}\n"
+        f"💰 Старт. награда: {data['reward_preview']}\n"
+        f"💎 Итог. награда: {data['reward_final']}"
+        f"\n⚠️ Штраф за отписку: {data.get('penalty_unsubscribe', Decimal('0'))}"
+        f"{rentable_text}\n\n"
+        f"Оффер сразу активен и виден пользователям.",
+        parse_mode="HTML"
+    )
+    await state.clear()
+
+
