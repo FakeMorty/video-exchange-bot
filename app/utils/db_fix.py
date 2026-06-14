@@ -62,16 +62,16 @@ async def fix_database():
         try:
             await conn.execute(text("ALTER TABLE events ADD COLUMN image_file_id TEXT"))
             await conn.commit()
-        except:
-            pass
+        except Exception:
+            await conn.rollback()
             
         # 2. Offers Table
         for col, col_type in [("duration_days", "INTEGER NOT NULL DEFAULT 30"), ("placement_cost", "NUMERIC(10,2) NOT NULL DEFAULT 0")]:
             try:
                 await conn.execute(text(f"ALTER TABLE offers ADD COLUMN {col} {col_type}"))
                 await conn.commit()
-            except:
-                pass
+            except Exception:
+                await conn.rollback()
         
         # 3. Active Sales Table
         if is_sqlite:
