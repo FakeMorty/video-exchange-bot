@@ -58,12 +58,12 @@ from app.config import (
 def _roll_lootbox_reward_coins() -> tuple[Decimal, str]:
     r = random.random()
     if r < 0.70:
-        return to_decimal(random.randint(500, 1500)), "common"
+        return to_decimal(random.randint(10, 30)), "common"
     if r < 0.95:
-        return to_decimal(random.randint(2000, 5000)), "rare"
+        return to_decimal(random.randint(40, 100)), "rare"
     if r < 0.995:
-        return to_decimal(random.randint(7000, 15000)), "epic"
-    return to_decimal(random.randint(25000, 100000)), "jackpot"
+        return to_decimal(random.randint(140, 300)), "epic"
+    return to_decimal(random.randint(500, 2000)), "jackpot"
 
 
 async def open_lootbox_for_coins(session: AsyncSession, user_id: int) -> tuple[Decimal, str] | tuple[None, str]:

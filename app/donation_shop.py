@@ -25,7 +25,7 @@ DONATION_ITEMS = [
     {
         "id": "color_nick",
         "name": "🎨 Цветной ник",
-        "price": 25000,
+        "price": 500,
         "description": "Твой ник будет выделяться цветом в чате и профиле",
         "duration_days": 30,
         "type": "permanent_color"
@@ -33,7 +33,7 @@ DONATION_ITEMS = [
     {
         "id": "gold_nick",
         "name": "👑 Золотой ник",
-        "price": 75000,
+        "price": 1500,
         "description": "Престижный золотой цвет ника (самый крутой)",
         "duration_days": 30,
         "type": "permanent_gold"
@@ -41,7 +41,7 @@ DONATION_ITEMS = [
     {
         "id": "coin_booster",
         "name": "💰 Бустер монет x1.5",
-        "price": 30000,
+        "price": 600,
         "description": "Получаешь на 50% больше монет за просмотры и квесты",
         "duration_days": 7,
         "type": "coin_multiplier"
@@ -49,7 +49,7 @@ DONATION_ITEMS = [
     {
         "id": "xp_booster",
         "name": "📈 Бустер XP x2",
-        "price": 25000,
+        "price": 500,
         "description": "Получаешь в 2 раза больше XP",
         "duration_days": 7,
         "type": "xp_multiplier"
@@ -57,7 +57,7 @@ DONATION_ITEMS = [
     {
         "id": "stars_discount",
         "name": "⭐ Скидка 25% на Stars",
-        "price": 50000,
+        "price": 1000,
         "description": "Все покупки за Stars стоят на 25% дешевле",
         "duration_days": 30,
         "type": "stars_discount"
@@ -65,7 +65,7 @@ DONATION_ITEMS = [
     {
         "id": "priority_moderation",
         "name": "⚡ Приоритетная модерация",
-        "price": 15000,
+        "price": 300,
         "description": "Твои видео проверяют в первую очередь",
         "duration_days": 14,
         "type": "priority"
@@ -73,7 +73,7 @@ DONATION_ITEMS = [
     {
         "id": "exclusive_reactions",
         "name": "✨ Эксклюзивные реакции",
-        "price": 20000,
+        "price": 400,
         "description": "Доступ к уникальным реакциям (💎, 🔥, 👑 и др.)",
         "duration_days": 30,
         "type": "reactions"

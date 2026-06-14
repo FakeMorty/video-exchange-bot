@@ -21,7 +21,7 @@ from app.services import (
     ensure_payment_pending, get_payment_by_payload,
     mark_payment_paid_once, log_user_action, get_display_name
 )
-from app.config import ADMINS
+from app.config import ADMINS, STARS_TO_COINS_RATE
 
 router = Router()
 
@@ -98,7 +98,7 @@ async def user_offer_url(message: Message, state: FSMContext):
     
     await message.answer(
         "Шаг 4/7: Введите <b>предварительную награду</b> (монеты, выдаётся сразу):\n\n"
-        "Рекомендуется: 500, 1000, 1500",
+        "Рекомендуется: 10, 20, 30",
         parse_mode="HTML"
     )
 
@@ -116,7 +116,7 @@ async def user_offer_preview(message: Message, state: FSMContext):
     await state.set_state(UserOfferState.waiting_reward_final)
     await message.answer(
         "Шаг 5/7: Введите <b>итоговую награду</b> (после проверки подписки):\n\n"
-        "Рекомендуется: 3500, 5000, 8000",
+        "Рекомендуется: 70, 100, 160",
         parse_mode="HTML"
     )
 
@@ -239,7 +239,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 session,
                 user_id=user.id,
                 payload=payload,
-                stars_amount=int(cost / 500),  # Курс 500 монет за 1 Star
+                stars_amount=int(cost / STARS_TO_COINS_RATE),  # Курс STARS_TO_COINS_RATE монет за 1 Star
                 coins_amount=cost
             )
             await session.commit()
@@ -249,7 +249,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 description=f"Оффер «{data['title']}» на {data['duration_days']} дней",
                 payload=payload,
                 currency="XTR",
-                prices=[LabeledPrice(label="Размещение", amount=max(1, int(cost / 500)))]
+                prices=[LabeledPrice(label="Размещение", amount=max(1, int(cost / STARS_TO_COINS_RATE)))]
             )
             await state.clear()
     
