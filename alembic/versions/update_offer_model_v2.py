@@ -18,19 +18,28 @@ def upgrade() -> None:
     # Удаляем таблицу аренды (если существует)
     try:
         op.drop_table('offer_rentals')
-    except:
+    except Exception:
         pass
     
     # Добавляем новые колонки в offers
-    op.add_column('offers', sa.Column('duration_days', sa.Integer(), nullable=False, server_default='30'))
-    op.add_column('offers', sa.Column('placement_cost', sa.Numeric(precision=10, scale=2), nullable=False, server_default='0'))
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    columns = [c['name'] for c in inspector.get_columns('offers')]
+    
+    if 'duration_days' not in columns:
+        op.add_column('offers', sa.Column('duration_days', sa.Integer(), nullable=False, server_default='30'))
+    if 'placement_cost' not in columns:
+        op.add_column('offers', sa.Column('placement_cost', sa.Numeric(precision=10, scale=2), nullable=False, server_default='0'))
     
     # Удаляем старые колонки аренды
     try:
-        op.drop_column('offers', 'is_rentable')
-        op.drop_column('offers', 'rent_cost_per_day')
-        op.drop_column('offers', 'max_simultaneous_rentals')
-    except:
+        if 'is_rentable' in columns:
+            op.drop_column('offers', 'is_rentable')
+        if 'rent_cost_per_day' in columns:
+            op.drop_column('offers', 'rent_cost_per_day')
+        if 'max_simultaneous_rentals' in columns:
+            op.drop_column('offers', 'max_simultaneous_rentals')
+    except Exception:
         pass
 
 
