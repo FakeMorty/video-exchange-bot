@@ -1491,10 +1491,10 @@ async def lootbox_menu(callback: CallbackQuery):
     coin_price = to_decimal(LOOTBOX_COIN_PRICE)
     star_price = int(LOOTBOX_STAR_PRICE)
     await callback.message.answer(
-        "🎁 <b>Лутбоксы</b>\n\n"
-        f"Цена: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n".replace(',', ' ')
-        "Внутри — случайный выигрыш монет.\n"
-        "Редкие крупные выигрыши возможны, но не гарантированы.",
+        ("🎁 <b>Лутбоксы</b>\n\n"
+         f"Цена: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n".replace(',', ' ') +
+         "Внутри — случайный выигрыш монет.\n"
+         "Редкие крупные выигрыши возможны, но не гарантированы."),
         parse_mode="HTML",
         reply_markup=_lootbox_kb(),
     )
