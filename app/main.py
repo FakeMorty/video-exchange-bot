@@ -656,7 +656,7 @@ async def on_startup(app):
         await fix_database()
         log_info(logger, "Database maintenance complete")
     except Exception as e:
-        log_error(logger, f\"Database maintenance error: {e}\")
+        log_error(logger, f"Database maintenance error: {e}")
 
     try:
         def run_migrations():
@@ -666,7 +666,7 @@ async def on_startup(app):
         await asyncio.to_thread(run_migrations)
         log_info(logger, "Alembic migrations synced")
     except Exception as e:
-        log_error(logger, f\"Migration sync error: {e}\")
+        log_error(logger, f"Migration sync error: {e}")
         
     await _notify_admins_started(bot)
     log_info(logger, "Service initialized")
