@@ -27,7 +27,7 @@ from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
 from app.user_offer_handlers import router as user_offer_router
 from app.donation_shop import router as donation_router
-from app.logger import setup_logging, get_logger, log_info
+from app.logger import setup_logging, get_logger, log_info, log_error
 from app.services import (
     get_offer_participations_for_subscription_audit,
     get_offer_by_id,
@@ -656,7 +656,7 @@ async def on_startup(app):
         await fix_database()
         log_info(logger, "Database maintenance complete")
     except Exception as e:
-        log_exception(logger, f"Database maintenance error: {e}")
+        log_error(logger, f\"Database maintenance error: {e}\")
 
     try:
         def run_migrations():
@@ -666,7 +666,7 @@ async def on_startup(app):
         await asyncio.to_thread(run_migrations)
         log_info(logger, "Alembic migrations synced")
     except Exception as e:
-        log_warning(logger, f"Migration sync skipped: {e}")
+        log_error(logger, f\"Migration sync error: {e}\")
         
     await _notify_admins_started(bot)
     log_info(logger, "Service initialized")
