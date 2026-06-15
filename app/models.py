@@ -488,3 +488,8 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     creator: Mapped["User"] = relationship(foreign_keys=[created_by])
+class BotSetting(Base):
+    __tablename__ = "bot_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=True)

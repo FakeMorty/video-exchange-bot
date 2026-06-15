@@ -1650,3 +1650,25 @@ async def create_offer_rental(session, offer_id, user_id, channel_title, channel
 
 async def get_user_rentals(session, user_id):
     return []
+
+# ============================
+# BOT SETTINGS
+# ============================
+async def get_setting(session: AsyncSession, key: str, default: str = "") -> str:
+    from app.models import BotSetting
+    from sqlalchemy import select
+    result = await session.execute(select(BotSetting).where(BotSetting.key == key))
+    setting = result.scalar_one_or_none()
+    return setting.value if setting else default
+
+async def set_setting(session: AsyncSession, key: str, value: str):
+    from app.models import BotSetting
+    from sqlalchemy import select
+    result = await session.execute(select(BotSetting).where(BotSetting.key == key))
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = value
+    else:
+        setting = BotSetting(key=key, value=value)
+        session.add(setting)
+    await session.commit()

@@ -50,7 +50,7 @@ from app.models import (
     DailyQuestProgress, GameHistory, Offer, Promocode,
 )
 from app.services import (
-    get_or_create_user, get_user, get_user_by_id,
+    get_or_create_user, get_user, get_user_by_id, get_setting, set_setting,
     save_video, save_photo,
     get_random_video_for_user, get_random_photo_for_user,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
@@ -426,7 +426,27 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
             f"💰 Баланс: <b>{user.balance}</b> монет"
         )
-        if os.path.exists("app/banner.jpg"):
+        custom_welcome = await get_setting(session, "welcome_text", "")
+        if custom_welcome:
+            msg_text += f"\n\n{custom_welcome}"
+        
+        banner_file_id = await get_setting(session, "welcome_banner_id", "")
+        
+        if banner_file_id:
+            try:
+                await message.answer_photo(
+                    photo=banner_file_id,
+                    caption=msg_text,
+                    parse_mode="HTML",
+                    reply_markup=main_menu(is_admin=admin_flag)
+                )
+            except Exception:
+                await message.answer(
+                    msg_text,
+                    parse_mode="HTML",
+                    reply_markup=main_menu(is_admin=admin_flag)
+                )
+        elif os.path.exists("app/banner.jpg"):
             await message.answer_photo(
                 photo=FSInputFile("app/banner.jpg"),
                 caption=msg_text,

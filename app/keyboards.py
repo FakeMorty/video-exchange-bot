@@ -60,6 +60,7 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🎉 События", callback_data="admin_events_menu")],
         [InlineKeyboardButton(text="🛍 Акции и скидки", callback_data="admin_sales")],
         [InlineKeyboardButton(text="💬 Обращения пользователей", callback_data="admin_feedback_menu")],
+        [InlineKeyboardButton(text="🔧 Настройки бота", callback_data="admin_bot_settings")],
         [InlineKeyboardButton(text="🕵️ Расследование", callback_data="admin_investigation")],
     ]
     if is_super:

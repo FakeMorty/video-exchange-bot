@@ -96,4 +96,21 @@ async def fix_database():
             """))
         await conn.commit()
 
+        # 4. Settings Table
+        if is_sqlite:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key VARCHAR(50) PRIMARY KEY,
+                    value TEXT
+                )
+            """))
+        else:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key VARCHAR(50) PRIMARY KEY,
+                    value TEXT
+                )
+            """))
+        await conn.commit()
+
     log_info(logger, "DB fix complete!")

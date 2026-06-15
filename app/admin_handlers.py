@@ -580,3 +580,116 @@ async def admin_offers_menu(callback: CallbackQuery):
     ])
     await _safe_edit(callback, "📢 <b>Офферы</b>", reply_markup=kb)
     await callback.answer()
+
+# ============================
+# НАСТРОЙКИ БОТА (ПРИВЕТСТВЕННЫЙ БАННЕР)
+# ============================
+class BotSettingsState(StatesGroup):
+    waiting_welcome_text = State()
+    waiting_welcome_banner = State()
+
+@router.callback_query(F.data == "admin_bot_settings")
+async def admin_bot_settings(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    
+    async with async_session() as session:
+        from app.services import get_setting
+        welcome_text = await get_setting(session, "welcome_text", "")
+        welcome_banner_id = await get_setting(session, "welcome_banner_id", "")
+    
+    text = (
+        "🔧 <b>Настройки бота</b>\n\n"
+        "Здесь можно изменить приветственный баннер (тот, что показывается по команде /start).\n\n"
+        f"<b>Текущий текст:</b>\n{escape(welcome_text) if welcome_text else '<i>(Не задан, используется стандартный)</i>'}\n\n"
+        f"<b>Баннер установлен:</b> {'✅ Да' if welcome_banner_id else '❌ Нет (или используется локальный app/banner.jpg)'}"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить текст приветствия", callback_data="admin_set_welcome_text")],
+        [InlineKeyboardButton(text="🖼 Изменить картинку (баннер)", callback_data="admin_set_welcome_banner")],
+        [InlineKeyboardButton(text="🗑 Сбросить баннер", callback_data="admin_reset_welcome_banner")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")]
+    ])
+    
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_set_welcome_text")
+async def admin_set_welcome_text_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(BotSettingsState.waiting_welcome_text)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")]])
+    await _safe_edit(
+        callback,
+        "Введите новый текст приветствия.\n"
+        "Можно использовать HTML теги.\n"
+        "Для сброса текста отправьте <code>-</code> (дефис).",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.message(BotSettingsState.waiting_welcome_text)
+async def admin_set_welcome_text_finish(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    text = message.html_text.strip()
+    if text == "-":
+        text = ""
+    
+    async with async_session() as session:
+        from app.services import set_setting
+        await set_setting(session, "welcome_text", text)
+    
+    await message.answer("✅ Текст приветствия успешно обновлен!")
+    await state.clear()
+
+
+@router.callback_query(F.data == "admin_set_welcome_banner")
+async def admin_set_welcome_banner_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(BotSettingsState.waiting_welcome_banner)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")]])
+    await _safe_edit(
+        callback,
+        "Отправьте новую картинку (фото), которая будет использоваться как приветственный баннер.",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.message(BotSettingsState.waiting_welcome_banner, F.photo)
+async def admin_set_welcome_banner_finish(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    photo_id = message.photo[-1].file_id
+    
+    async with async_session() as session:
+        from app.services import set_setting
+        await set_setting(session, "welcome_banner_id", photo_id)
+        
+    await message.answer("✅ Приветственный баннер успешно обновлен!")
+    await state.clear()
+
+
+@router.callback_query(F.data == "admin_reset_welcome_banner")
+async def admin_reset_welcome_banner(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id if hasattr(callback, 'from_user') else callback.from_user.id):
+        await callback.answer()
+        return
+    
+    async with async_session() as session:
+        from app.services import set_setting
+        await set_setting(session, "welcome_banner_id", "")
+        
+    await callback.answer("✅ Баннер сброшен! Теперь используется стандартный app/banner.jpg", show_alert=True)
+    await admin_bot_settings(callback)
+
