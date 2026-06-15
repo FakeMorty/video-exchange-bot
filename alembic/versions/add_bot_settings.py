@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 revision = 'add_bot_settings'
-down_revision = '5cd4cf8740ff'
+down_revision = 'final_migration'
 branch_labels = None
 depends_on = None
 
