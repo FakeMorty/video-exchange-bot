@@ -454,19 +454,19 @@ async def api_video_stream(request: web.Request) -> web.Response:
     video_id = request.match_info.get("id")
     if not video_id or not video_id.isdigit():
         return web.Response(status=400, text="Invalid ID")
-        
-        async with async_session() as session:
-            video = await session.get(Video, int(video_id))
+
+    async with async_session() as session:
+        video = await session.get(Video, int(video_id))
         if not video:
             return web.Response(status=404, text="Not found")
         if video.status != "approved" or video.content_type != "video":
             return web.Response(status=403, text="Forbidden")
-            
+
     bot = request.app['bot']
     cache_dir = "video_cache"
     os.makedirs(cache_dir, exist_ok=True)
     file_path_local = os.path.join(cache_dir, f"{video.telegram_file_unique_id}.mp4")
-    
+
     if not os.path.exists(file_path_local):
         try:
             tg_file = await bot.get_file(video.telegram_file_id)
@@ -476,7 +476,7 @@ async def api_video_stream(request: web.Request) -> web.Response:
             return web.Response(status=400, text=f"TG API Error: {str(e)}. File might be >20MB.")
         except Exception as e:
             return web.Response(status=500, text=str(e))
-            
+
     response = web.FileResponse(file_path_local)
     response.content_type = 'video/mp4'
     response.headers['Access-Control-Allow-Origin'] = '*'

@@ -225,16 +225,70 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             # Списываем монеты сразу
             await log_balance_change(session, user, -cost, "user_offer_placement", details=f"Оффер: {data['title']}")
             user.balance -= cost
+            
+            # Создаём оффер в статусе pending (для модерации)
+            from app.models import Offer
+            start = datetime.utcnow()
+            end = start + timedelta(days=data["duration_days"])
+            offer = Offer(
+                creator_user_id=user.id,
+                title=data["title"],
+                description=data["description"],
+                channel_url=data["url"],
+                reward_preview=data["reward_preview"],
+                reward_final=data["reward_final"],
+                penalty_unsubscribe=data["penalty_unsubscribe"],
+                duration_days=data["duration_days"],
+                placement_cost=cost,
+                status="pending",
+                is_active=False
+            )
+            session.add(offer)
             await session.commit()
             
-            # Создаём оффер
-            await _create_user_offer(session, user.id, data, cost)
+            # Уведомляем админов
+            for admin_id in ADMINS:
+                try:
+                    await callback.bot.send_message(
+                        admin_id,
+                        f"🔔 <b>Новый пользовательский оффер!</b>\n\n"
+                        f"Оффер #{offer.id} создан и ждёт проверки.\n"
+                        f"Название: {offer.title}\n"
+                        f"Награды: {offer.reward_preview} + {offer.reward_final}\n"
+                        f"Длительность: {offer.duration_days} дней",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+
             await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
             await state.clear()
             
         elif method == "stars":
+            # Сначала создаём оффер в статусе payment_pending
+            from app.models import Offer
+            start = datetime.utcnow()
+            end = start + timedelta(days=data["duration_days"])
+            offer = Offer(
+                creator_user_id=user.id,
+                title=data["title"],
+                description=data["description"],
+                channel_url=data["url"],
+                reward_preview=data["reward_preview"],
+                reward_final=data["reward_final"],
+                penalty_unsubscribe=data["penalty_unsubscribe"],
+                duration_days=data["duration_days"],
+                placement_cost=cost,
+                status="payment_pending",
+                is_active=False
+            )
+            session.add(offer)
+            await session.flush()
+            
+            # Используем ID оффера в payload
+            payload = f"user_offer_{offer.id}"
+            
             # Создаём Stars платеж
-            payload = f"user_offer_{callback.from_user.id}_{int(cost)}_{callback.message.date.timestamp()}"
             await ensure_payment_pending(
                 session,
                 user_id=user.id,
@@ -278,15 +332,7 @@ async def _create_user_offer(session, user_id: int, data: dict, cost: Decimal):
     )
     session.add(offer)
     await session.commit()
-    
-    # Уведомляем админов
-    for admin_id in ADMINS:
-        try:
-            from aiogram import Bot
-            # В реальном коде нужно получить bot из контекста
-            pass
-        except:
-            pass
+    return offer
 
 
 # =========================

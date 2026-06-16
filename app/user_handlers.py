@@ -1634,6 +1634,35 @@ async def successful_payment(message: Message):
                 f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
                 parse_mode="HTML",
             )
+    elif payload.startswith("user_offer_"):
+        try:
+            offer_id = int(payload.split("_")[1])
+            async with async_session() as session:
+                offer = await session.get(Offer, offer_id)
+                if offer:
+                    offer.status = "pending"
+                    await session.commit()
+                    
+                    # Уведомляем админов
+                    for admin_id in ADMINS:
+                        try:
+                            await message.bot.send_message(
+                                admin_id,
+                                f"🔔 <b>Новый пользовательский оффер!</b>\n\n"
+                                f"Оффер #{offer.id} оплачен и ждёт проверки.\n"
+                                f"Название: {offer.title}\n"
+                                f"Награды: {offer.reward_preview} + {offer.reward_final}\n"
+                                f"Длительность: {offer.duration_days} дней",
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+                await message.answer(
+                    "✅ Оплата прошла успешно! Ваш оффер отправлен на модерацию.\n"
+                    "Он появится в списке, как только администратор его одобрит."
+                )
+        except Exception as e:
+            await message.answer(f"⚠️ Ошибка при обработке оффера: {e}")
     else:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
