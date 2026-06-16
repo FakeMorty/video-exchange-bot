@@ -66,6 +66,12 @@ class User(Base):
         back_populates="admin",
         foreign_keys="TrustedUploader.admin_user_id",
     )
+    is_trusted_by: Mapped[List["TrustedUploader"]] = relationship(
+        "TrustedUploader",
+        foreign_keys="TrustedUploader.trusted_user_id",
+        back_populates="trusted",
+    )
+    perks: Mapped[List["UserPerk"]] = relationship(back_populates="user")
 
 
 class LootboxOpen(Base):
@@ -253,9 +259,12 @@ class Offer(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="approved")
     
-    # Новые поля для пользовательских офферов
-    duration_days: Mapped[int] = mapped_column(Integer, default=30)           # на сколько дней создан оффер
-    placement_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))  # сколько заплатил создатель
+    # Поля для офферов
+    duration_days: Mapped[int] = mapped_column(Integer, default=30)
+    placement_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    is_rentable: Mapped[bool] = mapped_column(Boolean, default=False)
+    rent_cost_per_day: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    max_simultaneous_rentals: Mapped[int] = mapped_column(Integer, default=1)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -353,6 +362,7 @@ class UserAdState(Base):
     last_low_balance_hint_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     forced_offer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     forced_offer_shown_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    videos_watched_since_ad: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="ad_state")
@@ -488,6 +498,24 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     creator: Mapped["User"] = relationship(foreign_keys=[created_by])
+class UserPerk(Base):
+    """
+    Активный перк пользователя (цветной ник, бустер монет/XP и т.д.)
+    """
+    __tablename__ = "user_perks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    perk_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    # perk_type values: "color_nick", "gold_nick", "coin_multiplier", "xp_multiplier", 
+    #                   "stars_discount", "priority_moderation", "exclusive_reactions"
+    active_until: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    purchased_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="perks")
+
+
 class BotSetting(Base):
     __tablename__ = "bot_settings"
 

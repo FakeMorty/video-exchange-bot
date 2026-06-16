@@ -53,7 +53,6 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Очередь модерации", callback_data="admin_queue_info")],
         [InlineKeyboardButton(text="📈 Статистика бота", callback_data="admin_extended_stats")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_manage_users")],
-        [InlineKeyboardButton(text="📝 Модерация контента", callback_data="admin_get_pending")],
         [InlineKeyboardButton(text="⚡ Авто-модерация (доверенные)", callback_data="admin_auto_moderation")],
         [InlineKeyboardButton(text="🤝 Доверенные авторы", callback_data="admin_trusted_uploaders")],
         [InlineKeyboardButton(text="📢 Офферы и реклама", callback_data="admin_offers_menu")],
@@ -61,7 +60,6 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🛍 Акции и скидки", callback_data="admin_sales")],
         [InlineKeyboardButton(text="💬 Обращения пользователей", callback_data="admin_feedback_menu")],
         [InlineKeyboardButton(text="🔧 Настройки бота", callback_data="admin_bot_settings")],
-        [InlineKeyboardButton(text="🕵️ Расследование", callback_data="admin_investigation")],
     ]
     if is_super:
         buttons.append([

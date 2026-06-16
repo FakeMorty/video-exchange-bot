@@ -17,12 +17,13 @@ from app.models import (
     Promocode, PromocodeActivation, Feedback,
     LotteryRound, LotteryTicket,
     LootboxOpen,
+    TrustedUploader, UserPerk,
 )
 
 logger = get_logger(__name__)
 
 from app.config import (
-    STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD,
+    STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD,
     REFERRAL_REWARD_INVITER, STARS_PACKAGES, STARS_TO_COINS_RATE,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
@@ -43,10 +44,14 @@ from app.config import (
     SMART_AD_MIN_INTERVAL_MINUTES,
     SMART_AD_LOW_BALANCE_THRESHOLD,
     SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES,
-    SMART_AD_VIDEO_CHANCE,
+    SMART_AD_VIDEO_CHANCE, SMART_AD_FORCED_WATCH_SECONDS,
     OFFER_DAILY_REWARD_CAP,
     LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL, LOTTERY_NUMBERS_PER_TICKET,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
+    ENABLE_AUTO_MODERATION,
+    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT,
+    ENABLE_ADMIN_FREE,
+    DICE_MIN_BET, DICE_MAX_BET,
     ADMINS,
 )
 
@@ -174,6 +179,24 @@ def is_admin_or_super(telegram_id: int, user: "User" = None) -> bool:
     return False
 
 
+async def is_admin_free_eligible(session: AsyncSession, telegram_id: int, user: "User" = None) -> bool:
+    """
+    Проверяет, может ли пользователь покупать всё бесплатно.
+    Работает только для ADMINS или is_admin=True.
+    Настройка берётся из БД (runtime) или env (fallback).
+    """
+    if telegram_id not in ADMINS and not (user and user.is_admin):
+        return False
+
+    # Сначала проверяем БД (runtime-настройка)
+    db_val = await get_setting(session, "admin_free_enabled", "")
+    if db_val:
+        return db_val.lower() == "true"
+
+    # Фоллбэк на env
+    return ENABLE_ADMIN_FREE
+
+
 # ============================
 # ЛОГИРОВАНИЕ БАЛАНСА И ДЕЙСТВИЙ
 # ============================
@@ -292,7 +315,8 @@ async def get_or_create_user(
 # ============================
 # НИКНЕЙМ
 # ============================
-async def set_display_name(session: AsyncSession, user: "User", name: str) -> tuple[bool, str]:
+async def set_display_name(session: AsyncSession, user: "User", name: str,
+                           admin_free: bool = False) -> tuple[bool, str]:
     import re
     name = name.strip()
     if len(name) < NICKNAME_MIN_LENGTH:
@@ -306,7 +330,7 @@ async def set_display_name(session: AsyncSession, user: "User", name: str) -> tu
         return False, "Этот ник уже занят."
 
     is_first = not user.nickname_set
-    if not is_first:
+    if not is_first and not admin_free:
         cost = to_decimal(NICKNAME_CHANGE_COST)
         if user.balance < cost:
             return False, f"Недостаточно монет. Нужно: {cost}, у вас: {user.balance}"
@@ -321,6 +345,8 @@ async def set_display_name(session: AsyncSession, user: "User", name: str) -> tu
     await log_user_action(session, user.id, "set_nickname", f"{old_name} -> {name}")
     if is_first:
         return True, f"Ник <b>{name}</b> установлен бесплатно!"
+    if admin_free:
+        return True, f"Ник изменён на <b>{name}</b>! 🆓 <b>ADMIN FREE — бесплатно!</b>"
     return True, f"Ник изменён на <b>{name}</b>! Списано {NICKNAME_CHANGE_COST} монет."
 
 
@@ -432,6 +458,59 @@ async def save_photo(session: AsyncSession, user_id: int, file_id: str,
     await session.commit()
     await log_user_action(session, user_id, "upload_photo", f"file={file_unique_id}")
     return photo, False
+
+
+async def is_trusted_uploader(session: AsyncSession, user_id: int) -> bool:
+    """Проверяет, является ли пользователь доверенным автором"""
+    # Проверяем runtime-настройку
+    db_val = await get_setting(session, "auto_moderation_enabled", "")
+    if db_val:
+        enabled = db_val.lower() == "true"
+    else:
+        enabled = ENABLE_AUTO_MODERATION
+    if not enabled:
+        return False
+    trusted = (await session.execute(
+        select(TrustedUploader).where(TrustedUploader.trusted_user_id == user_id)
+    )).scalar_one_or_none()
+    return trusted is not None
+
+
+async def auto_approve_if_trusted(
+    session: AsyncSession,
+    video_id: int,
+    uploader_user_id: int,
+) -> bool:
+    """
+    Если авто-модерация включена и пользователь доверенный — сразу одобряет видео.
+    Возвращает True если видео было авто-одобрено, False если осталось pending.
+    """
+    if not await is_trusted_uploader(session, uploader_user_id):
+        return False
+
+    v = (await session.execute(
+        select(Video).where(Video.id == video_id, Video.status == "pending")
+    )).scalar_one_or_none()
+    if not v:
+        return False
+
+    v.status = "approved"
+    v.rejection_reason = "auto_moderation"
+    
+    from app.config import PHOTO_UPLOAD_REWARD, UPLOAD_REWARD
+    is_photo = v.content_type == "photo"
+    reward_val = PHOTO_UPLOAD_REWARD if is_photo else UPLOAD_REWARD
+    reward = to_decimal(reward_val)
+    
+    uploader = await get_user_by_id(session, uploader_user_id)
+    if uploader:
+        await log_balance_change(session, uploader, reward, "upload_approved", source_id=v.id)
+        uploader.balance += reward
+        await log_user_action(session, uploader.id, "video_auto_approved",
+                              f"id={v.id}, type={v.content_type}, reward={reward} (trusted)")
+    
+    await session.commit()
+    return True
 
 
 async def get_random_video_for_user(session: AsyncSession, user_id: int) -> "Video | None":
@@ -1531,6 +1610,32 @@ async def get_or_create_user_ad_state(session: AsyncSession, user_id: int) -> "U
     return state
 
 
+async def should_show_ad_after_video(session: AsyncSession, user_id: int) -> bool:
+    """
+    Проверяет, пора ли показать рекламу.
+    Реклама показывается каждое 10-е видео.
+    """
+    state = await get_or_create_user_ad_state(session, user_id)
+    # Каждое 10-е видео
+    return state.videos_watched_since_ad >= 10
+
+
+async def increment_video_watched(session: AsyncSession, user_id: int) -> int:
+    """Увеличить счётчик просмотренных видео. Возвращает новое значение."""
+    state = await get_or_create_user_ad_state(session, user_id)
+    state.videos_watched_since_ad += 1
+    await session.commit()
+    return state.videos_watched_since_ad
+
+
+async def reset_ad_counter(session: AsyncSession, user_id: int) -> None:
+    """Сбросить счётчик после показа рекламы."""
+    state = await get_or_create_user_ad_state(session, user_id)
+    state.videos_watched_since_ad = 0
+    state.updated_at = datetime.utcnow()
+    await session.commit()
+
+
 async def can_show_offer_to_user(session: AsyncSession, user_id: int) -> bool:
     state = await get_or_create_user_ad_state(session, user_id)
     if state.last_offer_shown_at is None:
@@ -1637,6 +1742,254 @@ async def get_active_events(session: AsyncSession):
 
 
 # ============================
+# ПЕРКИ ПОЛЬЗОВАТЕЛЕЙ (UserPerk)
+# ============================
+async def has_active_perk(session: AsyncSession, user_id: int, perk_type: str) -> bool:
+    """Проверка, есть ли у пользователя активный перк указанного типа"""
+    now = datetime.utcnow()
+    perk = (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.perk_type == perk_type,
+            UserPerk.is_active == True,
+            UserPerk.active_until > now,
+        )
+    )).scalar_one_or_none()
+    return perk is not None
+
+
+async def get_coin_multiplier(session: AsyncSession, user_id: int) -> float:
+    """Получить множитель монет для пользователя (учитывает VIP и перки)"""
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return 1.0
+    
+    # VIP даёт множитель
+    multiplier = 1.0
+    if user.vip_until and user.vip_until > datetime.utcnow():
+        from app.config import VIP_BONUS_MULTIPLIER
+        multiplier = float(VIP_BONUS_MULTIPLIER)
+    
+    # Перк coin_multiplier переопределяет
+    coin_boost = (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.perk_type == "coin_multiplier",
+            UserPerk.is_active == True,
+            UserPerk.active_until > datetime.utcnow(),
+        )
+    )).scalar_one_or_none()
+    if coin_boost:
+        multiplier = 1.5  # фиксированный бонус бустера
+    
+    return multiplier
+
+
+async def get_xp_multiplier(session: AsyncSession, user_id: int) -> float:
+    """Получить множитель XP для пользователя"""
+    xp_boost = (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.perk_type == "xp_multiplier",
+            UserPerk.is_active == True,
+            UserPerk.active_until > datetime.utcnow(),
+        )
+    )).scalar_one_or_none()
+    return 2.0 if xp_boost else 1.0
+
+
+async def get_active_perks(session: AsyncSession, user_id: int) -> list[UserPerk]:
+    """Получить все активные перки пользователя"""
+    now = datetime.utcnow()
+    return (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.is_active == True,
+            UserPerk.active_until > now,
+        ).order_by(UserPerk.active_until)
+    )).scalars().all()
+
+
+async def get_stars_discount(session: AsyncSession, user_id: int) -> float:
+    """Получить скидку на Stars (0.0 = нет скидки, 0.25 = 25%)"""
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return 0.0
+    
+    # Проверяем перк
+    stars_discount_perk = (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.perk_type == "stars_discount",
+            UserPerk.is_active == True,
+            UserPerk.active_until > datetime.utcnow(),
+        )
+    )).scalar_one_or_none()
+    if stars_discount_perk:
+        return 0.25
+    
+    return 0.0
+
+
+async def activate_perk(
+    session: AsyncSession,
+    user_id: int,
+    perk_type: str,
+    duration_days: int,
+) -> UserPerk:
+    """Активировать/продлить перк для пользователя"""
+    now = datetime.utcnow()
+    existing = (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.perk_type == perk_type,
+            UserPerk.is_active == True,
+        )
+    )).scalar_one_or_none()
+    
+    if existing:
+        # Продлеваем существующий
+        new_end = max(existing.active_until, now) + timedelta(days=duration_days)
+        existing.active_until = new_end
+        await session.commit()
+        return existing
+    else:
+        perk = UserPerk(
+            user_id=user_id,
+            perk_type=perk_type,
+            active_until=now + timedelta(days=duration_days),
+            is_active=True,
+        )
+        session.add(perk)
+        await session.commit()
+        return perk
+
+
+async def deactivate_perk(session: AsyncSession, user_id: int, perk_type: str) -> bool:
+    """Деактивировать перк"""
+    perk = (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.perk_type == perk_type,
+            UserPerk.is_active == True,
+        )
+    )).scalar_one_or_none()
+    if perk:
+        perk.is_active = False
+        await session.commit()
+        return True
+    return False
+
+
+PERK_ICONS = {
+    "color_nick": "🎨",
+    "gold_nick": "👑",
+    "coin_multiplier": "💰",
+    "xp_multiplier": "📈",
+    "stars_discount": "⭐",
+    "priority_moderation": "⚡",
+    "exclusive_reactions": "✨",
+}
+
+
+PERK_NAMES = {
+    "color_nick": "🎨 Цветной ник",
+    "gold_nick": "👑 Золотой ник",
+    "coin_multiplier": "💰 Бустер монет x1.5",
+    "xp_multiplier": "📈 Бустер XP x2",
+    "stars_discount": "⭐ Скидка 25% на Stars",
+    "priority_moderation": "⚡ Приоритетная модерация",
+    "exclusive_reactions": "✨ Эксклюзивные реакции",
+}
+
+
+async def broadcast_event_to_users(bot, event: Event) -> int:
+    """
+    Рассылка уведомления о новом событии всем активным пользователям.
+    Возвращает количество отправленных сообщений.
+    """
+    from app.db import async_session
+    
+    async with async_session() as session:
+        users = (await session.execute(
+            select(User.telegram_id, User.first_name).where(User.status == "active")
+        )).all()
+    
+    applies = []
+    if event.applies_vip:
+        applies.append("VIP")
+    if event.applies_coins:
+        applies.append("монеты")
+    if event.applies_lootbox:
+        applies.append("лутбоксы")
+    if event.applies_cases:
+        applies.append("кейсы")
+    
+    applies_text = ", ".join(applies) if applies else "всё"
+    end_text = (event.start_date + timedelta(days=event.duration_days)).strftime("%d.%m.%Y")
+    
+    text = (
+        f"🎉 <b>{event.name}</b>\n\n"
+        f"{event.description}\n\n"
+        f"🔥 Скидка <b>{event.discount_percent}%</b> на {applies_text}!\n"
+        f"⏰ Акция до {end_text}\n\n"
+        f"Не пропусти!"
+    )
+    
+    sent = 0
+    for tid, first_name in users:
+        try:
+            if event.image_file_id:
+                await bot.send_photo(tid, event.image_file_id, caption=text, parse_mode="HTML")
+            else:
+                await bot.send_message(tid, text, parse_mode="HTML")
+            sent += 1
+            if sent % 20 == 0:
+                await asyncio.sleep(0.5)  # anti-spam
+        except Exception:
+            pass
+    
+    return sent
+
+
+async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
+    """
+    Рассылка уведомления о новой акции всем активным пользователям.
+    """
+    from app.db import async_session
+    
+    async with async_session() as session:
+        users = (await session.execute(
+            select(User.telegram_id).where(User.status == "active")
+        )).scalars().all()
+    
+    applies_map = {"all": "всё", "vip": "VIP", "coins": "монеты"}
+    applies_text = applies_map.get(sale.applies_to, sale.applies_to)
+    end_text = sale.end_date.strftime("%d.%m.%Y %H:%M")
+    announcement = sale.announcement or f"Скидка {sale.discount_percent}% на {applies_text}!"
+    
+    text = (
+        f"🛍 <b>Акция!</b>\n\n"
+        f"{announcement}\n\n"
+        f"🔥 Скидка <b>{sale.discount_percent}%</b> на {applies_text}\n"
+        f"⏰ До {end_text}\n\n"
+        f"Успей воспользоваться!"
+    )
+    
+    sent = 0
+    for tid in users:
+        try:
+            await bot.send_message(tid, text, parse_mode="HTML")
+            sent += 1
+            if sent % 20 == 0:
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
+    
+    return sent
+
+
+# ============================
 # STUBS FOR DISABLED RENTAL SYSTEM (to prevent import errors)
 # ============================
 async def count_active_rentals(session):
@@ -1672,3 +2025,92 @@ async def set_setting(session: AsyncSession, key: str, value: str):
         setting = BotSetting(key=key, value=value)
         session.add(setting)
     await session.commit()
+
+
+async def get_config_value(session: AsyncSession, key: str, default=None):
+    """
+    Читает значение настройки: сначала из БД (runtime), потом из config.py (fallback).
+    Возвращает строку, если значение найдено, иначе default.
+    """
+    db_val = await get_setting(session, key, "")
+    if db_val:
+        return db_val
+    return default
+
+
+# Маппинг ключей настроек → значения из config.py по умолчанию
+_SETTINGS_DEFAULTS = {
+    # Экономика
+    "starting_balance": STARTING_BALANCE,
+    "watch_cost": WATCH_COST,
+    "upload_reward": UPLOAD_REWARD,
+    "photo_upload_reward": PHOTO_UPLOAD_REWARD,
+    "stars_to_coins_rate": STARS_TO_COINS_RATE,
+    "referral_reward_inviter": REFERRAL_REWARD_INVITER,
+    "referral_reward_new_user": REFERRAL_REWARD_NEW_USER,
+    "daily_bonus_base": DAILY_BONUS_STREAK_BASE,
+    "daily_bonus_increase": DAILY_BONUS_STREAK_INCREASE,
+    "daily_bonus_streak_max": MAX_BONUS_STREAK,
+    "first_purchase_daily_bonus": FIRST_PURCHASE_DAILY_BONUS,
+    # VIP
+    "vip_price_stars": VIP_PRICE_STARS,
+    "vip_duration_days": VIP_DURATION_DAYS,
+    "vip_bonus_multiplier": VIP_BONUS_MULTIPLIER,
+    "vip_watch_discount": VIP_WATCH_DISCOUNT,
+    # Никнеймы
+    "nickname_change_cost": NICKNAME_CHANGE_COST,
+    "nickname_min_length": NICKNAME_MIN_LENGTH,
+    "nickname_max_length": NICKNAME_MAX_LENGTH,
+    "daily_photo_limit": DAILY_PHOTO_LIMIT,
+    # Игры
+    "dice_min_bet": 1,  # DICE_MIN_BET
+    "dice_max_bet": 50,  # DICE_MAX_BET
+    "free_games_per_session": FREE_GAMES_PER_SESSION,
+    "game_session_hours": GAME_SESSION_HOURS,
+    "game_session_cost": GAME_SESSION_COST,
+    # Лотерея
+    "lottery_ticket_price": LOTTERY_TICKET_PRICE,
+    "lottery_numbers_pool": LOTTERY_NUMBERS_POOL,
+    "lottery_numbers_per_ticket": LOTTERY_NUMBERS_PER_TICKET,
+    # Лутбоксы
+    "lootbox_coin_price": LOOTBOX_COIN_PRICE,
+    "lootbox_star_price": LOOTBOX_STAR_PRICE,
+    # Реклама
+    "smart_ad_video_chance": SMART_AD_VIDEO_CHANCE,
+    "smart_ad_forced_watch_seconds": SMART_AD_FORCED_WATCH_SECONDS,
+    "smart_ad_min_interval_minutes": SMART_AD_MIN_INTERVAL_MINUTES,
+    "smart_ad_low_balance_threshold": SMART_AD_LOW_BALANCE_THRESHOLD,
+    "smart_ad_low_balance_hint_interval": SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES,
+    "offer_daily_reward_cap": OFFER_DAILY_REWARD_CAP,
+    "videos_per_ad_interval": 10,
+    # Промокоды
+    "promocode_creation_star_rate": PROMOCODE_CREATION_STAR_RATE,
+    "promocode_bulk_discount_threshold": PROMOCODE_BULK_DISCOUNT_THRESHOLD,
+    "promocode_bulk_discount_rate": PROMOCODE_BULK_DISCOUNT_RATE,
+    "promocode_creator_bonus_percent": PROMOCODE_CREATOR_BONUS_PERCENT,
+    "promocode_max_amount": PROMOCODE_MAX_AMOUNT,
+    "promocode_max_uses": PROMOCODE_MAX_USES,
+    "promocode_max_hours": PROMOCODE_MAX_HOURS,
+    "vip_free_promo_per_month": VIP_FREE_PROMO_PER_MONTH,
+}
+
+
+async def get_runtime_value(session: AsyncSession, key: str):
+    """
+    Возвращает runtime-значение настройки (из БД или config.py fallback).
+    Автоматически конвертирует тип.
+    """
+    db_val = await get_setting(session, key, "")
+    if db_val:
+        # Пробуем int → float → str
+        try:
+            return int(db_val)
+        except (ValueError, TypeError):
+            pass
+        try:
+            return float(db_val)
+        except (ValueError, TypeError):
+            pass
+        return db_val
+    
+    return _SETTINGS_DEFAULTS.get(key)

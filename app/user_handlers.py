@@ -18,7 +18,8 @@ from aiogram.types import (
 from sqlalchemy import select, func, desc
 
 from app.config import (
-    ADMINS, WATCH_COST, STARS_PACKAGES, STARS_TO_COINS_RATE,
+    ADMINS, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD, STARS_PACKAGES, STARS_TO_COINS_RATE,
+    ENABLE_ADMIN_FREE,
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
     VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER,
@@ -72,12 +73,13 @@ from app.services import (
     create_feedback,
     ensure_current_lottery_round, buy_lottery_ticket,
     get_latest_lottery_round, get_user_lottery_tickets, get_lottery_state_dict,
-    is_admin_or_super,
+    is_admin_or_super, is_admin_free_eligible,
     should_show_low_balance_hint, mark_low_balance_hint_shown,
     can_show_offer_to_user, mark_offer_shown,
     get_random_active_offer, should_inject_ad_in_video,
     open_lootbox_for_coins, open_lootbox_for_stars,
-    get_current_prices,
+    get_current_prices, get_active_events,
+    should_show_ad_after_video, increment_video_watched, reset_ad_counter,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -312,7 +314,8 @@ async def process_nickname(message: Message, state: FSMContext):
         if not user:
             await state.clear()
             return
-        ok, msg = await set_display_name(session, user, name)
+        admin_free = await is_admin_free_eligible(session, message.from_user.id, user)
+        ok, msg = await set_display_name(session, user, name, admin_free=admin_free)
 
     await message.answer(msg, parse_mode="HTML")
     if ok:
@@ -614,9 +617,25 @@ async def show_vip(message: Message):
                 )
             else:
                 vip_price, packs, sale = await get_current_prices(session)
+                events = await get_active_events(session)
+                
+                # Admin free badge
+                admin_free_badge = ""
+                if ENABLE_ADMIN_FREE:
+                    from app.services import is_admin_or_super
+                    if is_admin_or_super(message.from_user.id, user):
+                        admin_free_badge = "\n🆓 <b>ADMIN FREE — бесплатно!</b>"
+                
+                sale_badge = ""
+                if events:
+                    best_ev = max(events, key=lambda e: e.discount_percent)
+                    sale_badge = f"\n🔥 <b>АКЦИЯ: {escape(best_ev.name)} — скидка {best_ev.discount_percent}%!</b>"
+                elif sale:
+                    sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
+                
                 await message.answer(
                     f"👑 <b>VIP статус</b>\n\n"
-                    f"Стоимость: <b>{vip_price} Stars</b>\n"
+                    f"Стоимость: <b>{vip_price} Stars</b> (обычная: {VIP_PRICE_STARS}){sale_badge}{admin_free_badge}\n"
                     f"Длительность: {VIP_DURATION_DAYS} дней\n\n"
                     f"Привилегии:\n"
                     f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
@@ -640,21 +659,51 @@ async def buy_vip(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
-        await ensure_payment_pending(
-            session,
-            user_id=user.id,
-            payload=payload,
-            stars_amount=int(VIP_PRICE_STARS),
-        )
+
+        admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
+        if not admin_free:
+            # Обычная оплата — выставляем инвойс
+            await ensure_payment_pending(
+                session,
+                user_id=user.id,
+                payload=payload,
+                stars_amount=int(VIP_PRICE_STARS),
+            )
+            await session.commit()
+            await callback.message.answer_invoice(
+                title="VIP статус",
+                description=f"VIP на {VIP_DURATION_DAYS} дней",
+                payload=payload,
+                currency="XTR",
+                prices=[LabeledPrice(label="VIP", amount=VIP_PRICE_STARS)]
+            )
+            await callback.answer()
+            return
+
+        # Admin free — выдаём VIP бесплатно
+        now = datetime.utcnow()
+        if user.vip_until and user.vip_until > now:
+            user.vip_until += timedelta(days=VIP_DURATION_DAYS)
+        else:
+            user.vip_until = now + timedelta(days=VIP_DURATION_DAYS)
+        
+        await log_balance_change(session, user, Decimal("0"), "vip_admin_free",
+                                 details=f"ADMIN_FREE: VIP на {VIP_DURATION_DAYS} дней")
+        await log_user_action(session, user.id, "vip_admin_free",
+                              f"VIP до {user.vip_until.strftime('%d.%m.%Y')}")
         await session.commit()
-    await callback.message.answer_invoice(
-        title="VIP статус",
-        description=f"VIP на {VIP_DURATION_DAYS} дней",
-        payload=payload,
-        currency="XTR",
-        prices=[LabeledPrice(label="VIP", amount=VIP_PRICE_STARS)]
-    )
-    await callback.answer()
+        
+        await callback.message.answer(
+            f"👑 <b>VIP активирован бесплатно!</b>\n\n"
+            f"🆓 (ADMIN_FREE для админов)\n"
+            f"VIP до: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
+            f"Привилегии:\n"
+            f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
+            f"• Скидка 50% на просмотр\n"
+            f"• VIP квесты",
+            parse_mode="HTML",
+        )
+        await callback.answer("🆓 VIP активирован бесплатно!")
 
 
 # =========================
@@ -711,45 +760,6 @@ async def watch_video_content(callback: CallbackQuery):
                     )
                 return
 
-            # Умная реклама: 35% шанс принудительного оффера
-            if should_inject_ad_in_video() and await can_show_offer_to_user(session, user.id):
-                offer = await get_random_active_offer(session)
-                if offer:
-                    await mark_offer_shown(session, user.id, offer.id, forced=True)
-                    await callback.message.answer(
-                        f"📢 <b>Небольшая реклама</b>\n\n"
-                        f"<b>{offer.title}</b>\n"
-                        f"{offer.description}\n\n"
-                        f"⏳ Посмотрите {SMART_AD_FORCED_WATCH_SECONDS} секунд, "
-                        f"затем сможете продолжить просмотр видео.\n"
-                        f"💰 За подписку получите <b>{offer.reward_preview} монет</b>!",
-                        parse_mode="HTML",
-                        reply_markup=forced_offer_keyboard(
-                            offer.id,
-                            offer.channel_url,
-                            SMART_AD_FORCED_WATCH_SECONDS
-                        )
-                    )
-                    async def send_continue_button(chat_id: int, o_id: int, bot):
-                        await asyncio.sleep(SMART_AD_FORCED_WATCH_SECONDS)
-                        try:
-                            await bot.send_message(
-                                chat_id,
-                                "✅ Спасибо за просмотр! Теперь можно продолжить.",
-                                reply_markup=forced_offer_done_keyboard(o_id)
-                            )
-                        except Exception:
-                            pass
-
-                    asyncio.create_task(
-                        send_continue_button(
-                            callback.message.chat.id,
-                            offer.id,
-                            callback.bot
-                        )
-                    )
-                    return
-
             # Обычный показ видео (с безопасной отправкой и возвратом при ошибке)
             last_send_error: str | None = None
             for _ in range(3):
@@ -786,6 +796,13 @@ async def watch_video_content(callback: CallbackQuery):
                 user = await get_user(session, callback.from_user.id)
                 await _level_up_check(session, user, callback)
                 await _update_quest_progress(session, user.id, "watch", 1)
+                
+                # Увеличиваем счётчик просмотров и проверяем нужно ли показать рекламу
+                count = await increment_video_watched(session, user.id)
+                
+                if await should_show_ad_after_video(session, user.id):
+                    await _show_ad_or_event(callback, session, user)
+
                 return
 
             await callback.message.answer(
@@ -799,6 +816,74 @@ async def watch_video_content(callback: CallbackQuery):
             await callback.message.answer("⚠️ Ошибка при показе видео. Попробуйте ещё раз через пару секунд.")
         except Exception:
             pass
+
+
+async def _show_ad_or_event(callback: CallbackQuery, session, user):
+    """
+    Показывает рекламу после каждых 10 видео.
+    Приоритет: сначала событие (если есть), потом оффер.
+    """
+    events = await get_active_events(session)
+    
+    # Сначала показываем событие, если есть активное
+    if events:
+        event = max(events, key=lambda e: e.discount_percent)
+        applies = []
+        if event.applies_vip:
+            applies.append("VIP")
+        if event.applies_coins:
+            applies.append("монеты")
+        if event.applies_lootbox:
+            applies.append("лутбоксы")
+        if event.applies_cases:
+            applies.append("кейсы")
+        applies_text = ", ".join(applies) if applies else "всё"
+        end_text = (event.start_date + timedelta(days=event.duration_days)).strftime("%d.%m")
+        
+        ad_text = (
+            f"🎉 <b>Акция: {event.name}</b>\n\n"
+            f"{event.description}\n\n"
+            f"🔥 Скидка <b>{event.discount_percent}%</b> на {applies_text}!\n"
+            f"⏰ До {end_text}\n\n"
+            f"Скорее в магазин, пока действует акция!"
+        )
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🛍 В магазин", callback_data="btn_buy")],
+            [InlineKeyboardButton(text="▶ Смотреть дальше", callback_data="watch_video_content")],
+        ])
+        
+        if event.image_file_id:
+            await callback.message.answer_photo(event.image_file_id, caption=ad_text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await callback.message.answer(ad_text, parse_mode="HTML", reply_markup=kb)
+        
+        await reset_ad_counter(session, user.id)
+        await log_user_action(session, user.id, "event_ad_shown", f"event={event.name}")
+        return
+
+    # Если нет событий — показываем оффер
+    if await can_show_offer_to_user(session, user.id):
+        offer = await get_random_active_offer(session)
+        if offer:
+            await mark_offer_shown(session, user.id, offer.id, forced=True)
+            ad_text = (
+                f"📢 <b>Рекомендация</b>\n\n"
+                f"<b>{offer.title}</b>\n"
+                f"{offer.description}\n\n"
+                f"💰 За подписку получите <b>{offer.reward_preview} монет</b>!"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👉 Подписаться", url=offer.channel_url)],
+                [InlineKeyboardButton(text="▶ Смотреть дальше", callback_data="watch_video_content")],
+            ])
+            await callback.message.answer(ad_text, parse_mode="HTML", reply_markup=kb)
+            await reset_ad_counter(session, user.id)
+            await log_user_action(session, user.id, "offer_ad_shown", f"offer={offer.id}")
+            return
+
+    # Если нет ни событий, ни офферов — просто сбрасываем счётчик
+    await reset_ad_counter(session, user.id)
 
 
 @router.callback_query(F.data == "watch_next")
@@ -1075,7 +1160,18 @@ async def handle_video_upload(message: Message):
                 data["task"] = asyncio.create_task(_send_upload_notification(message.bot, message.chat.id, user.id))
             return
 
-        user.xp += 20
+        # Авто-модерация для доверенных авторов
+        from app.services import auto_approve_if_trusted
+        auto_approved = await auto_approve_if_trusted(session, saved.id, user.id)
+        
+        if auto_approved:
+            user.xp += XP_PER_UPLOAD
+            await _level_up_check(session, user, message)
+            await _update_quest_progress(session, user.id, "upload", 1)
+            await message.answer(f"✅ Видео #{saved.id} автоматически одобрено! (доверенный автор)\n+{UPLOAD_REWARD:.0f} монет")
+            return
+
+        user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
         data = _upload_notifications[user.id]
@@ -1114,6 +1210,17 @@ async def handle_photo_upload(message: Message):
             data["dup_count"] += 1
             if data["task"] is None or data["task"].done():
                 data["task"] = asyncio.create_task(_send_upload_notification(message.bot, message.chat.id, user.id))
+            return
+
+        # Авто-модерация для доверенных авторов
+        from app.services import auto_approve_if_trusted
+        auto_approved = await auto_approve_if_trusted(session, saved.id, user.id)
+        
+        if auto_approved:
+            user.xp += XP_PER_UPLOAD
+            await _level_up_check(session, user, message)
+            await _update_quest_progress(session, user.id, "upload", 1)
+            await message.answer(f"✅ Фото #{saved.id} автоматически одобрено! (доверенный автор)\n+{PHOTO_UPLOAD_REWARD:.0f} монет")
             return
 
         user.xp += XP_PER_UPLOAD
@@ -1189,6 +1296,20 @@ async def btn_buy(message: Message):
                 return
 
             vip_price, packs, sale = await get_current_prices(session)
+            events = await get_active_events(session)
+
+            # Admin free badge
+            admin_free_badge = ""
+            if await is_admin_free_eligible(session, message.from_user.id, user):
+                admin_free_badge = "\n🆓 <b>ADMIN FREE — всё бесплатно!</b>"
+
+        # Бейдж активной акции
+        sale_badge = ""
+        if events:
+            best_ev = max(events, key=lambda e: e.discount_percent)
+            sale_badge = f"\n🔥 <b>АКЦИЯ: {escape(best_ev.name)} — скидка {best_ev.discount_percent}%!</b>"
+        elif sale:
+            sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
 
         # Динамический курс
         bonus_text = ""
@@ -1205,7 +1326,7 @@ async def btn_buy(message: Message):
         bonus_text += f"\n🎁 Первая покупка дня: +{FIRST_PURCHASE_DAILY_BONUS} монет бонусом."
 
         await message.answer(
-            f"💳 <b>Пополнение баланса</b>{bonus_text}\n\nВыберите пакет:",
+            f"💳 <b>Пополнение баланса</b>{sale_badge}{admin_free_badge}{bonus_text}\n\nВыберите пакет:",
             parse_mode="HTML",
             reply_markup=buy_coins_keyboard(packs)
         )
@@ -1229,6 +1350,31 @@ async def cb_buy_pack(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
+
+        # Admin free — выдаём монеты без оплаты
+        if await is_admin_free_eligible(session, callback.from_user.id, user):
+            coins = pack["coins"]
+            bonus = to_decimal(FIRST_PURCHASE_DAILY_BONUS)
+            total = to_decimal(coins) + bonus
+            
+            await log_balance_change(session, user, total, "purchase_admin_free",
+                                     details=f"ADMIN_FREE: {pack['title']} + bonus")
+            user.balance += total
+            await log_user_action(session, user.id, "admin_free_purchase",
+                                  f"pack={pack_key}, coins={total}")
+            await session.commit()
+
+            await callback.message.answer(
+                f"✅ <b>Пополнение баланса</b>\n\n"
+                f"🆓 <b>ADMIN FREE</b> — бесплатно!\n\n"
+                f"Получено: <b>{coins} монет</b>\n"
+                f"Бонус первой покупки: +<b>{int(bonus)} монет</b>\n\n"
+                f"Ваш баланс: <b>{user.balance:.0f}</b> монет",
+                parse_mode="HTML",
+            )
+            await callback.answer("🆓 Пополнено бесплатно!", show_alert=True)
+            return
+
         payment = await create_payment(session, user.id, pack_key)
 
     await callback.message.answer_invoice(
@@ -1263,6 +1409,31 @@ async def process_custom_stars(message: Message, state: FSMContext):
         if not user:
             await state.clear()
             return
+
+        # Admin free — выдаём монеты без оплаты
+        if await is_admin_free_eligible(session, message.from_user.id, user):
+            coins = int(stars * STARS_TO_COINS_RATE)
+            bonus = to_decimal(FIRST_PURCHASE_DAILY_BONUS)
+            total = to_decimal(coins) + bonus
+
+            await log_balance_change(session, user, total, "purchase_admin_free",
+                                     details=f"ADMIN_FREE: custom {coins} монет + bonus")
+            user.balance += total
+            await log_user_action(session, user.id, "admin_free_purchase",
+                                  f"custom_stars={stars}, coins={total}")
+            await session.commit()
+
+            await message.answer(
+                f"✅ <b>Пополнение баланса</b>\n\n"
+                f"🆓 <b>ADMIN FREE</b> — бесплатно!\n\n"
+                f"Получено: <b>{coins} монет</b>\n"
+                f"Бонус первой покупки: +<b>{int(bonus)} монет</b>\n\n"
+                f"Ваш баланс: <b>{user.balance:.0f}</b> монет",
+                parse_mode="HTML",
+            )
+            await state.clear()
+            return
+
         payment = await create_custom_payment(session, user.id, stars)
         coins = int(stars * STARS_TO_COINS_RATE)
 
@@ -1533,6 +1704,39 @@ async def lootbox_buy(callback: CallbackQuery):
             if not user:
                 await callback.answer()
                 return
+
+            # Admin free
+            admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
+
+            coin_price = to_decimal(LOOTBOX_COIN_PRICE)
+            if not admin_free and user.balance < coin_price:
+                await callback.answer(f"Недостаточно монет. Нужно: {coin_price:.0f}", show_alert=True)
+                return
+
+            if admin_free:
+                # Бесплатный лутбокс для админа
+                from app.services import _roll_lootbox_reward_coins, open_lootbox_for_coins
+                reward, rarity = _roll_lootbox_reward_coins()
+                await log_balance_change(session, user, reward, "lootbox_reward_admin_free",
+                                         details=f"ADMIN_FREE rarity={rarity}")
+                user.balance += reward
+                session.add(LootboxOpen(
+                    user_id=user.id, payment_payload=None, pay_currency="coins",
+                    price_coins=Decimal("0"), price_stars=0, reward_coins=reward, rarity=rarity,
+                ))
+                await log_user_action(session, user.id, "lootbox_open_admin_free",
+                                      f"rarity={rarity}, reward={reward}")
+                await session.commit()
+                icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
+                await callback.message.answer(
+                    f"{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\n"
+                    f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
+                    parse_mode="HTML",
+                    reply_markup=_lootbox_kb(),
+                )
+                await callback.answer("🆓 Лутбокс открыт бесплатно!")
+                return
+
             reward, rarity_or_err = await open_lootbox_for_coins(session, user.id)
         if reward is None:
             await callback.answer(rarity_or_err, show_alert=True)
@@ -1556,6 +1760,31 @@ async def lootbox_buy(callback: CallbackQuery):
             if not user:
                 await callback.answer()
                 return
+
+            # Admin free — выдаём результат сразу, без оплаты
+            if await is_admin_free_eligible(session, callback.from_user.id, user):
+                from app.services import _roll_lootbox_reward_coins
+                reward, rarity = _roll_lootbox_reward_coins()
+                await log_balance_change(session, user, reward, "lootbox_reward_admin_free",
+                                         details=f"ADMIN_FREE stars rarity={rarity}")
+                user.balance += reward
+                session.add(LootboxOpen(
+                    user_id=user.id, payment_payload=payload, pay_currency="stars",
+                    price_coins=Decimal("0"), price_stars=star_price, reward_coins=reward, rarity=rarity,
+                ))
+                await log_user_action(session, user.id, "lootbox_open_admin_free",
+                                      f"payload={payload}, rarity={rarity}, reward={reward}")
+                await session.commit()
+                icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
+                await callback.message.answer(
+                    f"{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\n"
+                    f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
+                    parse_mode="HTML",
+                    reply_markup=_lootbox_kb(),
+                )
+                await callback.answer("🆓 Лутбокс открыт бесплатно!")
+                return
+
             await ensure_payment_pending(
                 session,
                 user_id=user.id,
@@ -2781,6 +3010,42 @@ async def lottery_buy(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
+
+        # Admin free — лотерейный билет бесплатно
+        admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
+        if admin_free:
+            round_obj = await ensure_current_lottery_round(session)
+            now = datetime.utcnow()
+            if round_obj.status != "open" or now >= round_obj.draw_starts_at:
+                await callback.answer("Продажа билетов закрыта до следующей недели.", show_alert=True)
+                return
+
+            pool = list(range(1, round_obj.numbers_pool + 1))
+            pick_count = min(round_obj.numbers_per_ticket, len(pool))
+            numbers = sorted(random.sample(pool, k=pick_count))
+            from app.services import _serialize_numbers
+            ticket = LotteryTicket(
+                round_id=round_obj.id,
+                user_id=user.id,
+                numbers=_serialize_numbers(numbers),
+            )
+            round_obj.prize_pool += to_decimal(round_obj.ticket_price)
+            await log_balance_change(
+                session, user, to_decimal(0), "lottery_ticket_admin_free",
+                details=f"ADMIN_FREE numbers={ticket.numbers}",
+            )
+            session.add(ticket)
+            await log_user_action(session, user.id, "lottery_admin_free",
+                                  f"round={round_obj.week_key}, numbers={ticket.numbers}")
+            await session.commit()
+            await callback.answer("🆓 Билет куплен бесплатно (ADMIN FREE)!", show_alert=True)
+            await callback.message.answer(
+                f"🎫 Билет #{ticket.id} куплен (🆓 ADMIN FREE)\n"
+                f"Ваши числа: <b>{ticket.numbers}</b>",
+                parse_mode="HTML",
+            )
+            return
+
         ticket, error = await buy_lottery_ticket(session, user)
         if error:
             await callback.answer(error, show_alert=True)

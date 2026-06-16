@@ -267,3 +267,11 @@ LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "super-secret-key-12345")
 ENABLE_LOOTBOXES = _get_bool("ENABLE_LOOTBOXES", True)
 LOOTBOX_COIN_PRICE = _get_float("LOOTBOX_COIN_PRICE", 100.0)
 LOOTBOX_STAR_PRICE = _get_int("LOOTBOX_STAR_PRICE", 15) # Снижено с 30 для привлекательности
+
+# ============================
+# АВТО-МОДЕРАЦИЯ
+# ============================
+ENABLE_AUTO_MODERATION = _get_bool("ENABLE_AUTO_MODERATION", True)
+
+# Админы покупают всё бесплатно (для тестирования / эксплуатации)
+ENABLE_ADMIN_FREE = _get_bool("ENABLE_ADMIN_FREE", False)

@@ -16,12 +16,12 @@ from aiogram.types import (
 from sqlalchemy import select, func, desc, text
 
 
-from app.config import ADMINS, OFFER_DEFAULT_RENT_COST_PER_DAY, ENABLE_ADMIN_BROADCAST
+from app.config import ADMINS, OFFER_DEFAULT_RENT_COST_PER_DAY, ENABLE_ADMIN_BROADCAST, ENABLE_AUTO_MODERATION
 from app.db import async_session
 from app.models import (
     Base,
     User, Video, Offer, BalanceLog, GameHistory,
-    TrustedUploader, Event, ActiveSale, OfferParticipation
+    TrustedUploader, Event, ActiveSale, OfferParticipation, UserPerk
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
@@ -409,7 +409,15 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
         session.add(ev)
         await session.commit()
     await state.clear()
-    await callback.message.answer("✅ Событие создано!")
+    
+    # Рассылаем уведомление всем пользователям
+    from app.services import broadcast_event_to_users
+    try:
+        sent = await broadcast_event_to_users(callback.bot, ev)
+        await callback.message.answer(f"✅ Событие создано!\n📢 Рассылка: {sent} пользователей.")
+    except Exception as e:
+        logger.error(f"Ошибка рассылки события: {e}")
+        await callback.message.answer(f"✅ Событие создано!\n⚠️ Рассылка не удалась: {e}")
     await callback.answer()
 
 
@@ -489,10 +497,19 @@ async def admin_sale_finish(message: Message, state: FSMContext):
     data = await state.get_data()
     end_date = datetime.utcnow() + timedelta(hours=data["duration_hours"])
     async with async_session() as session:
-        session.add(ActiveSale(discount_percent=data["discount_percent"], applies_to=data["applies_to"], end_date=end_date, announcement=message.text))
+        sale = ActiveSale(discount_percent=data["discount_percent"], applies_to=data["applies_to"], end_date=end_date, announcement=message.text)
+        session.add(sale)
         await session.commit()
     await state.clear()
-    await message.answer("✅ Акция запущена!")
+    
+    # Рассылаем уведомление всем пользователям
+    from app.services import broadcast_sale_to_users
+    try:
+        sent = await broadcast_sale_to_users(message.bot, sale)
+        await message.answer(f"✅ Акция запущена!\n📢 Рассылка: {sent} пользователей.")
+    except Exception as e:
+        logger.error(f"Ошибка рассылки акции: {e}")
+        await message.answer(f"✅ Акция запущена!\n⚠️ Рассылка не удалась: {e}")
 
 
 # =========================
@@ -582,48 +599,489 @@ async def admin_offers_menu(callback: CallbackQuery):
     await callback.answer()
 
 # ============================
-# НАСТРОЙКИ БОТА (ПРИВЕТСТВЕННЫЙ БАННЕР)
+# НАСТРОЙКИ БОТА
 # ============================
+
 class BotSettingsState(StatesGroup):
+    waiting_value = State()
     waiting_welcome_text = State()
     waiting_welcome_banner = State()
 
+
+# ---------- Главное меню настроек ----------
 @router.callback_query(F.data == "admin_bot_settings")
 async def admin_bot_settings(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
-    
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Экономика", callback_data="settings_economy")],
+        [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
+        [InlineKeyboardButton(text="🎮 Игры и лотерея", callback_data="settings_games")],
+        [InlineKeyboardButton(text="📺 Реклама", callback_data="settings_ads")],
+        [InlineKeyboardButton(text="✏️ Никнеймы", callback_data="settings_nicks")],
+        [InlineKeyboardButton(text="🎟 Промокоды", callback_data="settings_promos")],
+        [InlineKeyboardButton(text="🖼 Приветствие и баннер", callback_data="settings_welcome")],
+        [InlineKeyboardButton(text="🆓 ADMIN FREE", callback_data="settings_admin_free")],
+        [InlineKeyboardButton(text="📊 Текущие значения", callback_data="settings_show_all")],
+        [InlineKeyboardButton(text="🗑 Сбросить все настройки", callback_data="settings_reset_all")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")],
+    ])
+    await _safe_edit(callback, "🔧 <b>Настройки бота</b>\n\nВыберите категорию:", parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- ЭКОНОМИКА ----------
+@router.callback_query(F.data == "settings_economy")
+async def settings_economy(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
     async with async_session() as session:
         from app.services import get_setting
-        welcome_text = await get_setting(session, "welcome_text", "")
-        welcome_banner_id = await get_setting(session, "welcome_banner_id", "")
-    
-    text = (
-        "🔧 <b>Настройки бота</b>\n\n"
-        "Здесь можно изменить приветственный баннер (тот, что показывается по команде /start).\n\n"
-        f"<b>Текущий текст:</b>\n{escape(welcome_text) if welcome_text else '<i>(Не задан, используется стандартный)</i>'}\n\n"
-        f"<b>Баннер установлен:</b> {'✅ Да' if welcome_banner_id else '❌ Нет (или используется локальный app/banner.jpg)'}"
+        sb = await get_setting(session, "starting_balance", "")
+        wc = await get_setting(session, "watch_cost", "")
+        ur = await get_setting(session, "upload_reward", "")
+        pr = await get_setting(session, "photo_upload_reward", "")
+        str_c = await get_setting(session, "stars_to_coins_rate", "")
+        ri = await get_setting(session, "referral_reward_inviter", "")
+        rn = await get_setting(session, "referral_reward_new_user", "")
+        db = await get_setting(session, "daily_bonus_base", "")
+        di = await get_setting(session, "daily_bonus_increase", "")
+        ds = await get_setting(session, "daily_bonus_streak_max", "")
+        fp = await get_setting(session, "first_purchase_daily_bonus", "")
+    from app.config import (
+        STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD,
+        STARS_TO_COINS_RATE, REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
+        DAILY_BONUS_STREAK_BASE, DAILY_BONUS_STREAK_INCREASE, MAX_BONUS_STREAK,
+        FIRST_PURCHASE_DAILY_BONUS,
     )
-    
+    def v(db_val, default):
+        return f"{db_val or default}"
+    text = (
+        f"💰 <b>Экономика</b>\n\n"
+        f"Стартовый баланс: {v(sb, STARTING_BALANCE)}\n"
+        f"Просмотр видео: {v(wc, WATCH_COST)}\n"
+        f"Награда за видео: {v(ur, UPLOAD_REWARD)}\n"
+        f"Награда за фото: {v(pr, PHOTO_UPLOAD_REWARD)}\n"
+        f"Курс Stars→Coins: {v(str_c, STARS_TO_COINS_RATE)}\n"
+        f"Реферал (пригласивший): {v(ri, REFERRAL_REWARD_INVITER)}\n"
+        f"Реферал (новый): {v(rn, REFERRAL_REWARD_NEW_USER)}\n"
+        f"Бонус база: {v(db, DAILY_BONUS_STREAK_BASE)}\n"
+        f"Бонус увеличение: {v(di, DAILY_BONUS_STREAK_INCREASE)}\n"
+        f"Макс. дней бонуса: {v(ds, MAX_BONUS_STREAK)}\n"
+        f"Бонус 1-й покупки: {v(fp, FIRST_PURCHASE_DAILY_BONUS)}\n"
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Изменить текст приветствия", callback_data="admin_set_welcome_text")],
-        [InlineKeyboardButton(text="🖼 Изменить картинку (баннер)", callback_data="admin_set_welcome_banner")],
-        [InlineKeyboardButton(text="🗑 Сбросить баннер", callback_data="admin_reset_welcome_banner")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")]
+        [InlineKeyboardButton(text="✏️ Стартовый баланс", callback_data="settings_edit:starting_balance")],
+        [InlineKeyboardButton(text="✏️ Цена просмотра", callback_data="settings_edit:watch_cost")],
+        [InlineKeyboardButton(text="✏️ Награда за видео", callback_data="settings_edit:upload_reward")],
+        [InlineKeyboardButton(text="✏️ Награда за фото", callback_data="settings_edit:photo_upload_reward")],
+        [InlineKeyboardButton(text="✏️ Курс Stars→Coins", callback_data="settings_edit:stars_to_coins_rate")],
+        [InlineKeyboardButton(text="✏️ Реферал (пригл.)", callback_data="settings_edit:referral_reward_inviter")],
+        [InlineKeyboardButton(text="✏️ Реферал (новый)", callback_data="settings_edit:referral_reward_new_user")],
+        [InlineKeyboardButton(text="✏️ Бонус база", callback_data="settings_edit:daily_bonus_base")],
+        [InlineKeyboardButton(text="✏️ Бонус увеличение", callback_data="settings_edit:daily_bonus_increase")],
+        [InlineKeyboardButton(text="✏️ Макс. дней бонуса", callback_data="settings_edit:daily_bonus_streak_max")],
+        [InlineKeyboardButton(text="✏️ Бонус 1-й покупки", callback_data="settings_edit:first_purchase_daily_bonus")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
-    
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
+# ---------- VIP ----------
+@router.callback_query(F.data == "settings_vip")
+async def settings_vip(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        vp = await get_setting(session, "vip_price_stars", "")
+        vd = await get_setting(session, "vip_duration_days", "")
+        vb = await get_setting(session, "vip_bonus_multiplier", "")
+        vw = await get_setting(session, "vip_watch_discount", "")
+    from app.config import VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT
+    def v(db_val, default):
+        return f"{db_val or default}"
+    text = (
+        f"👑 <b>VIP</b>\n\n"
+        f"Цена (Stars): {v(vp, VIP_PRICE_STARS)}\n"
+        f"Длительность (дней): {v(vd, VIP_DURATION_DAYS)}\n"
+        f"Множитель монет: {v(vb, VIP_BONUS_MULTIPLIER)}\n"
+        f"Скидка на просмотр: {v(vw, VIP_WATCH_DISCOUNT)}\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Цена VIP (Stars)", callback_data="settings_edit:vip_price_stars")],
+        [InlineKeyboardButton(text="✏️ Длительность VIP", callback_data="settings_edit:vip_duration_days")],
+        [InlineKeyboardButton(text="✏️ Множитель монет", callback_data="settings_edit:vip_bonus_multiplier")],
+        [InlineKeyboardButton(text="✏️ Скидка на просмотр", callback_data="settings_edit:vip_watch_discount")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- ИГРЫ И ЛОТЕРЕЯ ----------
+@router.callback_query(F.data == "settings_games")
+async def settings_games(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        dm = await get_setting(session, "dice_min_bet", "")
+        dx = await get_setting(session, "dice_max_bet", "")
+        lt = await get_setting(session, "lottery_ticket_price", "")
+        lp = await get_setting(session, "lottery_numbers_pool", "")
+        ln = await get_setting(session, "lottery_numbers_per_ticket", "")
+        lc = await get_setting(session, "lootbox_coin_price", "")
+        ls = await get_setting(session, "lootbox_star_price", "")
+        fg = await get_setting(session, "free_games_per_session", "")
+        gs = await get_setting(session, "game_session_hours", "")
+        gc = await get_setting(session, "game_session_cost", "")
+        el = await get_setting(session, "enable_lottery", "")
+        eb = await get_setting(session, "enable_lootboxes", "")
+    from app.config import (
+        DICE_MIN_BET, DICE_MAX_BET, LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL,
+        LOTTERY_NUMBERS_PER_TICKET, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
+        FREE_GAMES_PER_SESSION, GAME_SESSION_HOURS, GAME_SESSION_COST,
+        ENABLE_LOTTERY, ENABLE_LOOTBOXES,
+    )
+    def v(db_val, default):
+        return f"{db_val or default}"
+    text = (
+        f"🎮 <b>Игры и лотерея</b>\n\n"
+        f"Мин. ставка (кости): {v(dm, DICE_MIN_BET)}\n"
+        f"Макс. ставка (кости): {v(dx, DICE_MAX_BET)}\n"
+        f"Цена билета лотереи: {v(lt, LOTTERY_TICKET_PRICE)}\n"
+        f"Чисел в пуле: {v(lp, LOTTERY_NUMBERS_POOL)}\n"
+        f"Чисел в билете: {v(ln, LOTTERY_NUMBERS_PER_TICKET)}\n"
+        f"Цена лутбокса (монеты): {v(lc, LOOTBOX_COIN_PRICE)}\n"
+        f"Цена лутбокса (Stars): {v(ls, LOOTBOX_STAR_PRICE)}\n"
+        f"Бесплатных игр: {v(fg, FREE_GAMES_PER_SESSION)}\n"
+        f"Часов сессии: {v(gs, GAME_SESSION_HOURS)}\n"
+        f"Цена продления сессии: {v(gc, GAME_SESSION_COST)}\n"
+        f"Лотерея: {v(el, 'on' if ENABLE_LOTTERY else 'off')}\n"
+        f"Лутбоксы: {v(eb, 'on' if ENABLE_LOOTBOXES else 'off')}\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Мин. ставка (кости)", callback_data="settings_edit:dice_min_bet")],
+        [InlineKeyboardButton(text="✏️ Макс. ставка (кости)", callback_data="settings_edit:dice_max_bet")],
+        [InlineKeyboardButton(text="✏️ Цена билета лотереи", callback_data="settings_edit:lottery_ticket_price")],
+        [InlineKeyboardButton(text="✏️ Чисел в пуле", callback_data="settings_edit:lottery_numbers_pool")],
+        [InlineKeyboardButton(text="✏️ Чисел в билете", callback_data="settings_edit:lottery_numbers_per_ticket")],
+        [InlineKeyboardButton(text="✏️ Цена лутбокса (монеты)", callback_data="settings_edit:lootbox_coin_price")],
+        [InlineKeyboardButton(text="✏️ Цена лутбокса (Stars)", callback_data="settings_edit:lootbox_star_price")],
+        [InlineKeyboardButton(text="✏️ Бесплатных игр", callback_data="settings_edit:free_games_per_session")],
+        [InlineKeyboardButton(text="✏️ Часов сессии", callback_data="settings_edit:game_session_hours")],
+        [InlineKeyboardButton(text="✏️ Цена продления", callback_data="settings_edit:game_session_cost")],
+        [InlineKeyboardButton(text="🔘 Лотерея " + ("выкл" if el == "off" else "вкл"), callback_data="settings_toggle:enable_lottery")],
+        [InlineKeyboardButton(text="🔘 Лутбоксы " + ("выкл" if eb == "off" else "вкл"), callback_data="settings_toggle:enable_lootboxes")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- РЕКЛАМА ----------
+@router.callback_query(F.data == "settings_ads")
+async def settings_ads(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        vc = await get_setting(session, "smart_ad_video_chance", "")
+        fs = await get_setting(session, "smart_ad_forced_watch_seconds", "")
+        mi = await get_setting(session, "smart_ad_min_interval_minutes", "")
+        lb = await get_setting(session, "smart_ad_low_balance_threshold", "")
+        li = await get_setting(session, "smart_ad_low_balance_hint_interval", "")
+        od = await get_setting(session, "offer_daily_reward_cap", "")
+        vi = await get_setting(session, "videos_per_ad_interval", "")
+    from app.config import (
+        SMART_AD_VIDEO_CHANCE, SMART_AD_FORCED_WATCH_SECONDS,
+        SMART_AD_MIN_INTERVAL_MINUTES, SMART_AD_LOW_BALANCE_THRESHOLD,
+        SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES, OFFER_DAILY_REWARD_CAP,
+    )
+    def v(db_val, default):
+        return f"{db_val or default}"
+    text = (
+        f"📺 <b>Реклама и офферы</b>\n\n"
+        f"Шанс рекламы в видео: {v(vc, SMART_AD_VIDEO_CHANCE)}\n"
+        f"Секунды ожидания: {v(fs, SMART_AD_FORCED_WATCH_SECONDS)}\n"
+        f"Мин. интервал (мин): {v(mi, SMART_AD_MIN_INTERVAL_MINUTES)}\n"
+        f"Порог низкого баланса: {v(lb, SMART_AD_LOW_BALANCE_THRESHOLD)}\n"
+        f"Интервал подсказки (мин): {v(li, SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES)}\n"
+        f"Лимит наград за офферы/день: {v(od, OFFER_DAILY_REWARD_CAP)}\n"
+        f"Реклама каждые N видео: {v(vi, '10')}\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Шанс рекламы", callback_data="settings_edit:smart_ad_video_chance")],
+        [InlineKeyboardButton(text="✏️ Секунды ожидания", callback_data="settings_edit:smart_ad_forced_watch_seconds")],
+        [InlineKeyboardButton(text="✏️ Мин. интервал", callback_data="settings_edit:smart_ad_min_interval_minutes")],
+        [InlineKeyboardButton(text="✏️ Порог низкого баланса", callback_data="settings_edit:smart_ad_low_balance_threshold")],
+        [InlineKeyboardButton(text="✏️ Интервал подсказки", callback_data="settings_edit:smart_ad_low_balance_hint_interval")],
+        [InlineKeyboardButton(text="✏️ Лимит наград за офферы", callback_data="settings_edit:offer_daily_reward_cap")],
+        [InlineKeyboardButton(text="✏️ Реклама каждые N видео", callback_data="settings_edit:videos_per_ad_interval")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- НИКНЕЙМЫ ----------
+@router.callback_query(F.data == "settings_nicks")
+async def settings_nicks(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        nc = await get_setting(session, "nickname_change_cost", "")
+        nm = await get_setting(session, "nickname_min_length", "")
+        nx = await get_setting(session, "nickname_max_length", "")
+        dl = await get_setting(session, "daily_photo_limit", "")
+    from app.config import NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH, DAILY_PHOTO_LIMIT
+    def v(db_val, default):
+        return f"{db_val or default}"
+    text = (
+        f"✏️ <b>Никнеймы</b>\n\n"
+        f"Цена смены ника: {v(nc, NICKNAME_CHANGE_COST)}\n"
+        f"Мин. длина ника: {v(nm, NICKNAME_MIN_LENGTH)}\n"
+        f"Макс. длина ника: {v(nx, NICKNAME_MAX_LENGTH)}\n"
+        f"Лимит фото в день: {v(dl, DAILY_PHOTO_LIMIT)}\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Цена смены ника", callback_data="settings_edit:nickname_change_cost")],
+        [InlineKeyboardButton(text="✏️ Мин. длина ника", callback_data="settings_edit:nickname_min_length")],
+        [InlineKeyboardButton(text="✏️ Макс. длина ника", callback_data="settings_edit:nickname_max_length")],
+        [InlineKeyboardButton(text="✏️ Лимит фото в день", callback_data="settings_edit:daily_photo_limit")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- ПРОМОКОДЫ ----------
+@router.callback_query(F.data == "settings_promos")
+async def settings_promos(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        sr = await get_setting(session, "promocode_creation_star_rate", "")
+        bt = await get_setting(session, "promocode_bulk_discount_threshold", "")
+        br = await get_setting(session, "promocode_bulk_discount_rate", "")
+        cb = await get_setting(session, "promocode_creator_bonus_percent", "")
+        mx = await get_setting(session, "promocode_max_amount", "")
+        mu = await get_setting(session, "promocode_max_uses", "")
+        mh = await get_setting(session, "promocode_max_hours", "")
+        vp = await get_setting(session, "vip_free_promo_per_month", "")
+    from app.config import (
+        PROMOCODE_CREATION_STAR_RATE, PROMOCODE_BULK_DISCOUNT_THRESHOLD,
+        PROMOCODE_BULK_DISCOUNT_RATE, PROMOCODE_CREATOR_BONUS_PERCENT,
+        PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
+        VIP_FREE_PROMO_PER_MONTH,
+    )
+    def v(db_val, default):
+        return f"{db_val or default}"
+    text = (
+        f"🎟 <b>Промокоды</b>\n\n"
+        f"Цена (Stars за 1 монету): {v(sr, PROMOCODE_CREATION_STAR_RATE)}\n"
+        f"Порог bulk скидки: {v(bt, PROMOCODE_BULK_DISCOUNT_THRESHOLD)}\n"
+        f"Rate bulk скидки: {v(br, PROMOCODE_BULK_DISCOUNT_RATE)}\n"
+        f"Бонус создателю (%): {v(cb, PROMOCODE_CREATOR_BONUS_PERCENT)}\n"
+        f"Макс. сумма: {v(mx, PROMOCODE_MAX_AMOUNT)}\n"
+        f"Макс. использований: {v(mu, PROMOCODE_MAX_USES)}\n"
+        f"Макс. часов: {v(mh, PROMOCODE_MAX_HOURS)}\n"
+        f"Бесплатных промо VIP/мес: {v(vp, VIP_FREE_PROMO_PER_MONTH)}\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Цена Stars за 1 монету", callback_data="settings_edit:promocode_creation_star_rate")],
+        [InlineKeyboardButton(text="✏️ Порог bulk скидки", callback_data="settings_edit:promocode_bulk_discount_threshold")],
+        [InlineKeyboardButton(text="✏️ Rate bulk скидки", callback_data="settings_edit:promocode_bulk_discount_rate")],
+        [InlineKeyboardButton(text="✏️ Бонус создателю", callback_data="settings_edit:promocode_creator_bonus_percent")],
+        [InlineKeyboardButton(text="✏️ Макс. сумма", callback_data="settings_edit:promocode_max_amount")],
+        [InlineKeyboardButton(text="✏️ Макс. использований", callback_data="settings_edit:promocode_max_uses")],
+        [InlineKeyboardButton(text="✏️ Макс. часов", callback_data="settings_edit:promocode_max_hours")],
+        [InlineKeyboardButton(text="✏️ Бесплатных промо VIP", callback_data="settings_edit:vip_free_promo_per_month")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- ПРИВЕТСТВИЕ И БАННЕР ----------
+@router.callback_query(F.data == "settings_welcome")
+async def settings_welcome(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        welcome_text = await get_setting(session, "welcome_text", "")
+        welcome_banner_id = await get_setting(session, "welcome_banner_id", "")
+    text = (
+        "🖼 <b>Приветствие и баннер</b>\n\n"
+        f"<b>Текст:</b>\n{escape(welcome_text) if welcome_text else '<i>(Не задан, используется стандартный)</i>'}\n\n"
+        f"<b>Баннер установлен:</b> {'✅ Да' if welcome_banner_id else '❌ Нет (или локальный app/banner.jpg)'}"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить текст приветствия", callback_data="admin_set_welcome_text")],
+        [InlineKeyboardButton(text="🖼 Изменить картинку (баннер)", callback_data="admin_set_welcome_banner")],
+        [InlineKeyboardButton(text="🗑 Сбросить баннер", callback_data="admin_reset_welcome_banner")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- ADMIN FREE ----------
+@router.callback_query(F.data == "settings_admin_free")
+async def settings_admin_free(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        val = await get_setting(session, "admin_free_enabled", "false")
+    status = "🟢 ВКЛЮЧЕНО (админы покупают всё бесплатно)" if val.lower() == "true" else "🔴 ВЫКЛЮЧЕНО"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔘 " + ("Отключить" if val.lower() == "true" else "Включить"), callback_data="toggle_admin_free")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, f"🆓 <b>ADMIN FREE</b>\n\n{status}", parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- ПОКАЗАТЬ ВСЕ НАСТРОЙКИ ----------
+@router.callback_query(F.data == "settings_show_all")
+async def settings_show_all(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        from app.models import BotSetting
+        result = await session.execute(select(BotSetting).order_by(BotSetting.key))
+        settings = result.scalars().all()
+    if not settings:
+        text = "📊 <b>Все настройки</b>\n\nНет пользовательских настроек. Используются значения из config.py."
+    else:
+        text = "📊 <b>Все пользовательские настройки</b>\n\n"
+        for s in settings:
+            text += f"• <code>{s.key}</code> = <b>{s.value}</b>\n"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Сбросить все", callback_data="settings_reset_all")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- СБРОСИТЬ ВСЕ НАСТРОЙКИ ----------
+@router.callback_query(F.data == "settings_reset_all")
+async def settings_reset_all(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="settings_reset_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, "⚠️ <b>Вы уверены?</b>\n\nЭто удалит все пользовательские настройки бота. Значения вернутся к дефолтным из config.py.", parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings_reset_confirm")
+async def settings_reset_confirm(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from sqlalchemy import delete
+        from app.models import BotSetting
+        await session.execute(delete(BotSetting))
+        await session.commit()
+    await callback.answer("✅ Все настройки сброшены!", show_alert=True)
+    await admin_bot_settings(callback)
+
+
+# ---------- РЕДАКТИРОВАНИЕ НАСТРОЕК ----------
+@router.callback_query(F.data.startswith("settings_edit:"))
+async def settings_edit_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    key = callback.data.split(":", 1)[1]
+    await state.update_data(settings_key=key)
+    await state.set_state(BotSettingsState.waiting_value)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")]])
+    await callback.message.answer(
+        f"✏️ Введите новое значение для <code>{key}</code>:\n\n"
+        f"Для сброса к дефолту отправьте <code>-</code> (дефис).",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.message(BotSettingsState.waiting_value)
+async def settings_edit_save(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    key = data.get("settings_key", "")
+    value = message.text.strip()
+    
+    async with async_session() as session:
+        from app.services import set_setting
+        if value == "-":
+            # Удаляем настройку — вернётся к дефолту
+            from sqlalchemy import delete
+            from app.models import BotSetting
+            await session.execute(delete(BotSetting).where(BotSetting.key == key))
+            await session.commit()
+            await message.answer(f"✅ Настройка <code>{key}</code> сброшена к дефолтному значению.", parse_mode="HTML")
+        else:
+            await set_setting(session, key, value)
+            await message.answer(f"✅ Настройка <code>{key}</code> = <b>{value}</b>", parse_mode="HTML")
+    await state.clear()
+
+
+# ---------- ПЕРЕКЛЮЧАТЕЛИ ----------
+@router.callback_query(F.data.startswith("settings_toggle:"))
+async def settings_toggle(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    key = callback.data.split(":", 1)[1]
+    async with async_session() as session:
+        from app.services import get_setting, set_setting
+        current = await get_setting(session, key, "on")
+        new_val = "off" if current.lower() == "on" else "on"
+        await set_setting(session, key, new_val)
+    status = "включён" if new_val == "on" else "отключён"
+    await callback.answer(f"✅ {key} {status}!", show_alert=True)
+    # Перезапускаем текущее меню
+    if key in ("enable_lottery", "enable_lootboxes"):
+        await settings_games(callback)
+    else:
+        await admin_bot_settings(callback)
+
+
+# ---------- СТАРЫЕ ОБРАБОТЧИКИ БАННЕРА ----------
 @router.callback_query(F.data == "admin_set_welcome_text")
 async def admin_set_welcome_text_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
     await state.set_state(BotSettingsState.waiting_welcome_text)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="settings_welcome")]])
     await _safe_edit(
         callback,
         "Введите новый текст приветствия.\n"
@@ -657,7 +1115,7 @@ async def admin_set_welcome_banner_start(callback: CallbackQuery, state: FSMCont
         await callback.answer()
         return
     await state.set_state(BotSettingsState.waiting_welcome_banner)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="settings_welcome")]])
     await _safe_edit(
         callback,
         "Отправьте новую картинку (фото), которая будет использоваться как приветственный баннер.",
@@ -682,7 +1140,7 @@ async def admin_set_welcome_banner_finish(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_reset_welcome_banner")
 async def admin_reset_welcome_banner(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id if hasattr(callback, 'from_user') else callback.from_user.id):
+    if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
     
@@ -691,5 +1149,241 @@ async def admin_reset_welcome_banner(callback: CallbackQuery):
         await set_setting(session, "welcome_banner_id", "")
         
     await callback.answer("✅ Баннер сброшен! Теперь используется стандартный app/banner.jpg", show_alert=True)
+    await settings_welcome(callback)
+
+
+# ============================
+# АВТО-МОДЕРАЦИЯ И ДОВЕРЕННЫЕ АВТОРЫ
+# ============================
+@router.callback_query(F.data == "admin_auto_moderation")
+async def admin_auto_moderation(callback: CallbackQuery):
+    """Показать статистику авто-модерации и переключатель"""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        from app.services import get_setting
+        db_val = await get_setting(session, "auto_moderation_enabled", "")
+        if db_val:
+            is_enabled = db_val.lower() == "true"
+        else:
+            is_enabled = ENABLE_AUTO_MODERATION
+
+        trusted_count = (await session.execute(
+            select(func.count(TrustedUploader.id))
+        )).scalar_one()
+        auto_approved_count = (await session.execute(
+            select(func.count(Video.id)).where(
+                Video.status == "approved",
+                Video.rejection_reason == "auto_moderation"
+            )
+        )).scalar_one()
+
+    status_icon = "🟢" if is_enabled else "🔴"
+    status_text = "включена" if is_enabled else "отключена"
+
+    text = (
+        f"⚡ <b>Авто-модерация</b>\n\n"
+        f"Статус: {status_icon} {status_text}\n"
+        f"Доверенных авторов: {trusted_count}\n"
+        f"Авто-одобрено видео: {auto_approved_count}\n\n"
+        f"Доверенные авторы загружают контент без премодерации.\n"
+        f"Управляйте списком в разделе «🤝 Доверенные авторы»."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔘 " + ("Отключить" if is_enabled else "Включить"),
+            callback_data="toggle_auto_mod"
+        )],
+        [InlineKeyboardButton(text="🤝 Доверенные авторы", callback_data="admin_trusted_uploaders")],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "toggle_auto_mod")
+async def toggle_auto_moderation(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        from app.services import get_setting, set_setting
+        current = await get_setting(session, "auto_moderation_enabled", "")
+        # Если пусто — берём из ENV
+        if current:
+            new_val = "false" if current.lower() == "true" else "true"
+        else:
+            new_val = "false" if ENABLE_AUTO_MODERATION else "true"
+        await set_setting(session, "auto_moderation_enabled", new_val)
+
+    status = "включена" if new_val == "true" else "отключена"
+    await callback.answer(f"⚡ Авто-модерация {status}!", show_alert=True)
+    await admin_auto_moderation(callback)
+
+
+@router.callback_query(F.data == "toggle_admin_free")
+async def toggle_admin_free(callback: CallbackQuery):
+    """Переключить ADMIN FREE — админы покупают всё бесплатно"""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        from app.services import get_setting, set_setting
+        current = await get_setting(session, "admin_free_enabled", "false")
+        new_val = "true" if current.lower() != "true" else "false"
+        await set_setting(session, "admin_free_enabled", new_val)
+
+    status = "включён" if new_val == "true" else "отключён"
+    await callback.answer(f"🆓 ADMIN FREE {status}!", show_alert=True)
     await admin_bot_settings(callback)
+
+
+@router.callback_query(F.data == "admin_trusted_uploaders")
+async def admin_trusted_uploaders(callback: CallbackQuery):
+    """Список доверенных авторов + возможность добавить/удалить"""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        trusted = (await session.execute(
+            select(TrustedUploader, User)
+            .join(User, TrustedUploader.trusted_user_id == User.id)
+            .order_by(TrustedUploader.created_at.desc())
+        )).all()
+
+    if not trusted:
+        text = "🤝 <b>Доверенные авторы</b>\n\nНет доверенных авторов.\n\nДобавьте автора по ID или @username:"
+    else:
+        text = "🤝 <b>Доверенные авторы</b>\n\n"
+        for tu, user_obj in trusted:
+            admin_obj = await get_user_by_id(session, tu.admin_user_id)
+            admin_name = get_display_name(admin_obj) if admin_obj else "?"
+            text += f"• {get_display_name(user_obj)} (добавил {admin_name})\n"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить автора", callback_data="trusted_add_start")],
+        [InlineKeyboardButton(text="➖ Удалить автора", callback_data="trusted_remove_start")],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "trusted_add_start")
+async def trusted_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(TrustedUploaderState.waiting_add)
+    await callback.message.answer(
+        "🤝 <b>Добавить доверенного автора</b>\n\n"
+        "Введите ID пользователя или @username:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_trusted_uploaders")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(TrustedUploaderState.waiting_add)
+async def trusted_add_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+
+    query = message.text.strip()
+    async with async_session() as session:
+        if query.isdigit():
+            user = await get_user_by_id(session, int(query))
+        else:
+            if query.startswith("@"):
+                query = query[1:]
+            user = await get_user_by_username(session, query)
+
+        if not user:
+            await message.answer("❌ Пользователь не найден.")
+            await state.clear()
+            return
+
+        # Проверяем, не добавлен ли уже
+        existing = (await session.execute(
+            select(TrustedUploader).where(
+                TrustedUploader.trusted_user_id == user.id
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            await message.answer(f"⚠️ {get_display_name(user)} уже в списке доверенных.")
+            await state.clear()
+            return
+
+        admin_user = await get_user(session, message.from_user.id)
+        session.add(TrustedUploader(
+            admin_user_id=admin_user.id,
+            trusted_user_id=user.id,
+        ))
+        await session.commit()
+
+    await message.answer(f"✅ {get_display_name(user)} добавлен как доверенный автор!\nТеперь его видео одобряются автоматически.")
+    await state.clear()
+
+
+@router.callback_query(F.data == "trusted_remove_start")
+async def trusted_remove_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(TrustedUploaderState.waiting_remove)
+    await callback.message.answer(
+        "➖ <b>Удалить доверенного автора</b>\n\n"
+        "Введите ID пользователя или @username:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_trusted_uploaders")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(TrustedUploaderState.waiting_remove)
+async def trusted_remove_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+
+    query = message.text.strip()
+    async with async_session() as session:
+        if query.isdigit():
+            user = await get_user_by_id(session, int(query))
+        else:
+            if query.startswith("@"):
+                query = query[1:]
+            user = await get_user_by_username(session, query)
+
+        if not user:
+            await message.answer("❌ Пользователь не найден.")
+            await state.clear()
+            return
+
+        result = await session.execute(
+            select(TrustedUploader).where(
+                TrustedUploader.trusted_user_id == user.id
+            )
+        )
+        trusted = result.scalar_one_or_none()
+
+        if not trusted:
+            await message.answer(f"⚠️ {get_display_name(user)} не в списке доверенных.")
+            await state.clear()
+            return
+
+        await session.delete(trusted)
+        await session.commit()
+
+    await message.answer(f"✅ {get_display_name(user)} удалён из списка доверенных авторов.")
+    await state.clear()
 
