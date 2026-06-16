@@ -1,4 +1,3 @@
-import pytest
 from decimal import Decimal
 from app.services import to_decimal, round_coin
 

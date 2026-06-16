@@ -15,11 +15,10 @@ from aiogram.types import (
 from sqlalchemy import select
 
 from app.db import async_session
-from app.models import Offer, User
+from app.models import Offer
 from app.services import (
-    get_user, get_user_by_id, log_balance_change, 
-    ensure_payment_pending, get_payment_by_payload,
-    mark_payment_paid_once, log_user_action, get_display_name
+    get_user, log_balance_change, 
+    ensure_payment_pending
 )
 from app.config import ADMINS, STARS_TO_COINS_RATE
 

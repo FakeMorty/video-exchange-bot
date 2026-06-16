@@ -1,11 +1,10 @@
 """
 Robust DB fix utility.
 """
-import asyncio
 from sqlalchemy import text
 from app.db import engine
 
-from app.logger import get_logger, log_info, log_error
+from app.logger import get_logger, log_info
 
 logger = get_logger(__name__)
 

@@ -2,20 +2,16 @@
 Донатный магазин — покупка привилегий за монеты
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
 
 from app.db import async_session
-from app.models import User
 from app.services import (
-    get_user, log_balance_change, log_user_action, get_display_name,
-    activate_perk, has_active_perk, get_active_perks,
-    PERK_ICONS, PERK_NAMES, is_admin_or_super, is_admin_free_eligible,
+    get_user, log_balance_change, log_user_action, activate_perk, has_active_perk, get_active_perks,
+    PERK_ICONS, PERK_NAMES, is_admin_free_eligible,
 )
 
 router = Router()

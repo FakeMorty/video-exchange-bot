@@ -28,8 +28,7 @@ from app.config import (
     COMMENTS_PER_10_MIN,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
-    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, SMART_AD_FORCED_WATCH_SECONDS,
-    DAILY_PHOTO_LIMIT,
+    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, DAILY_PHOTO_LIMIT,
     PROMOCODE_CREATION_STAR_RATE,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
@@ -51,8 +50,7 @@ from app.models import (
     DailyQuestProgress, GameHistory, Offer, Promocode,
 )
 from app.services import (
-    get_or_create_user, get_user, get_user_by_id, get_setting, set_setting,
-    save_video, save_photo,
+    get_or_create_user, get_user, get_user_by_id, get_setting, save_video, save_photo,
     get_random_video_for_user, get_random_photo_for_user,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
     record_photo_view,
@@ -76,8 +74,7 @@ from app.services import (
     is_admin_or_super, is_admin_free_eligible,
     should_show_low_balance_hint, mark_low_balance_hint_shown,
     can_show_offer_to_user, mark_offer_shown,
-    get_random_active_offer, should_inject_ad_in_video,
-    open_lootbox_for_coins, open_lootbox_for_stars,
+    get_random_active_offer, open_lootbox_for_stars,
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
 )
@@ -89,14 +86,11 @@ from app.keyboards import (
     offers_list_keyboard, rent_days_keyboard,
     games_menu_keyboard, tops_menu_keyboard,
     quests_keyboard, reaction_menu_keyboard,
-    low_balance_offer_keyboard, forced_offer_keyboard,
-    forced_offer_done_keyboard,
-    BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
+    low_balance_offer_keyboard, BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY,
 )
-from app.user_offer_handlers import user_offers_menu
 from app.logger import get_logger
 
 logger = get_logger(__name__)
@@ -2044,14 +2038,8 @@ async def offers_rent_list(callback: CallbackQuery):
     )
     kb_buttons = []
     for o in offers:
+        # Rental system is disabled in this build — always show full available slots
         active_count = 0
-        async with async_session() as session:
-            try:
-                active_count = (await session.execute(
-                    select(func.count()).where(False)
-                )).scalar_one()
-            except Exception:
-                pass
         slots_left = o.max_simultaneous_rentals - active_count
         kb_buttons.append([InlineKeyboardButton(
             text=(

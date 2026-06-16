@@ -1,8 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from io import BytesIO
-import os
+from datetime import datetime, timedelta
 from html import escape
 
 from aiogram import Router, F
@@ -11,34 +8,30 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
-from sqlalchemy import select, func, desc, text
+from sqlalchemy import select, func, text
 
 
-from app.config import ADMINS, OFFER_DEFAULT_RENT_COST_PER_DAY, ENABLE_ADMIN_BROADCAST, ENABLE_AUTO_MODERATION
+from app.config import ENABLE_AUTO_MODERATION
 from app.db import async_session
 from app.models import (
     Base,
-    User, Video, Offer, BalanceLog, GameHistory,
-    TrustedUploader, Event, ActiveSale, OfferParticipation, UserPerk
+    User, Video, TrustedUploader, Event, ActiveSale
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
-    get_user_dossier, update_user_balance, set_user_ban_status,
-    count_pending_videos, count_approved_videos, count_rejected_videos,
+    get_user_dossier, count_pending_videos, count_approved_videos, count_rejected_videos,
     get_next_pending_video, approve_video, reject_video,
     get_admin_extended_stats, get_display_name,
-    get_user_by_display_name, admin_create_offer,
-    expire_old_rentals, log_user_action,
-    get_recent_feedback, get_active_sale
+    get_user_by_display_name, get_recent_feedback, get_active_sale
 )
 from app.keyboards import (
     admin_main_keyboard, moderation_keyboard,
     rejection_reason_keyboard, admin_after_action_keyboard,
     admin_db_keyboard,
 )
-from app.logger import get_logger, log_info, log_error
+from app.logger import get_logger
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
 logger = get_logger(__name__)
@@ -84,6 +77,7 @@ class AdminOfferCreateState(StatesGroup):
 
 class TrustedUploaderState(StatesGroup):
     waiting_add = State()
+    waiting_remove = State()
 
 
 class SaleState(StatesGroup):
@@ -965,7 +959,6 @@ async def settings_show_all(callback: CallbackQuery):
         await callback.answer()
         return
     async with async_session() as session:
-        from app.services import get_setting
         from app.models import BotSetting
         result = await session.execute(select(BotSetting).order_by(BotSetting.key))
         settings = result.scalars().all()
