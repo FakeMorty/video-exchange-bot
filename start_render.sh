@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Запуск миграций
-alembic upgrade head
+echo "==> Running safe migrations..."
+python3 migrate.py
 
-# Запуск бота
-python -m app.main
+echo "==> Starting bot..."
+exec python -m app.main
