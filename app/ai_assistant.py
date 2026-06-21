@@ -3,7 +3,8 @@
 
 Возможности:
 • Диалоговый режим с памятью (история на N пар сообщений)
-• Системный промпт — без цензуры, флирт, ролевые игры, вирт
+• Множественные чаты (до 5 обычных, 10 VIP, ∞ админы)
+• Стикеры из стикерпака Katya
 • Стоимость: 5 монет за сообщение (с возвратом при ошибке API)
 • Анти-спам: кулдаун, дневной лимит
 • Безопасность: фильтрация токенов API от утечки
@@ -12,6 +13,7 @@
 
 import asyncio
 import time
+import random
 from datetime import datetime
 from decimal import Decimal
 
@@ -36,6 +38,9 @@ from app.config import (
     AI_ASSISTANT_HISTORY_LIMIT,
     AI_ASSISTANT_DAILY_LIMIT,
     AI_ASSISTANT_PRICE,
+    KATYA_STICKER_PACK,
+    KATYA_MAX_CHATS,
+    KATYA_MAX_CHATS_VIP,
 )
 from app.db import async_session
 from app.services import (
@@ -43,12 +48,135 @@ from app.services import (
     is_admin_free_eligible,
 )
 from app.logger import get_logger
+from app.models import KatyaChat
 
 logger = get_logger(__name__)
 router = Router()
 
 PRICE = to_decimal = lambda x: Decimal(str(x))
 _KATYA_PRICE = Decimal(str(AI_ASSISTANT_PRICE))
+
+# ══════════════════════════════════════════════════
+#  Стикеры Кати — маппинг эмоция → sticker_id
+#  Заполняется при старте бота через getStickerSet
+# ══════════════════════════════════════════════════
+
+# Ключевые слова → стикер (будет file_id после загрузки)
+_STICKER_KEYWORDS: dict[str, str] = {}
+_stickers_loaded = False
+
+# Статический маппинг: ключевые слова в ответе Кати → имя стикера
+_STICKER_EMOTION_MAP = {
+    "привет": "01_greet",
+    "здравствуй": "01_greet",
+    "хай": "01_greet",
+    "рада": "02_joy",
+    "ура": "02_joy",
+    "обижа": "03_pout",
+    "дулась": "03_pout",
+    "надула": "03_pout",
+    "думаю": "04_thinking",
+    "задумалась": "04_thinking",
+    "подмиг": "05_wink",
+    "хитр": "05_wink",
+    "красне": "06_blush",
+    "застенч": "06_blush",
+    "смущ": "06_blush",
+    "устала": "07_tired",
+    "выдохлась": "07_tired",
+    "злюсь": "08_angry",
+    "бесишь": "08_angry",
+    "флирт": "09_flirt",
+    "соблазн": "09_flirt",
+    "поцелуй": "10_kiss",
+    "целую": "10_kiss",
+    "чмок": "10_kiss",
+    "хочу": "11_want_you",
+    "жарко": "13_hot_popsicle",
+    "морожен": "13_hot_popsicle",
+    "лёд": "13_hot_popsicle",
+    "растяж": "14_stretch",
+    "гибк": "14_stretch",
+    "шпагат": "14_stretch",
+    "скуч": "15_bored",
+    "мечт": "16_daydream",
+    "плачу": "17_cry",
+    "слёзы": "17_cry",
+    "люблю": "18_in_love",
+    "влюб": "18_in_love",
+    "сердеч": "18_in_love",
+    "шёпот": "19_whisper",
+    "секрет": "19_whisper",
+    "интерес": "20_intrigued",
+    "любопытн": "20_intrigued",
+    "полотенц": "22_towel",
+    "душ": "22_towel",
+    "ванна": "22_towel",
+    "кроват": "23_come_to_me",
+    "подушк": "23_come_to_me",
+    "ложусь": "23_come_to_me",
+    "покорн": "24_submissive",
+    "подчин": "24_submissive",
+    "перегрев": "25_overheated",
+    "сгораю": "25_overheated",
+    "блажен": "26_afterglow",
+    "негой": "26_afterglow",
+    "доминир": "27_dominant",
+    "сверху": "27_dominant",
+    "мечтаю о тебе": "28_dreaming_of_you",
+}
+
+
+async def load_sticker_set(bot) -> None:
+    """Загрузить file_id стикеров из стикерпака при старте бота."""
+    global _stickers_loaded, _STICKER_KEYWORDS
+    if _stickers_loaded or not KATYA_STICKER_PACK:
+        return
+    try:
+        sticker_set = await bot.get_sticker_set(KATYA_STICKER_PACK)
+        # Маппим имя стикера (из emoji_list) к file_id
+        for sticker in sticker_set.stickers:
+            # Используем первый emoji как ключ
+            emoji = sticker.emoji if sticker.emoji else ""
+            file_id = sticker.file_id
+            # Также маппим по порядку — имя файла стикера
+            _STICKER_KEYWORDS[emoji] = file_id
+
+        # Альтернативный маппинг: по порядку в пачке
+        sticker_names = list(_STICKER_EMOTION_MAP.values())
+        for i, sticker in enumerate(sticker_set.stickers):
+            if i < len(sticker_names):
+                name = sticker_names[i]
+                _STICKER_KEYWORDS[name] = sticker.file_id
+
+        _stickers_loaded = True
+        logger.info(f"Loaded {len(sticker_set.stickers)} Katya stickers from {KATYA_STICKER_PACK}")
+    except Exception as e:
+        logger.warning(f"Failed to load Katya sticker set: {e}. Stickers disabled.")
+
+
+def _pick_sticker_for_text(text: str) -> str | None:
+    """Выбрать стикер на основе текста ответа Кати."""
+    if not _stickers_loaded:
+        return None
+
+    text_lower = text.lower()
+
+    # Ищем совпадение по ключевым словам
+    for keyword, sticker_name in _STICKER_EMOTION_MAP.items():
+        if keyword in text_lower:
+            file_id = _STICKER_KEYWORDS.get(sticker_name)
+            if file_id:
+                return file_id
+
+    # Рандомный стикер если нет совпадения (30% шанс)
+    if random.random() < 0.3 and _STICKER_KEYWORDS:
+        all_ids = [v for v in _STICKER_KEYWORDS.values() if isinstance(v, str)]
+        if all_ids:
+            return random.choice(all_ids)
+
+    return None
+
 
 # ══════════════════════════════════════════════════
 #  Системный промпт Кати
@@ -155,6 +283,7 @@ SYSTEM_PROMPT = """Ты — Катя, 18 лет. Заканчиваешь 11 к�
 
 class KatyaChatState(StatesGroup):
     chatting = State()
+    menu = State()
 
 
 # ══════════════════════════════════════════════════
@@ -189,6 +318,67 @@ def _check_daily_limit(user_id: int) -> bool:
         return False
     _user_daily_count[user_id] = count + 1
     return True
+
+
+# ══════════════════════════════════════════════════
+#  Чаты — создание, список, удаление
+# ══════════════════════════════════════════════════
+
+async def _get_max_chats(user: "User") -> int:
+    """Максимальное число чатов для пользователя."""
+    if user.is_admin or user.telegram_id in ADMINS:
+        return 999  # бесконечно
+    if user.vip_until and user.vip_until > datetime.utcnow():
+        return KATYA_MAX_CHATS_VIP
+    return KATYA_MAX_CHATS
+
+
+async def _count_user_chats(session, user_id: int) -> int:
+    from sqlalchemy import select, func
+    from app.models import KatyaChat
+    return (await session.execute(
+        select(func.count(KatyaChat.id)).where(KatyaChat.user_id == user_id)
+    )).scalar_one()
+
+
+async def _create_chat(session, user_id: int, title: str) -> KatyaChat:
+    chat = KatyaChat(user_id=user_id, title=title)
+    session.add(chat)
+    await session.commit()
+    return chat
+
+
+async def _delete_chat(session, chat_id: int, user_id: int) -> bool:
+    from sqlalchemy import select, delete
+    from app.models import KatyaChat
+    chat = (await session.execute(
+        select(KatyaChat).where(
+            KatyaChat.id == chat_id,
+            KatyaChat.user_id == user_id,
+        )
+    )).scalar_one_or_none()
+    if not chat:
+        return False
+    await session.delete(chat)
+    await session.commit()
+    return True
+
+
+async def _get_user_chats(session, user_id: int) -> list[KatyaChat]:
+    from sqlalchemy import select
+    from app.models import KatyaChat
+    return (await session.execute(
+        select(KatyaChat).where(KatyaChat.user_id == user_id)
+        .order_by(KatyaChat.created_at.desc())
+    )).scalars().all()
+
+
+async def _get_chat(session, chat_id: int) -> KatyaChat | None:
+    from sqlalchemy import select
+    from app.models import KatyaChat
+    return (await session.execute(
+        select(KatyaChat).where(KatyaChat.id == chat_id)
+    )).scalar_one_or_none()
 
 
 # ══════════════════════════════════════════════════
@@ -289,22 +479,70 @@ async def _append_history(state: FSMContext, role: str, content: str):
 #  Клавиатуры
 # ══════════════════════════════════════════════════
 
-def _katya_chat_kb() -> InlineKeyboardMarkup:
+def _katya_chat_kb(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Написать", callback_data="katya_ask")],
-        [InlineKeyboardButton(text="🗑 Новая тема", callback_data="katya_clear")],
-        [InlineKeyboardButton(text="❌ Пока, Катя", callback_data="katya_close")],
+        [InlineKeyboardButton(text="💬 Написать", callback_data=f"katya_ask:{chat_id}")],
+        [InlineKeyboardButton(text="🗑 Новая тема", callback_data=f"katya_clear:{chat_id}")],
+        [
+            InlineKeyboardButton(text="📋 Мои чаты", callback_data="katya_chats"),
+            InlineKeyboardButton(text="❌ Пока, Катя", callback_data="katya_close"),
+        ],
     ])
 
 
 def _katya_start_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💋 Начать общение", callback_data="katya_start")],
+        [InlineKeyboardButton(text="💬 Мои чаты", callback_data="katya_chats")],
+        [InlineKeyboardButton(text="➕ Новый чат", callback_data="katya_new_chat")],
+    ])
+
+
+def _katya_chats_kb(chats: list, max_chats: int, can_create: bool) -> InlineKeyboardMarkup:
+    buttons = []
+    for chat in chats:
+        msg_count = chat.message_count or 0
+        buttons.append([InlineKeyboardButton(
+            text=f"💬 {chat.title} ({msg_count} сообщ.)",
+            callback_data=f"katya_open:{chat.id}",
+        )])
+
+    # Кнопка удаления
+    for chat in chats:
+        buttons.append([InlineKeyboardButton(
+            text=f"🗑 Удалить «{chat.title}»",
+            callback_data=f"katya_del_confirm:{chat.id}",
+        )])
+
+    if can_create:
+        buttons.append([InlineKeyboardButton(
+            text="➕ Новый чат",
+            callback_data="katya_new_chat",
+        )])
+
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="katya_back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _katya_new_chat_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💕 Флирт", callback_data="katya_create:Флирт")],
+        [InlineKeyboardButton(text="🔥 Вирт", callback_data="katya_create:Вирт")],
+        [InlineKeyboardButton(text="🎭 Ролевая", callback_data="katya_create:Ролевая")],
+        [InlineKeyboardButton(text="💬 Просто поболтать", callback_data="katya_create:Болтовня")],
+        [InlineKeyboardButton(text="✏️ Своё название", callback_data="katya_create_custom")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="katya_chats")],
+    ])
+
+
+def _katya_delete_confirm_kb(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"katya_del_yes:{chat_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="katya_chats")],
     ])
 
 
 # ══════════════════════════════════════════════════
-#  Обработчики
+#  Обработчики — главное меню Кати
 # ══════════════════════════════════════════════════
 
 @router.message(F.text == "💋 Катя")
@@ -320,8 +558,14 @@ async def btn_katya(message: Message, state: FSMContext):
             await message.answer("❌ Сначала установи ник.")
             return
         balance = user.balance
+        chats = await _get_user_chats(session, user.id)
+        max_chats = await _get_max_chats(user)
 
     await state.clear()
+    await state.set_state(KatyaChatState.menu)
+
+    chat_info = f"📋 Чатов: {len(chats)}/{max_chats}" if max_chats < 999 else "📋 Чатов: {0} (∞)".format(len(chats))
+
     await message.answer(
         "💋 <b>Катя</b>\n\n"
         "Приве-е-ет 🥰 Это Катя! Заканчиваю 11 класс, устала от этих "
@@ -329,33 +573,291 @@ async def btn_katya(message: Message, state: FSMContext):
         "Кстати, я гимнасткой занимаюсь — гибкая 🤸‍♀️ Может, проверишь? 😏\n\n"
         f"💰 Стоимость: <b>{AI_ASSISTANT_PRICE} монет</b> за сообщение\n"
         f"💰 Твой баланс: <b>{balance}</b> монет\n"
-        f"📊 Лимит: {AI_ASSISTANT_DAILY_LIMIT} сообщений в день\n\n"
+        f"📊 Лимит: {AI_ASSISTANT_DAILY_LIMIT} сообщений в день\n"
+        f"{chat_info}\n\n"
         "*потягивается, прогибаясь в спинке* Ну что, поболтаем? 😘",
         parse_mode="HTML",
         reply_markup=_katya_start_kb(),
     )
 
 
-@router.callback_query(F.data == "katya_start")
-async def katya_start(callback: CallbackQuery, state: FSMContext):
-    """Начать диалог с Катей."""
-    await state.set_state(KatyaChatState.chatting)
-    await state.update_data(katya_history=[])
-    await callback.message.answer(
-        "💋 *обнимает тебя за шею и шепчет на ушко*\n\n"
-        "Ну привеееет... Я так устала от этих пробников, думала голову "
-        "сломаю 😩 Наконец-то кто-то написал! Расскажи что-нибудь "
-        "интересное... или давай я покажу чему меня гимнастика научила 😏😘",
+@router.callback_query(KatyaChatState.menu, F.data == "katya_back_main")
+async def katya_back_main(callback: CallbackQuery, state: FSMContext):
+    """Вернуться в главное меню Кати."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("❌ Ошибка")
+            return
+        balance = user.balance
+        chats = await _get_user_chats(session, user.id)
+        max_chats = await _get_max_chats(user)
+
+    chat_info = f"📋 Чатов: {len(chats)}/{max_chats}" if max_chats < 999 else f"📋 Чатов: {len(chats)} (∞)"
+
+    await callback.message.edit_text(
+        "💋 <b>Катя</b>\n\n"
+        "Приве-е-ет 🥰 Это Катя!\n\n"
+        f"💰 Стоимость: <b>{AI_ASSISTANT_PRICE} монет</b> за сообщение\n"
+        f"💰 Твой баланс: <b>{balance}</b> монет\n"
+        f"{chat_info}\n\n"
+        "*потягивается* Ну что, поболтаем? 😘",
         parse_mode="HTML",
-        reply_markup=_katya_chat_kb(),
+        reply_markup=_katya_start_kb(),
     )
     await callback.answer()
 
+
+# ══════════════════════════════════════════════════
+#  Обработчики — управление чатами
+# ══════════════════════════════════════════════════
+
+@router.callback_query(F.data == "katya_chats")
+async def katya_list_chats(callback: CallbackQuery, state: FSMContext):
+    """Список чатов пользователя."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("❌ Ошибка")
+            return
+        chats = await _get_user_chats(session, user.id)
+        max_chats = await _get_max_chats(user)
+
+    can_create = len(chats) < max_chats
+    kb = _katya_chats_kb(chats, max_chats, can_create)
+
+    if not chats:
+        text = "💋 У тебя пока нет чатов со мной. Создай первый! 😏"
+    else:
+        lines = ["💋 <b>Твои чаты с Катей:</b>\n"]
+        for i, chat in enumerate(chats, 1):
+            msg_count = chat.message_count or 0
+            lines.append(f"{i}. 💬 <b>{chat.title}</b> — {msg_count} сообщ.")
+        text = "\n".join(lines)
+
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "katya_new_chat")
+async def katya_new_chat_menu(callback: CallbackQuery, state: FSMContext):
+    """Меню создания нового чата."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("❌ Ошибка")
+            return
+        chats = await _get_user_chats(session, user.id)
+        max_chats = await _get_max_chats(user)
+
+    if len(chats) >= max_chats:
+        await callback.answer(
+            f"❌ Максимум чатов: {max_chats}. Удали старый!",
+            show_alert=True,
+        )
+        return
+
+    await callback.message.edit_text(
+        "💋 <b>Новый чат с Катей</b>\n\nВыбери тему или задай свою:",
+        parse_mode="HTML",
+        reply_markup=_katya_new_chat_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("katya_create:"))
+async def katya_create_chat(callback: CallbackQuery, state: FSMContext):
+    """Создать чат с предустановленной темой."""
+    title = callback.data.split(":", 1)[1]
+
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("❌ Ошибка")
+            return
+        chats = await _get_user_chats(session, user.id)
+        max_chats = await _get_max_chats(user)
+
+        if len(chats) >= max_chats:
+            await callback.answer(
+                f"❌ Максимум чатов: {max_chats}. Удали старый!",
+                show_alert=True,
+            )
+            return
+
+        chat = await _create_chat(session, user.id, title)
+
+    await state.set_state(KatyaChatState.chatting)
+    await state.update_data(katya_history=[], katya_chat_id=chat.id)
+
+    greeting = _get_chat_greeting(title)
+
+    await callback.message.edit_text(
+        f"💋 <b>Чат «{title}»</b>\n\n{greeting}",
+        parse_mode="HTML",
+        reply_markup=_katya_chat_kb(chat.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "katya_create_custom")
+async def katya_create_custom_chat(callback: CallbackQuery, state: FSMContext):
+    """Запросить у пользователя название чата."""
+    await state.update_data(waiting_chat_name=True)
+    await callback.message.edit_text(
+        "💋 Напиши название для нового чата (например: «Ночной флирт»):",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("katya_open:"))
+async def katya_open_chat(callback: CallbackQuery, state: FSMContext):
+    """Открыть существующий чат."""
+    chat_id = int(callback.data.split(":")[1])
+
+    async with async_session() as session:
+        chat = await _get_chat(session, chat_id)
+        if not chat or chat.user_id != callback.from_user.id:
+            await callback.answer("❌ Чат не найден")
+            return
+
+    await state.set_state(KatyaChatState.chatting)
+    await state.update_data(
+        katya_history=[],  # история в памяти, не из БД
+        katya_chat_id=chat_id,
+    )
+
+    await callback.message.edit_text(
+        f"💋 <b>Чат «{chat.title}»</b>\n\n"
+        f"*потягивается и улыбается* Ну привет снова... Скучал? 😏\n\n"
+        "Напиши мне что-нибудь!",
+        parse_mode="HTML",
+        reply_markup=_katya_chat_kb(chat_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("katya_del_confirm:"))
+async def katya_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение удаления чата."""
+    chat_id = int(callback.data.split(":")[1])
+
+    async with async_session() as session:
+        chat = await _get_chat(session, chat_id)
+        if not chat or chat.user_id != callback.from_user.id:
+            await callback.answer("❌ Чат не найден")
+            return
+        title = chat.title
+
+    await callback.message.edit_text(
+        f"🗑 Удалить чат «{title}»?\n\nИстория будет потеряна!",
+        reply_markup=_katya_delete_confirm_kb(chat_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("katya_del_yes:"))
+async def katya_delete_yes(callback: CallbackQuery, state: FSMContext):
+    """Удалить чат."""
+    chat_id = int(callback.data.split(":")[1])
+
+    async with async_session() as session:
+        deleted = await _delete_chat(session, chat_id, callback.from_user.id)
+
+    if deleted:
+        # Если были в этом чате — выходим
+        data = await state.get_data()
+        if data.get("katya_chat_id") == chat_id:
+            await state.clear()
+            await state.set_state(KatyaChatState.menu)
+
+        await callback.answer("🗑 Чат удалён", show_alert=False)
+        # Перерисовываем список
+        await katya_list_chats(callback, state)
+    else:
+        await callback.answer("❌ Не удалось удалить")
+
+
+# ══════════════════════════════════════════════════
+#  Приветствия для разных типов чатов
+# ══════════════════════════════════════════════════
+
+def _get_chat_greeting(title: str) -> str:
+    greetings = {
+        "Флирт": (
+            "*обнимает тебя за шею и шепчет на ушко*\n\n"
+            "Ну привеееет... Я так устала от этих пробников 😩 "
+            "Наконец-то кто-то написал! *прикусывает губу* "
+            "Расскажи что-нибудь интересное... или давай я покажу "
+            "чему меня гимнастика научила 😏😘"
+        ),
+        "Вирт": (
+            "*ложится на кровать, томно смотрит на тебя*\n\n"
+            "Ммм, какой смелый... Решил не терять время на разговоры? 😏 "
+            "*проводит рукой по шее* Я это уважаю... "
+            "Ну что, начнём? *дразняще приоткрывает губы* 💋"
+        ),
+        "Ролевая": (
+            "*загадочно улыбается*\n\n"
+            "О, любишь поиграть? 🎭 Я тоже! "
+            "Какую роль мне сыграть? Стеснительная ученица? "
+            "Строгая тренерша? Или... *шепчет* твоя послушная девочка? 😏"
+        ),
+        "Болтовня": (
+            "*садится рядом, подогнув ногу*\n\n"
+            "Привет-привет! 🥰 Наконец-то нормальный собеседник, "
+            "а не эти пробники... *закатывает глаза* Рассказывай, "
+            "как день прошёл? Или лучше я расскажу, как чуть не "
+            "упала на шпагате на тренировке? 😂"
+        ),
+    }
+    return greetings.get(title, greetings["Болтовня"])
+
+
+# ══════════════════════════════════════════════════
+#  Обработчики — чат с Катей
+# ══════════════════════════════════════════════════
 
 @router.message(KatyaChatState.chatting)
 async def katya_chat_message(message: Message, state: FSMContext):
     """Обработка сообщения в режиме чата с Катей."""
     user_id = message.from_user.id
+
+    # Проверяем, ожидаем ли название чата
+    data = await state.get_data()
+    if data.get("waiting_chat_name"):
+        title = message.text.strip()[:50]
+        if not title:
+            await message.answer("❌ Название не может быть пустым.")
+            return
+
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+            if not user:
+                return
+            chats = await _get_user_chats(session, user.id)
+            max_chats = await _get_max_chats(user)
+
+            if len(chats) >= max_chats:
+                await message.answer(f"❌ Максимум чатов: {max_chats}. Удали старый!")
+                return
+
+            chat = await _create_chat(session, user.id, title)
+
+        await state.update_data(waiting_chat_name=False)
+        await state.set_state(KatyaChatState.chatting)
+        await state.update_data(katya_history=[], katya_chat_id=chat.id)
+
+        greeting = _get_chat_greeting(title)
+        await message.answer(
+            f"💋 <b>Чат «{title}»</b>\n\n{greeting}",
+            parse_mode="HTML",
+            reply_markup=_katya_chat_kb(chat.id),
+        )
+        return
 
     # Проверка кулдауна
     ok, remaining = _check_cooldown(user_id)
@@ -381,6 +883,9 @@ async def katya_chat_message(message: Message, state: FSMContext):
         await message.answer("✂️ Слишком длинное! *зевает* Я на ЕГЭ меньше пишу, чем ты тут 😏 Напиши короче!")
         return
 
+    # Получаем chat_id из state
+    chat_id = data.get("katya_chat_id")
+
     # Списываем монеты
     async with async_session() as session:
         user = await get_user(session, user_id)
@@ -402,12 +907,23 @@ async def katya_chat_message(message: Message, state: FSMContext):
             user.balance -= _KATYA_PRICE
             await log_balance_change(
                 session, user, -_KATYA_PRICE, "katya_chat",
-                details=f"msg={user_text[:60]}",
+                details=f"chat={chat_id};msg={user_text[:60]}",
             )
+            # Увеличиваем счётчик сообщений в чате
+            if chat_id:
+                chat = await _get_chat(session, chat_id)
+                if chat:
+                    chat.message_count = (chat.message_count or 0) + 1
             await session.commit()
             balance_after = user.balance
         else:
             balance_after = user.balance
+            # Счётчик сообщений даже для админов
+            if chat_id:
+                chat = await _get_chat(session, chat_id)
+                if chat:
+                    chat.message_count = (chat.message_count or 0) + 1
+                    await session.commit()
 
     # Показываем «печатает»
     await message.bot.send_chat_action(user_id, "typing")
@@ -434,15 +950,23 @@ async def katya_chat_message(message: Message, state: FSMContext):
         await message.answer(
             "😵 *хмурится*\n\n"
             "Блин, связь барахлит... Попробуй ещё раз, ок? 💔",
-            reply_markup=_katya_chat_kb(),
+            reply_markup=_katya_chat_kb(chat_id) if chat_id else _katya_chat_kb(0),
         )
         return
 
     # Сохраняем ответ в историю
     await _append_history(state, "assistant", response_text)
 
+    # Отправляем стикер (если загружены)
+    sticker_file_id = _pick_sticker_for_text(response_text)
+    if sticker_file_id:
+        try:
+            await message.bot.send_sticker(user_id, sticker_file_id)
+        except Exception as e:
+            logger.warning(f"Failed to send Katya sticker: {e}")
+
     # Отправляем ответ
-    await _send_long_message(message, response_text, admin_free, balance_after)
+    await _send_long_message(message, response_text, admin_free, balance_after, chat_id)
 
     # Логируем
     async with async_session() as session:
@@ -450,23 +974,24 @@ async def katya_chat_message(message: Message, state: FSMContext):
         if user:
             await log_user_action(
                 session, user.id, "katya_chat",
-                f"q={user_text[:60]}; a={response_text[:60]}",
+                f"chat={chat_id};q={user_text[:60]};a={response_text[:60]}",
             )
 
 
 async def _send_long_message(
-    message: Message, text: str, admin_free: bool, balance_after: Decimal
+    message: Message, text: str, admin_free: bool, balance_after: Decimal,
+    chat_id: int = 0,
 ):
     """Отправляет длинный текст, разбивая на части по 4000 символов."""
     MAX_LEN = 4000
 
     # Добавляем строку баланса к последней части
     if admin_free:
-        balance_line = "\n\n🆓 ADMIN FREE"
+        balance_line = "\n\n🆕 ADMIN FREE"
     else:
         balance_line = f"\n\n💰 Баланс: {balance_after} монет"
 
-    kb = _katya_chat_kb()
+    kb = _katya_chat_kb(chat_id)
 
     if len(text) + len(balance_line) <= MAX_LEN:
         await message.answer(text + balance_line, reply_markup=kb)
@@ -491,7 +1016,7 @@ async def _send_long_message(
             await message.answer(part)
 
 
-@router.callback_query(KatyaChatState.chatting, F.data == "katya_ask")
+@router.callback_query(KatyaChatState.chatting, F.data.startswith("katya_ask:"))
 async def katya_ask_prompt(callback: CallbackQuery):
     """Подсказка — просим написать сообщение."""
     await callback.answer(
@@ -500,29 +1025,100 @@ async def katya_ask_prompt(callback: CallbackQuery):
     )
 
 
-@router.callback_query(KatyaChatState.chatting, F.data == "katya_clear")
+@router.callback_query(KatyaChatState.chatting, F.data.startswith("katya_clear:"))
 async def katya_clear_history(callback: CallbackQuery, state: FSMContext):
-    """Очищает историю — новая тема."""
+    """Очищает историю — новая тема в текущем чате."""
     await state.update_data(katya_history=[])
+    chat_id = int(callback.data.split(":")[1]) if ":" in callback.data else 0
+
     await callback.message.answer(
         "💋 *откидывается на подушку*\n\n"
         "Ммм, начнём с чистого листа? Обожаю новые темы... "
         "О чём поговорим? 😏",
-        reply_markup=_katya_chat_kb(),
+        reply_markup=_katya_chat_kb(chat_id),
     )
     await callback.answer()
 
 
-@router.callback_query(KatyaChatState.chatting, F.data == "katya_close")
+@router.callback_query(F.data == "katya_close")
 async def katya_close_chat(callback: CallbackQuery, state: FSMContext):
     """Закрывает чат с Катей."""
-    await state.clear()
+    await state.set_state(KatyaChatState.menu)
+
+    # Отправляем стикер-прощание
+    goodbye_stickers = ["01_greet"]  # приветственный стикер как прощальный
+    sticker_name = random.choice(goodbye_stickers)
+    sticker_file_id = _STICKER_KEYWORDS.get(sticker_name)
+    if sticker_file_id:
+        try:
+            await callback.bot.send_sticker(callback.from_user.id, sticker_file_id)
+        except Exception:
+            pass
+
     await callback.message.answer(
         "💋 *целует в щёчку*\n\n"
         "Ну ладно, уходи... Но я буду скучать! Возвращайся скорее 💔\n\n"
         "Нажми 💋 Катя чтобы снова найти меня.",
+        reply_markup=_katya_start_kb(),
     )
     await callback.answer()
+
+
+@router.message(KatyaChatState.menu)
+async def katya_menu_message(message: Message, state: FSMContext):
+    """Если пользователь пишет текст в меню Кати — перебрасываем в чат."""
+    # Проверяем, ожидаем ли название чата
+    data = await state.get_data()
+    if data.get("waiting_chat_name"):
+        title = message.text.strip()[:50]
+        if not title:
+            await message.answer("❌ Название не может быть пустым.")
+            return
+
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                return
+            chats = await _get_user_chats(session, user.id)
+            max_chats = await _get_max_chats(user)
+
+            if len(chats) >= max_chats:
+                await message.answer(f"❌ Максимум чатов: {max_chats}. Удали старый!")
+                return
+
+            chat = await _create_chat(session, user.id, title)
+
+        await state.update_data(waiting_chat_name=False)
+        await state.set_state(KatyaChatState.chatting)
+        await state.update_data(katya_history=[], katya_chat_id=chat.id)
+
+        greeting = _get_chat_greeting(title)
+        await message.answer(
+            f"💋 <b>Чат «{title}»</b>\n\n{greeting}",
+            parse_mode="HTML",
+            reply_markup=_katya_chat_kb(chat.id),
+        )
+        return
+
+    # Если есть только 1 чат — сразу входим в него
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        chats = await _get_user_chats(session, user.id)
+
+    if len(chats) == 1:
+        chat = chats[0]
+        await state.set_state(KatyaChatState.chatting)
+        await state.update_data(katya_history=[], katya_chat_id=chat.id)
+        # Перенаправляем сообщение в обработчик чата
+        await katya_chat_message(message, state)
+        return
+
+    await message.answer(
+        "💋 Выбери чат или создай новый!\n\n"
+        "Нажми 💋 Катя → 💬 Мои чаты",
+    )
 
 
 @router.message(KatyaChatState.chatting, CommandStart())

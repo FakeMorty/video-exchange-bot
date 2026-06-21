@@ -722,6 +722,13 @@ async def on_startup(app):
         
     await _notify_admins_started(bot)
 
+    # Загрузка стикеров Кати
+    try:
+        from app.ai_assistant import load_sticker_set
+        await load_sticker_set(bot)
+    except Exception as e:
+        log_error(logger, f"Katya sticker load error: {e}")
+
     # Фоновая задача: агрегированные уведомления модерации
     asyncio.create_task(_mod_notification_loop(bot))
     log_info(logger, "Service initialized")

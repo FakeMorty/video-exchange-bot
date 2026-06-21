@@ -72,6 +72,7 @@ class User(Base):
         back_populates="trusted",
     )
     perks: Mapped[List["UserPerk"]] = relationship(back_populates="user")
+    katya_chats: Mapped[List["KatyaChat"]] = relationship(back_populates="user")
 
 
 class LootboxOpen(Base):
@@ -554,6 +555,19 @@ class ModNotification(Base):
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class KatyaChat(Base):
+    """Чат пользователя с Катей."""
+    __tablename__ = "katya_chats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(50), nullable=False, default="Болтовня")
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="katya_chats")
 
 
 class BotSetting(Base):
