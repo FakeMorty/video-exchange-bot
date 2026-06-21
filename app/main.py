@@ -27,6 +27,7 @@ from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
 from app.user_offer_handlers import router as user_offer_router
 from app.donation_shop import router as donation_router
+from app.ai_assistant import router as ai_router
 from app.logger import setup_logging, get_logger, log_info, log_error
 from app.services import (
     get_offer_participations_for_subscription_audit,
@@ -131,6 +132,29 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
 
 
 
+async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_at: datetime):
+    """Напоминает владельцам билетов за 1 час до розыгрыша."""
+    tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
+    user_ids = list(set(t.user_id for t in tickets))
+    users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+    
+    # Время в МСК для удобства
+    draw_msk = draw_starts_at + __import__('datetime').timedelta(hours=3)
+    time_str = draw_msk.strftime("%H:%M")
+    
+    msg = (
+        f"⏰ <b>Лотерея-лото — скоро розыгрыш!</b>\n\n"
+        f"Розыгрыш начнётся через час ({time_str} МСК).\n"
+        f"Не забудьте зайти в Live и посмотреть на колесо удачи! 🎰"
+    )
+    for u in users:
+        try:
+            await bot.send_message(u.telegram_id, msg)
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+
+
 async def notify_lottery_started(bot: Bot, session, round_id: int):
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
     user_ids = list(set(t.user_id for t in tickets))
@@ -172,11 +196,23 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
         await asyncio.sleep(0.05)
 
 async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
+    REMINDER_HOURS_BEFORE = 1  # За сколько часов до розыгрыша напомнить
     while not stop_event.is_set():
         try:
             async with async_session() as session:
                 round_obj = await ensure_current_lottery_round(session)
                 utc_now = datetime.utcnow()
+
+                # Напоминание за 1 час до розыгрыша
+                if (
+                    round_obj.status == "open"
+                    and not round_obj.draw_reminder_sent
+                    and utc_now >= round_obj.draw_starts_at - __import__('datetime').timedelta(hours=REMINDER_HOURS_BEFORE)
+                ):
+                    round_obj.draw_reminder_sent = True
+                    await session.commit()
+                    log_info(logger, f"Lottery round #{round_obj.id}: sending draw reminder")
+                    await notify_lottery_reminder(bot, session, round_obj.id, round_obj.draw_starts_at)
 
                 if round_obj.status == "open" and utc_now >= round_obj.draw_starts_at:
                     round_obj.status = "drawing"
@@ -646,6 +682,22 @@ async def _notify_admins_started(bot: Bot) -> None:
             pass
 
 
+async def _mod_notification_loop(bot):
+    """Периодическая отправка агрегированных уведомлений о модерации."""
+    await asyncio.sleep(60)  # подождать старта
+    while True:
+        try:
+            await asyncio.sleep(120)  # каждые 2 минуты
+            from app.db import async_session
+            from app.services import should_flush_notifications, flush_mod_notifications
+            async with async_session() as session:
+                if await should_flush_notifications(session):
+                    await flush_mod_notifications(bot, session)
+        except Exception as e:
+            log_error(logger, f"Mod notification loop error: {e}")
+            await asyncio.sleep(300)
+
+
 async def on_startup(app):
     bot = app['bot']
     await init_db()
@@ -669,6 +721,9 @@ async def on_startup(app):
         log_error(logger, f"Migration sync error: {e}")
         
     await _notify_admins_started(bot)
+
+    # Фоновая задача: агрегированные уведомления модерации
+    asyncio.create_task(_mod_notification_loop(bot))
     log_info(logger, "Service initialized")
 
 
@@ -688,6 +743,7 @@ async def main():
     dp.include_router(user_router)
     dp.include_router(user_offer_router)
     dp.include_router(donation_router)
+    dp.include_router(ai_router)
 
     app = web.Application()
     app['bot'] = bot

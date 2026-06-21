@@ -24,6 +24,7 @@ BTN_PROMO      = "🎟 Промокоды"
 BTN_FEEDBACK   = "💬 Жалобы и предложения"
 BTN_LOTTERY    = "🎰 Лотерея-лото"
 BTN_LOOTBOXES  = "🎁 Лутбоксы"
+BTN_AI         = "🤖 Ассистент"
 
 
 # =========================
@@ -38,7 +39,7 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_BONUS)],
         [KeyboardButton(text=BTN_QUESTS), KeyboardButton(text=BTN_TOPS)],
         [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
-        [KeyboardButton(text=BTN_FEEDBACK)],
+        [KeyboardButton(text=BTN_AI), KeyboardButton(text=BTN_FEEDBACK)],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=BTN_ADMIN)])
@@ -51,6 +52,7 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
 def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="📊 Очередь модерации", callback_data="admin_queue_info")],
+        [InlineKeyboardButton(text="✅ Одобрить всё", callback_data="admin_approve_all")],
         [InlineKeyboardButton(text="📈 Статистика бота", callback_data="admin_extended_stats")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_manage_users")],
         [InlineKeyboardButton(text="⚡ Авто-модерация (доверенные)", callback_data="admin_auto_moderation")],
@@ -58,6 +60,7 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📢 Офферы и реклама", callback_data="admin_offers_menu")],
         [InlineKeyboardButton(text="🎉 События", callback_data="admin_events_menu")],
         [InlineKeyboardButton(text="🛍 Акции и скидки", callback_data="admin_sales")],
+        [InlineKeyboardButton(text="🚨 Жалобы", callback_data="admin_reports")],
         [InlineKeyboardButton(text="💬 Обращения пользователей", callback_data="admin_feedback_menu")],
         [InlineKeyboardButton(text="🔧 Настройки бота", callback_data="admin_bot_settings")],
     ]
@@ -132,7 +135,10 @@ def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="5", callback_data=f"rate:{video_id}:5"),
         ],
         [InlineKeyboardButton(text="💬 Комментарии", callback_data=f"comments:{video_id}")],
-        [InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{video_id}")],
+        [
+            InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{video_id}"),
+            InlineKeyboardButton(text="🚨 Жалоба", callback_data=f"report_video:{video_id}"),
+        ],
         [InlineKeyboardButton(text="📝 Следующее", callback_data="watch_next")],
     ])
 
@@ -140,7 +146,10 @@ def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
 def photo_actions_keyboard(photo_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{photo_id}")],
-        [InlineKeyboardButton(text="📝 Следующее фото", callback_data="watch_next_photo")],
+        [
+            InlineKeyboardButton(text="🚨 Жалоба", callback_data=f"report_video:{photo_id}"),
+            InlineKeyboardButton(text="📝 Следующее фото", callback_data="watch_next_photo"),
+        ],
     ])
 
 

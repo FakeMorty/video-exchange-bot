@@ -169,6 +169,65 @@ def get_display_name(user: "User") -> str:
     return f"User#{user.telegram_id}"
 
 
+async def get_nick_style_id(session: AsyncSession, user_id: int) -> int | None:
+    """Возвращает style_id активного перка ника (1-50) или None.
+
+    Приоритет: custom_nick со style_id > gold_nick (→2) > color_nick (→1).
+    """
+    from app.nick_styles import LEGACY_PERK_MAP
+
+    # Сначала проверяем custom_nick (новый формат)
+    custom = (await session.execute(
+        select(UserPerk).where(
+            UserPerk.user_id == user_id,
+            UserPerk.perk_type == "custom_nick",
+            UserPerk.is_active == True,
+            UserPerk.active_until > datetime.utcnow(),
+        )
+    )).scalar_one_or_none()
+    if custom and custom.style_id:
+        return custom.style_id
+
+    # Легаси: color_nick / gold_nick маппятся на стили 1 / 2
+    for perk_type, mapped_id in LEGACY_PERK_MAP.items():
+        perk = (await session.execute(
+            select(UserPerk).where(
+                UserPerk.user_id == user_id,
+                UserPerk.perk_type == perk_type,
+                UserPerk.is_active == True,
+                UserPerk.active_until > datetime.utcnow(),
+            )
+        )).scalar_one_or_none()
+        if perk:
+            return mapped_id
+
+    return None
+
+
+async def get_styled_display_name(
+    session: AsyncSession,
+    user: "User",
+    *,
+    card: bool = False,
+) -> str:
+    """Возвращает стилизованный ник с учётом активных перков.
+
+    Parameters
+    ----------
+    card : bool
+        False (default) — inline-режим: короткий, для строк
+        True           — card-режим: многострочный, для профиля
+    """
+    from app.nick_styles import format_nick_inline, format_nick_card
+
+    name = get_display_name(user)
+    style_id = await get_nick_style_id(session, user.id)
+
+    if card:
+        return format_nick_card(name, style_id)
+    return format_nick_inline(name, style_id)
+
+
 def is_admin_or_super(telegram_id: int, user: "User" = None) -> bool:
     if telegram_id in ADMINS:
         return True
@@ -1834,8 +1893,14 @@ async def activate_perk(
     user_id: int,
     perk_type: str,
     duration_days: int,
+    *,
+    style_id: int | None = None,
 ) -> UserPerk:
-    """Активировать/продлить перк для пользователя"""
+    """Активировать/продлить перк для пользователя.
+
+    style_id: 1-50 для custom_nick, None для остальных.
+    При продлении custom_nick: если передан новый style_id — заменяет старый.
+    """
     now = datetime.utcnow()
     existing = (await session.execute(
         select(UserPerk).where(
@@ -1849,14 +1914,17 @@ async def activate_perk(
         # Продлеваем существующий
         new_end = max(existing.active_until, now) + timedelta(days=duration_days)
         existing.active_until = new_end
+        # Для custom_nick — обновляем style_id если передан
+        if perk_type == "custom_nick" and style_id is not None:
+            existing.style_id = style_id
         await session.commit()
         return existing
     else:
         perk = UserPerk(
             user_id=user_id,
             perk_type=perk_type,
+            style_id=style_id,
             active_until=now + timedelta(days=duration_days),
-            is_active=True,
         )
         session.add(perk)
         await session.commit()
@@ -1880,8 +1948,7 @@ async def deactivate_perk(session: AsyncSession, user_id: int, perk_type: str) -
 
 
 PERK_ICONS = {
-    "color_nick": "🎨",
-    "gold_nick": "👑",
+    "custom_nick": "🎨",
     "coin_multiplier": "💰",
     "xp_multiplier": "📈",
     "stars_discount": "⭐",
@@ -1891,14 +1958,203 @@ PERK_ICONS = {
 
 
 PERK_NAMES = {
-    "color_nick": "🎨 Цветной ник",
-    "gold_nick": "👑 Золотой ник",
+    "custom_nick": "🎨 Кастомный ник",
     "coin_multiplier": "💰 Бустер монет x1.5",
     "xp_multiplier": "📈 Бустер XP x2",
     "stars_discount": "⭐ Скидка 25% на Stars",
     "priority_moderation": "⚡ Приоритетная модерация",
     "exclusive_reactions": "✨ Эксклюзивные реакции",
 }
+
+
+# ============================
+# ЖАЛОБЫ НА ВИДЕО (VideoReport)
+# ============================
+
+REPORT_REASONS = {
+    "spam": "Спам / реклама",
+    "shock": "Шок-контент",
+    "copyright": "Нарушение авторских прав",
+    "other": "Другое",
+}
+
+
+async def create_video_report(
+    session: AsyncSession,
+    reporter_user_id: int,
+    video_id: int,
+    reason: str,
+    comment: str | None = None,
+) -> "VideoReport | None":
+    """Создать жалобу на видео. Одна жалоба от юзера на одно видео."""
+    from app.models import VideoReport
+    if reason not in REPORT_REASONS:
+        return None
+    # Проверяем, не жаловался ли уже
+    existing = (await session.execute(
+        select(VideoReport).where(
+            VideoReport.reporter_user_id == reporter_user_id,
+            VideoReport.video_id == video_id,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        return None
+    report = VideoReport(
+        reporter_user_id=reporter_user_id,
+        video_id=video_id,
+        reason=reason,
+        comment=comment,
+    )
+    session.add(report)
+    await session.commit()
+    return report
+
+
+async def get_pending_reports(session: AsyncSession, limit: int = 50) -> list:
+    from app.models import VideoReport
+    return (await session.execute(
+        select(VideoReport).where(
+            VideoReport.status == "pending",
+        ).order_by(VideoReport.created_at.desc()).limit(limit)
+    )).scalars().all()
+
+
+async def dismiss_report(session: AsyncSession, report_id: int, admin_id: int) -> bool:
+    from app.models import VideoReport
+    report = (await session.execute(
+        select(VideoReport).where(VideoReport.id == report_id)
+    )).scalar_one_or_none()
+    if not report:
+        return False
+    report.status = "reviewed"
+    report.reviewed_by = admin_id
+    await session.commit()
+    return True
+
+
+# ============================
+# АГРЕГИРОВАННЫЕ УВЕДОМЛЕНИЯ МОДЕРАЦИИ
+# ============================
+
+# Минимальная пауза между уведомлениями одного вида (секунды)
+_MOD_NOTIFY_COOLDOWN = 120
+
+
+async def schedule_mod_notification(session: AsyncSession, kind: str) -> None:
+    """Запланировать агрегированное уведомление.
+    
+    Вместо 500 пушей при 500 видео — одна запись с count.
+    Если unsent-запись того же вида уже есть — +1 к count.
+    """
+    from app.models import ModNotification
+    existing = (await session.execute(
+        select(ModNotification).where(
+            ModNotification.kind == kind,
+            ModNotification.is_sent == False,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        existing.count += 1
+        await session.commit()
+    else:
+        n = ModNotification(kind=kind, count=1, is_sent=False)
+        session.add(n)
+        await session.commit()
+
+
+async def flush_mod_notifications(bot, session: AsyncSession) -> int:
+    """Отправить все несент-уведомления админам.
+    
+    Группирует по kind, отправляет одно сообщение на вид.
+    Возвращает количество отправленных.
+    """
+    from app.models import ModNotification
+    pending = (await session.execute(
+        select(ModNotification).where(ModNotification.is_sent == False)
+    )).scalars().all()
+    if not pending:
+        return 0
+
+    # Агрегируем
+    by_kind: dict[str, int] = {}
+    for n in pending:
+        by_kind[n.kind] = by_kind.get(n.kind, 0) + n.count
+
+    kind_labels = {
+        "video": "📹 Видео/фото на модерации",
+        "offer": "📢 Офферы на модерации",
+        "report": "🚨 Жалобы на контент",
+    }
+
+    lines = ["🔔 <b>Модерация: сводка</b>\n"]
+    for kind, count in by_kind.items():
+        label = kind_labels.get(kind, kind)
+        lines.append(f"  {label}: <b>{count}</b>")
+
+    lines.append("\n/admin — панель модерации")
+    text = "\n".join(lines)
+
+    sent = 0
+    for admin_tid in ADMINS:
+        try:
+            await bot.send_message(admin_tid, text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            pass
+
+    # Пометить как отправленные
+    for n in pending:
+        n.is_sent = True
+        n.sent_at = datetime.utcnow()
+    await session.commit()
+    return sent
+
+
+async def should_flush_notifications(session: AsyncSession) -> bool:
+    """Пора ли отправлять сводку? Да, если есть несент-записи
+    и с момента последней отправки прошло >COOLDOWN секунд."""
+    from app.models import ModNotification
+    pending = (await session.execute(
+        select(ModNotification).where(ModNotification.is_sent == False)
+    )).scalars().all()
+    if not pending:
+        return False
+    # Если последняя отправка была недавно — подождём, накопим ещё
+    last_sent = (await session.execute(
+        select(ModNotification).where(
+            ModNotification.is_sent == True,
+            ModNotification.sent_at.isnot(None),
+        ).order_by(ModNotification.sent_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if last_sent and (datetime.utcnow() - last_sent.sent_at).total_seconds() < _MOD_NOTIFY_COOLDOWN:
+        return False
+    return True
+
+
+# ============================
+# APPROVE ALL
+# ============================
+
+async def approve_all_pending(session: AsyncSession, admin_id: int) -> int:
+    """Одобрить все pending-видео и фото. Возвращает количество."""
+    from app.models import Video
+    pending = (await session.execute(
+        select(Video).where(Video.status == "pending")
+    )).scalars().all()
+    count = 0
+    for v in pending:
+        v.status = "approved"
+        v.rejection_reason = "bulk_approved"
+        # Начисляем награду загрузчику
+        uploader = await get_user_by_id(session, v.uploader_user_id)
+        if uploader:
+            reward = to_decimal(UPLOAD_REWARD if v.content_type == "video" else PHOTO_UPLOAD_REWARD)
+            await log_balance_change(session, uploader, reward, "upload_reward", source_id=v.id)
+            uploader.balance += reward
+        count += 1
+    await session.commit()
+    await log_user_action(session, admin_id, "approve_all", f"count={count}")
+    return count
 
 
 async def broadcast_event_to_users(bot, event: Event) -> int:
@@ -1924,7 +2180,7 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
         applies.append("кейсы")
     
     applies_text = ", ".join(applies) if applies else "всё"
-    end_text = (event.start_date + timedelta(days=event.duration_days)).strftime("%d.%m.%Y")
+    end_text = event.end_date.strftime("%d.%m.%Y")
     
     text = (
         f"🎉 <b>{event.name}</b>\n\n"

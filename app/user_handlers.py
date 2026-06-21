@@ -62,7 +62,7 @@ from app.services import (
     start_offer_participation, verify_offer_subscription,
     create_offer_rental, get_user_rentals,
     log_user_action, to_decimal,
-    set_display_name, get_display_name, log_balance_change,
+    set_display_name, get_display_name, get_styled_display_name, log_balance_change,
     can_play_free_game, pay_for_game_session, increment_game_played,
     get_or_create_game_session,
     check_daily_photo_limit,
@@ -77,6 +77,7 @@ from app.services import (
     get_random_active_offer, open_lootbox_for_stars,
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
+    create_video_report, schedule_mod_notification, REPORT_REASONS,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -265,16 +266,15 @@ async def _level_up_check(session, user, message_or_callback):
     if new_level > user.level:
         user.level = new_level
         await session.commit()
-        if hasattr(message_or_callback, "answer"):
-            await message_or_callback.answer(
+        # Отправляем полноценное сообщение в чат, а не popup-уведомление
+        target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
+        try:
+            await target.answer(
                 f"🎉 Поздравляем! Вы достигли уровня <b>{new_level}</b>!",
                 parse_mode="HTML"
             )
-        else:
-            await message_or_callback.message.answer(
-                f"🎉 Поздравляем! Вы достигли уровня <b>{new_level}</b>!",
-                parse_mode="HTML"
-            )
+        except Exception:
+            logger.exception("Failed to send level-up message")
 
 
 # =========================
@@ -361,8 +361,9 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                 return
             admin_flag = is_any_admin(message.from_user.id, user)
             vip_str = " 👑" if is_vip(user) else ""
+            styled_name = await get_styled_display_name(session, user)
             await message.answer(
-                f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
+                f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
                 f"💰 Баланс: <b>{user.balance}</b> монет",
                 parse_mode="HTML",
                 reply_markup=main_menu(is_admin=admin_flag)
@@ -419,8 +420,9 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         vip_str = " 👑" if is_vip(user) else ""
         import os
         from aiogram.types import FSInputFile
+        styled_name = await get_styled_display_name(session, user)
         msg_text = (
-            f"👋 Привет, <b>{get_display_name(user)}</b>{vip_str}!\n"
+            f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
             f"💰 Баланс: <b>{user.balance}</b> монет"
         )
         custom_welcome = await get_setting(session, "welcome_text", "")
@@ -535,9 +537,11 @@ async def show_profile(message: Message):
                 callback_data="donation_shop"
             )]
         ])
+        # Стилизованный ник (card-режим для профиля)
+        styled_nick = await get_styled_display_name(session, user, card=True)
         text = (
             f"👤 <b>Профиль</b>\n\n"
-            f"🏷 Ник: <b>{get_display_name(user)}</b>\n"
+            f"🏷 Ник:\n{styled_nick}\n\n"
             f"🆔 Telegram ID: <code>{user.telegram_id}</code>\n"
             f"💰 Баланс: <b>{user.balance}</b> монет\n"
             f"🏆 Уровень: <b>{user.level}</b>\n"
@@ -787,15 +791,22 @@ async def watch_video_content(callback: CallbackQuery):
                     )
                     continue
 
-                user = await get_user(session, callback.from_user.id)
-                await _level_up_check(session, user, callback)
-                await _update_quest_progress(session, user.id, "watch", 1)
-                
-                # Увеличиваем счётчик просмотров и проверяем нужно ли показать рекламу
-                count = await increment_video_watched(session, user.id)
-                
-                if await should_show_ad_after_video(session, user.id):
-                    await _show_ad_or_event(callback, session, user)
+                # Видео успешно отправлено — возвращаем управление сразу,
+                # чтобы внешняя ошибка НЕ показывалась пользователю.
+                # Вся пост-обработка выполняется в фоне с защитой от сбоев.
+                try:
+                    user = await get_user(session, callback.from_user.id)
+                    await _level_up_check(session, user, callback)
+                    await _update_quest_progress(session, user.id, "watch", 1)
+                    
+                    # Увеличиваем счётчик просмотров и проверяем нужно ли показать рекламу
+                    count = await increment_video_watched(session, user.id)
+                    
+                    if await should_show_ad_after_video(session, user.id):
+                        await _show_ad_or_event(callback, session, user)
+                except Exception:
+                    logger.exception("Post-video processing failed (non-critical)")
+                    # Не показываем пользователю ошибку — видео уже успешно отправлено
 
                 return
 
@@ -832,7 +843,7 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
         if event.applies_cases:
             applies.append("кейсы")
         applies_text = ", ".join(applies) if applies else "всё"
-        end_text = (event.start_date + timedelta(days=event.duration_days)).strftime("%d.%m")
+        end_text = event.end_date.strftime("%d.%m")
         
         ad_text = (
             f"🎉 <b>Акция: {event.name}</b>\n\n"
@@ -921,7 +932,11 @@ async def watch_photo_content(callback: CallbackQuery):
                     await mark_content_broken(session, photo.id, f"send_failed: {e}")
                     continue
 
-                await record_photo_view(session, user.id, photo.id)
+                # Фото успешно отправлено — пост-обработка в фоне
+                try:
+                    await record_photo_view(session, user.id, photo.id)
+                except Exception:
+                    logger.exception("Post-photo processing failed (non-critical)")
                 return
 
             await callback.message.answer(
@@ -985,7 +1000,7 @@ async def cb_comments(callback: CallbackQuery):
         else:
             for c in comments:
                 u = await get_user_by_id(session, c.user_id)
-                name = get_display_name(u) if u else "???"
+                name = await get_styled_display_name(session, u) if u else "???"
                 text += f"👤 <b>{escape(name)}</b>: {escape(c.text)}\n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -993,10 +1008,16 @@ async def cb_comments(callback: CallbackQuery):
             text="✏️ Написать",
             callback_data=f"add_comment:{video_id}"
         )],
-        [InlineKeyboardButton(
-            text="😀 Реакции",
-            callback_data=f"reactions:{video_id}"
-        )],
+        [
+            InlineKeyboardButton(
+                text="😀 Реакции",
+                callback_data=f"reactions:{video_id}"
+            ),
+            InlineKeyboardButton(
+                text="🚨 Жалоба",
+                callback_data=f"report_video:{video_id}"
+            ),
+        ],
     ])
     await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
@@ -1168,6 +1189,8 @@ async def handle_video_upload(message: Message):
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
         await _update_quest_progress(session, user.id, "upload", 1)
+        # Запланировать агрегированное уведомление админам
+        await schedule_mod_notification(session, "video")
         data = _upload_notifications[user.id]
         if "count" not in data:
             data["count"] = 0
@@ -1450,6 +1473,7 @@ async def pre_checkout(query: PreCheckoutQuery):
         or payload.startswith("vip_")
         or payload.startswith("promo_")
         or payload.startswith("lootbox_")
+        or payload.startswith("user_offer_")
     )
     if not allowed:
         await query.answer(ok=False, error_message="Неверный платёжный payload.")
@@ -1630,27 +1654,19 @@ async def successful_payment(message: Message):
             )
     elif payload.startswith("user_offer_"):
         try:
-            offer_id = int(payload.split("_")[1])
+            # payload format: "user_offer_{offer_id}"
+            offer_id = int(payload.split("_")[2])
             async with async_session() as session:
                 offer = await session.get(Offer, offer_id)
                 if offer:
                     offer.status = "pending"
+                    # Отмечаем платёж как завершённый
+                    await mark_payment_paid_once(session, payload)
                     await session.commit()
                     
-                    # Уведомляем админов
-                    for admin_id in ADMINS:
-                        try:
-                            await message.bot.send_message(
-                                admin_id,
-                                f"🔔 <b>Новый пользовательский оффер!</b>\n\n"
-                                f"Оффер #{offer.id} оплачен и ждёт проверки.\n"
-                                f"Название: {offer.title}\n"
-                                f"Награды: {offer.reward_preview} + {offer.reward_final}\n"
-                                f"Длительность: {offer.duration_days} дней",
-                                parse_mode="HTML"
-                            )
-                        except Exception:
-                            pass
+                    # Агрегированное уведомление админам
+                    from app.services import schedule_mod_notification
+                    await schedule_mod_notification(session, "offer")
                 await message.answer(
                     "✅ Оплата прошла успешно! Ваш оффер отправлен на модерацию.\n"
                     "Он появится в списке, как только администратор его одобрит."
@@ -2662,18 +2678,19 @@ async def top_uploaders(callback: CallbackQuery):
             .limit(10)
         )).all()
 
-    text = "🎬 <b>Топ загрузчиков</b>\n\n"
-    medals = ["🥇", "🥈", "🥉"]
-    seen, rank = set(), 0
-    for u, cnt in rows:
-        if u.id in seen:
-            continue
-        seen.add(u.id)
-        rank += 1
-        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
-        text += f"{icon} {get_display_name(u)} — {cnt} видео\n"
-    if not rows:
-        text += "Пусто"
+        text = "🎬 <b>Топ загрузчиков</b>\n\n"
+        medals = ["🥇", "🥈", "🥉"]
+        seen, rank = set(), 0
+        for u, cnt in rows:
+            if u.id in seen:
+                continue
+            seen.add(u.id)
+            rank += 1
+            icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+            name = await get_styled_display_name(session, u)
+            text += f"{icon} {name} — {cnt} видео\n"
+        if not rows:
+            text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -2689,18 +2706,19 @@ async def top_viewers(callback: CallbackQuery):
             .limit(10)
         )).all()
 
-    text = "👁 <b>Топ зрителей</b>\n\n"
-    medals = ["🥇", "🥈", "🥉"]
-    seen, rank = set(), 0
-    for u, cnt in rows:
-        if u.id in seen:
-            continue
-        seen.add(u.id)
-        rank += 1
-        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
-        text += f"{icon} {get_display_name(u)} — {cnt} просмотров\n"
-    if not rows:
-        text += "Пусто"
+        text = "👁 <b>Топ зрителей</b>\n\n"
+        medals = ["🥇", "🥈", "🥉"]
+        seen, rank = set(), 0
+        for u, cnt in rows:
+            if u.id in seen:
+                continue
+            seen.add(u.id)
+            rank += 1
+            icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+            name = await get_styled_display_name(session, u)
+            text += f"{icon} {name} — {cnt} просмотров\n"
+        if not rows:
+            text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -2712,18 +2730,19 @@ async def top_levels(callback: CallbackQuery):
             select(User).order_by(desc(User.xp)).limit(10)
         )).scalars().all()
 
-    text = "⭐ <b>Топ по XP</b>\n\n"
-    medals = ["🥇", "🥈", "🥉"]
-    seen, rank = set(), 0
-    for u in users:
-        if u.id in seen:
-            continue
-        seen.add(u.id)
-        rank += 1
-        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
-        text += f"{icon} {get_display_name(u)} — Ур.{u.level} ({u.xp} XP)\n"
-    if not users:
-        text += "Пусто"
+        text = "⭐ <b>Топ по XP</b>\n\n"
+        medals = ["🥇", "🥈", "🥉"]
+        seen, rank = set(), 0
+        for u in users:
+            if u.id in seen:
+                continue
+            seen.add(u.id)
+            rank += 1
+            icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+            name = await get_styled_display_name(session, u)
+            text += f"{icon} {name} — Ур.{u.level} ({u.xp} XP)\n"
+        if not users:
+            text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -2735,18 +2754,19 @@ async def top_richest(callback: CallbackQuery):
             select(User).order_by(desc(User.balance)).limit(10)
         )).scalars().all()
 
-    text = "💰 <b>Топ богатых</b>\n\n"
-    medals = ["🥇", "🥈", "🥉"]
-    seen, rank = set(), 0
-    for u in users:
-        if u.id in seen:
-            continue
-        seen.add(u.id)
-        rank += 1
-        icon = medals[rank - 1] if rank <= 3 else f"{rank}."
-        text += f"{icon} {get_display_name(u)} — {u.balance:.2f} монет\n"
-    if not users:
-        text += "Пусто"
+        text = "💰 <b>Топ богатых</b>\n\n"
+        medals = ["🥇", "🥈", "🥉"]
+        seen, rank = set(), 0
+        for u in users:
+            if u.id in seen:
+                continue
+            seen.add(u.id)
+            rank += 1
+            icon = medals[rank - 1] if rank <= 3 else f"{rank}."
+            name = await get_styled_display_name(session, u)
+            text += f"{icon} {name} — {u.balance:.2f} монет\n"
+        if not users:
+            text += "Пусто"
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3457,3 +3477,82 @@ async def cmd_selfcheck(message: Message):
 
 
 
+
+
+# ════════════════════════════════════════════════
+#  ЖАЛОБЫ НА ВИДЕО
+# ════════════════════════════════════════════════
+
+class ReportState(StatesGroup):
+    picking_reason = State()
+    writing_comment = State()
+
+
+@router.callback_query(F.data.startswith("report_video:"))
+async def report_video_start(callback: CallbackQuery, state: FSMContext):
+    video_id = int(callback.data.split(":")[1])
+    await state.set_state(ReportState.picking_reason)
+    await state.update_data(report_video_id=video_id)
+
+    kb_rows = []
+    for key, label in REPORT_REASONS.items():
+        kb_rows.append([InlineKeyboardButton(text=label, callback_data=f"report_reason:{key}")])
+    kb_rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="report_cancel")])
+
+    await callback.message.answer(
+        "🚨 <b>Пожаловаться на видео</b>\n\nВыберите причину:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
+    await callback.answer()
+
+
+@router.callback_query(ReportState.picking_reason, F.data.startswith("report_reason:"))
+async def report_reason_picked(callback: CallbackQuery, state: FSMContext):
+    reason = callback.data.split(":")[1]
+    await state.update_data(report_reason=reason)
+    await state.set_state(ReportState.writing_comment)
+    await callback.message.answer(
+        "💬 Опишите проблему (или отправьте «-» чтобы пропустить):",
+    )
+    await callback.answer()
+
+
+@router.message(ReportState.writing_comment)
+async def report_comment(message: Message, state: FSMContext):
+    data = await state.get_data()
+    video_id = data.get("report_video_id")
+    reason = data.get("report_reason")
+
+    if not video_id or not reason:
+        await state.clear()
+        return
+
+    comment = None if message.text.strip() == "-" else message.text.strip()
+
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            await state.clear()
+            return
+
+        report = await create_video_report(
+            session, user.id, video_id, reason, comment,
+        )
+
+    await state.clear()
+
+    if report:
+        # Запланировать уведомление админам
+        async with async_session() as session:
+            await schedule_mod_notification(session, "report")
+        await message.answer("✅ Жалоба отправлена. Администрация разберётся.")
+    else:
+        await message.answer("❌ Не удалось отправить жалобу (возможно, вы уже жаловались на это видео).")
+
+
+@router.callback_query(ReportState.picking_reason, F.data == "report_cancel")
+async def report_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.answer("Жалоба отменена.")
+    await callback.answer()

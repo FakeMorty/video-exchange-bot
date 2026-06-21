@@ -437,6 +437,7 @@ class LotteryRound(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     draw_starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     draw_ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    draw_reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     tickets: Mapped[List["LotteryTicket"]] = relationship(back_populates="round")
@@ -500,20 +501,59 @@ class Event(Base):
     creator: Mapped["User"] = relationship(foreign_keys=[created_by])
 class UserPerk(Base):
     """
-    Активный перк пользователя (цветной ник, бустер монет/XP и т.д.)
+    Активный перк пользователя (кастомный ник, бустер монет/XP и т.д.)
     """
     __tablename__ = "user_perks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     perk_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    # perk_type values: "color_nick", "gold_nick", "coin_multiplier", "xp_multiplier", 
+    # perk_type values: "custom_nick", "coin_multiplier", "xp_multiplier",
     #                   "stars_discount", "priority_moderation", "exclusive_reactions"
+    # Legacy (still functional): "color_nick", "gold_nick"
+    style_id: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    # style_id: 1-50 для custom_nick, None для остальных перков
     active_until: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     purchased_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="perks")
+
+
+class VideoReport(Base):
+    """Жалоба пользователя на видео/фото."""
+    __tablename__ = "video_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False, index=True)
+    reporter_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(50), nullable=False)
+    # reason values: "spam", "shock", "copyright", "other"
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending / reviewed / dismissed
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    video: Mapped["Video"] = relationship(foreign_keys=[video_id])
+    reporter: Mapped["User"] = relationship(foreign_keys=[reporter_user_id])
+    reviewer: Mapped["User | None"] = relationship(foreign_keys=[reviewed_by])
+
+
+class ModNotification(Base):
+    """Агрегированное уведомление о модерации для админов.
+    
+    Одна запись = один 'пакет' (видео, офферы, жалобы).
+    Админ видит счётчик, а не 500 отдельных уведомлений.
+    """
+    __tablename__ = "mod_notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    # kind: "video", "offer", "report"
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class BotSetting(Base):

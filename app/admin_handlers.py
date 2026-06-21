@@ -17,14 +17,17 @@ from app.config import ENABLE_AUTO_MODERATION
 from app.db import async_session
 from app.models import (
     Base,
-    User, Video, TrustedUploader, Event, ActiveSale
+    User, Video, TrustedUploader, Event, ActiveSale,
+    VideoReport, ModNotification,
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
     get_user_dossier, count_pending_videos, count_approved_videos, count_rejected_videos,
     get_next_pending_video, approve_video, reject_video,
-    get_admin_extended_stats, get_display_name,
-    get_user_by_display_name, get_recent_feedback, get_active_sale
+    get_admin_extended_stats, get_display_name, get_styled_display_name,
+    get_user_by_display_name, get_recent_feedback, get_active_sale,
+    get_active_events, approve_all_pending,
+    get_pending_reports, dismiss_report, REPORT_REASONS,
 )
 from app.keyboards import (
     admin_main_keyboard, moderation_keyboard,
@@ -233,7 +236,7 @@ async def admin_get_pending(callback: CallbackQuery):
             await callback.answer()
             return
         uploader = await get_user_by_id(session, video.uploader_user_id)
-        name = get_display_name(uploader) if uploader else "???"
+        name = await get_styled_display_name(session, uploader) if uploader else "???"
         caption = f"📹 #{video.id} | {video.content_type}\n👤 {name}\n📅 {video.created_at.strftime('%d.%m %H:%M')}"
         try:
             if video.content_type == "photo":
@@ -420,9 +423,22 @@ async def event_list_all(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
     async with async_session() as session:
         events = (await session.execute(select(Event).order_by(Event.created_at.desc()).limit(20))).scalars().all()
-    text = "📋 Последние 20 событий:\n" + "\n".join([f"• {escape(ev.name)} ({ev.discount_percent}%)" for ev in events])
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="admin_events_menu")]])
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    if not events:
+        await callback.message.answer("Нет событий.")
+        await callback.answer()
+        return
+    for ev in events:
+        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.utcnow() else "🔴 Завершено"
+        text = (
+            f"🎉 <b>{escape(ev.name)}</b>\n"
+            f"Скидка: {ev.discount_percent}% | {status}\n"
+            f"До: {ev.end_date.strftime('%d.%m.%Y %H:%M')}"
+        )
+        kb_rows = []
+        if ev.is_active and ev.end_date > datetime.utcnow():
+            kb_rows.append([InlineKeyboardButton(text="🛑 Остановить", callback_data=f"event_stop:{ev.id}")])
+        kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_events_menu")])
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await callback.answer()
 
 
@@ -568,7 +584,8 @@ async def process_dossier(message: Message, state: FSMContext):
             await message.answer("❌ Не найден")
             return
         d = await get_user_dossier(session, user.id)
-    text_out = f"📋 <b>Досье: {escape(get_display_name(user))}</b>\n💰 Баланс: {user.balance}\n📤 Загрузок: {d['videos_uploaded']}"
+    styled_name = await get_styled_display_name(session, user, card=True)
+    text_out = f"📋 <b>Досье:</b>\n{styled_name}\n💰 Баланс: {user.balance}\n📤 Загрузок: {d['videos_uploaded']}"
     await message.answer(text_out, parse_mode="HTML")
     await state.clear()
 
@@ -1380,3 +1397,274 @@ async def trusted_remove_process(message: Message, state: FSMContext):
     await message.answer(f"✅ {get_display_name(user)} удалён из списка доверенных авторов.")
     await state.clear()
 
+
+# ============================
+# ДОСРОЧНАЯ ОСТАНОВКА СОБЫТИЙ
+# ============================
+@router.callback_query(F.data == "admin_events_list_full")
+async def admin_events_list_full(callback: CallbackQuery):
+    """Полный список событий с кнопками остановки."""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        events = (await session.execute(
+            select(Event).order_by(Event.created_at.desc()).limit(20)
+        )).scalars().all()
+
+    if not events:
+        await callback.message.answer("Нет событий.")
+        await callback.answer()
+        return
+
+    for ev in events:
+        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.utcnow() else "🔴 Завершено"
+        text = (
+            f"🎉 <b>{escape(ev.name)}</b>\n"
+            f"Скидка: {ev.discount_percent}% | {status}\n"
+            f"До: {ev.end_date.strftime('%d.%m.%Y %H:%M')}"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[])
+        if ev.is_active and ev.end_date > datetime.utcnow():
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛑 Остановить", callback_data=f"event_stop:{ev.id}")],
+            ])
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("event_stop:"))
+async def event_stop(callback: CallbackQuery):
+    """Досрочно остановить событие."""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    event_id = int(callback.data.split(":")[1])
+    async with async_session() as session:
+        ev = (await session.execute(
+            select(Event).where(Event.id == event_id)
+        )).scalar_one_or_none()
+        if not ev:
+            await callback.answer("Событие не найдено.", show_alert=True)
+            return
+        ev.is_active = False
+        ev.end_date = datetime.utcnow()
+        await session.commit()
+    await callback.message.edit_text(
+        f"🛑 Событие «{escape(ev.name)}» остановлено.",
+        parse_mode="HTML",
+    )
+    await callback.answer("Остановлено!")
+
+
+# ============================
+# ДОСРОЧНАЯ ОСТАНОВКА АКЦИЙ
+# ============================
+@router.callback_query(F.data == "admin_sales_list_full")
+async def admin_sales_list_full(callback: CallbackQuery):
+    """Полный список акций с кнопками остановки."""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        sales = (await session.execute(
+            select(ActiveSale).order_by(ActiveSale.id.desc()).limit(20)
+        )).scalars().all()
+
+    if not sales:
+        await callback.message.answer("Нет акций.")
+        await callback.answer()
+        return
+
+    for sale in sales:
+        status = "🟢 Активна" if sale.end_date > datetime.utcnow() else "🔴 Завершена"
+        text = (
+            f"🛍 <b>Акция #{sale.id}</b>\n"
+            f"Скидка: {sale.discount_percent}% на {sale.applies_to} | {status}\n"
+            f"До: {sale.end_date.strftime('%d.%m.%Y %H:%M')}"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[])
+        if sale.end_date > datetime.utcnow():
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛑 Остановить", callback_data=f"sale_stop:{sale.id}")],
+            ])
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sale_stop:"))
+async def sale_stop_force(callback: CallbackQuery):
+    """Досрочно остановить акцию."""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    sale_id = int(callback.data.split(":")[1])
+    async with async_session() as session:
+        sale = (await session.execute(
+            select(ActiveSale).where(ActiveSale.id == sale_id)
+        )).scalar_one_or_none()
+        if not sale:
+            await callback.answer("Акция не найдена.", show_alert=True)
+            return
+        sale.end_date = datetime.utcnow()
+        await session.commit()
+    await callback.message.edit_text(
+        f"🛑 Акция #{sale_id} остановлена.",
+        parse_mode="HTML",
+    )
+    await callback.answer("Остановлена!")
+
+
+# ============================
+# ОДОБРИТЬ ВСЁ (APPROVE ALL)
+# ============================
+@router.callback_query(F.data == "admin_approve_all")
+async def admin_approve_all(callback: CallbackQuery):
+    """Показать подтверждение одобрения всех pending-видео."""
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только супер-админ.", show_alert=True)
+        return
+    async with async_session() as session:
+        pending_count = await count_pending_videos(session)
+
+    if pending_count == 0:
+        await callback.message.answer("✅ Очередь пуста — нечего одобрять.")
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        f"⚠️ <b>Одобрить ВСЕ видео?</b>\n\n"
+        f"В очереди: <b>{pending_count}</b> файлов.\n"
+        f"Все будут одобрены, загрузчики получат награды.\n"
+        f"Действие необратимо.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, одобрить всё", callback_data="admin_approve_all_confirm"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="admin_center"),
+            ],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_approve_all_confirm")
+async def admin_approve_all_confirm(callback: CallbackQuery):
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только супер-админ.", show_alert=True)
+        return
+    async with async_session() as session:
+        admin = await get_user(session, callback.from_user.id)
+        admin_id = admin.id if admin else 0
+        count = await approve_all_pending(session, admin_id)
+    await callback.message.edit_text(
+        f"✅ <b>Одобрено {count} файлов!</b>\n\nНаграды начислены всем загрузчикам.",
+        parse_mode="HTML",
+    )
+    await callback.answer(f"Одобрено {count} файлов!")
+
+
+# ============================
+# ЖАЛОБЫ НА ВИДЕО
+# ============================
+@router.callback_query(F.data == "admin_reports")
+async def admin_reports_menu(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        reports = await get_pending_reports(session, limit=20)
+
+    if not reports:
+        await callback.message.answer(
+            "✅ Нет жалоб на рассмотрении.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")],
+            ]),
+        )
+        await callback.answer()
+        return
+
+    text = "🚨 <b>Жалобы на контент</b>\n\n"
+    for r in reports[:10]:
+        reason_label = REPORT_REASONS.get(r.reason, r.reason)
+        text += (
+            f"#{r.id} | {reason_label}\n"
+            f"  Видео #{r.video_id} | От user_id={r.reporter_user_id}\n"
+        )
+        if r.comment:
+            text += f"  💬 {escape(r.comment[:80])}\n"
+        text += "\n"
+
+    # Кнопки для каждой жалобы
+    kb_rows = []
+    for r in reports[:10]:
+        reason_label = REPORT_REASONS.get(r.reason, r.reason)
+        kb_rows.append([
+            InlineKeyboardButton(
+                text=f"✅ Отклонить #{r.id}",
+                callback_data=f"report_dismiss:{r.id}",
+            ),
+            InlineKeyboardButton(
+                text=f"🗑 Удалить видео #{r.video_id}",
+                callback_data=f"report_remove_video:{r.id}:{r.video_id}",
+            ),
+        ])
+    kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")])
+
+    await callback.message.answer(
+        text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("report_dismiss:"))
+async def report_dismiss(callback: CallbackQuery):
+    """Отклонить жалобу (оставить видео)."""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    report_id = int(callback.data.split(":")[1])
+    async with async_session() as session:
+        admin = await get_user(session, callback.from_user.id)
+        ok = await dismiss_report(session, report_id, admin.id if admin else 0)
+    if ok:
+        await callback.answer("Жалоба отклонена ✅")
+    else:
+        await callback.answer("Жалоба не найдена.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("report_remove_video:"))
+async def report_remove_video(callback: CallbackQuery):
+    """Удалить видео по жалобе и закрыть жалобу."""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Неверный формат.", show_alert=True)
+        return
+    report_id = int(parts[1])
+    video_id = int(parts[2])
+    async with async_session() as session:
+        admin = await get_user(session, callback.from_user.id)
+        # Удаляем видео (помечаем как rejected)
+        v = (await session.execute(
+            select(Video).where(Video.id == video_id)
+        )).scalar_one_or_none()
+        if v:
+            v.status = "rejected"
+            v.rejection_reason = "removed_by_report"
+        # Закрываем ВСЕ pending-жалобы на это видео
+        pending_reports = (await session.execute(
+            select(VideoReport).where(
+                VideoReport.video_id == video_id,
+                VideoReport.status == "pending",
+            )
+        )).scalars().all()
+        for r in pending_reports:
+            r.status = "reviewed"
+            r.reviewed_by = admin.id if admin else 0
+        await session.commit()
+    await callback.answer(f"Видео #{video_id} удалено, жалобы закрыты 🗑", show_alert=True)

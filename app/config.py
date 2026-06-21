@@ -275,3 +275,15 @@ ENABLE_AUTO_MODERATION = _get_bool("ENABLE_AUTO_MODERATION", True)
 
 # Админы покупают всё бесплатно (для тестирования / эксплуатации)
 ENABLE_ADMIN_FREE = _get_bool("ENABLE_ADMIN_FREE", False)
+
+# ============================
+# AI-АССИСТЕНТ (DeepSeek V4 Flash via OpenModel)
+# ============================
+ENABLE_AI_ASSISTANT = _get_bool("ENABLE_AI_ASSISTANT", True)
+AI_ASSISTANT_API_KEY = _get_str("AI_ASSISTANT_API_KEY", "om-2iuAzLeMjkk4EuxYnw5iHKjk6pGz1oxnJxujXFf")
+AI_ASSISTANT_BASE_URL = _get_str("AI_ASSISTANT_BASE_URL", "https://api.openmodel.ai")
+AI_ASSISTANT_MODEL = _get_str("AI_ASSISTANT_MODEL", "deepseek-v4-flash")
+AI_ASSISTANT_MAX_TOKENS = _get_int("AI_ASSISTANT_MAX_TOKENS", 2048)
+AI_ASSISTANT_COOLDOWN_SEC = _get_int("AI_ASSISTANT_COOLDOWN_SEC", 5)
+AI_ASSISTANT_HISTORY_LIMIT = _get_int("AI_ASSISTANT_HISTORY_LIMIT", 10)  # пар сообщений
+AI_ASSISTANT_DAILY_LIMIT = _get_int("AI_ASSISTANT_DAILY_LIMIT", 50)

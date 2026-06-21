@@ -245,20 +245,9 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             session.add(offer)
             await session.commit()
             
-            # Уведомляем админов
-            for admin_id in ADMINS:
-                try:
-                    await callback.bot.send_message(
-                        admin_id,
-                        f"🔔 <b>Новый пользовательский оффер!</b>\n\n"
-                        f"Оффер #{offer.id} создан и ждёт проверки.\n"
-                        f"Название: {offer.title}\n"
-                        f"Награды: {offer.reward_preview} + {offer.reward_final}\n"
-                        f"Длительность: {offer.duration_days} дней",
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
+            # Агрегированное уведомление админам (вместо прямого пуша)
+            from app.services import schedule_mod_notification
+            await schedule_mod_notification(session, "offer")
 
             await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
             await state.clear()
