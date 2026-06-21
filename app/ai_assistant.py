@@ -66,6 +66,17 @@ _STICKER_KEYWORDS: dict[str, str] = {}
 _stickers_loaded = False
 
 # Статический маппинг: ключевые слова в ответе Кати → имя стикера
+# Эмоции, которые ВСЕГДА отправляют стикер (без рандома)
+_ALWAYS_STICKER_KEYWORDS = {
+    "привет", "здравствуй", "хай", "пока", "прощай",  # привет/прощание
+    "злюсь", "бесишь", "злость", "обижа", "дулась", "надула",  # злость/обида
+    "плачу", "слёзы", "рыдаю",  # плачет
+    "красне", "застенч", "смущ", "сгораю", "перегрев",  # стыд/перегрев
+}
+
+# Остальные эмоции — 35% шанс стикера
+_STICKER_CHANCE = 0.35
+
 _STICKER_EMOTION_MAP = {
     "привет": "01_greet",
     "здравствуй": "01_greet",
@@ -156,24 +167,41 @@ async def load_sticker_set(bot) -> None:
 
 
 def _pick_sticker_for_text(text: str) -> str | None:
-    """Выбрать стикер на основе текста ответа Кати."""
+    """Выбрать стикер на основе текста ответа Кати.
+
+    Логика:
+    - Сильные эмоции (злость, обида, плачет, стыд, приветствие) → ВСЕГДА стикер
+    - Остальные совпадения → 35% шанс
+    - Нет совпадения → без стикера
+    """
     if not _stickers_loaded:
         return None
 
     text_lower = text.lower()
 
     # Ищем совпадение по ключевым словам
+    matched_keyword = None
+    matched_sticker_name = None
     for keyword, sticker_name in _STICKER_EMOTION_MAP.items():
         if keyword in text_lower:
-            file_id = _STICKER_KEYWORDS.get(sticker_name)
-            if file_id:
-                return file_id
+            matched_keyword = keyword
+            matched_sticker_name = sticker_name
+            break  # первое совпадение достаточно
 
-    # Рандомный стикер если нет совпадения (30% шанс)
-    if random.random() < 0.3 and _STICKER_KEYWORDS:
-        all_ids = [v for v in _STICKER_KEYWORDS.values() if isinstance(v, str)]
-        if all_ids:
-            return random.choice(all_ids)
+    if not matched_keyword:
+        return None
+
+    file_id = _STICKER_KEYWORDS.get(matched_sticker_name)
+    if not file_id:
+        return None
+
+    # Сильные эмоции → ВСЕГДА отправляем
+    if matched_keyword in _ALWAYS_STICKER_KEYWORDS:
+        return file_id
+
+    # Остальные → 35% шанс
+    if random.random() < _STICKER_CHANCE:
+        return file_id
 
     return None
 
