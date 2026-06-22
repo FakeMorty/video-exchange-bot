@@ -19,7 +19,7 @@ def main() -> int:
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     backup_path = out_dir / f"{db_path.stem}_{stamp}{db_path.suffix}"
     shutil.copy2(db_path, backup_path)
     print(f"Backup created: {backup_path}")

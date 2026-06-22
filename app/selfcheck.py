@@ -88,7 +88,7 @@ async def run_selfcheck(session: AsyncSession) -> list[CheckItem]:
     except Exception as e:
         checks.append(CheckItem("pdf_font:arial", False, str(e)))
 
-    checks.append(CheckItem("time:utc", True, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")))
+    checks.append(CheckItem("time:utc", True, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
     return checks
 
 

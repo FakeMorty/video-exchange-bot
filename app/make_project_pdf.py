@@ -145,7 +145,7 @@ def build_blocks(root: Path):
 
     header = [
         "<PROJECT PDF DUMP>",
-        f"Generated at: {datetime.utcnow().isoformat()} UTC",
+        f"Generated at: {datetime.now(timezone.utc).isoformat()} UTC",
         f"Root: {root.resolve()}",
         f"Files included: {len(files)}",
         "",

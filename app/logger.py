@@ -10,7 +10,7 @@ def get_logger(name: str) -> logging.Logger:
 
 def _make_payload(message: str, **kwargs) -> str:
     payload = {
-        "time": datetime.utcnow().isoformat() + "Z",
+        "time": datetime.now(timezone.utc).isoformat() + "Z",
         "message": message,
     }
     payload.update(kwargs)

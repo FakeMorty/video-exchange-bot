@@ -797,6 +797,10 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
     await site.start()
 
+    # Manually trigger on_startup signals since we are using AppRunner
+    for startup_func in app.on_startup:
+        await startup_func(app)
+
     try:
         log_info(logger, "Polling started")
         stop_event = asyncio.Event()
