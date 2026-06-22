@@ -2,7 +2,7 @@ from html import escape
 import uuid
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 from aiogram import Router, F
@@ -161,7 +161,7 @@ def _cooldown_ok(
     key,
     cooldown_seconds: int,
 ) -> bool:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     last = cache.get(key)
     if last and (now - last).total_seconds() < cooldown_seconds:
         return False
@@ -234,7 +234,7 @@ def calc_level_from_xp(xp: int) -> int:
 
 
 def is_vip(user) -> bool:
-    return bool(user.vip_until and user.vip_until > datetime.utcnow())
+    return bool(user.vip_until and user.vip_until > datetime.now(timezone.utc))
 
 
 async def require_nickname(message: Message, user) -> bool:
@@ -679,7 +679,7 @@ async def buy_vip(callback: CallbackQuery):
             return
 
         # Admin free — выдаём VIP бесплатно
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if user.vip_until and user.vip_until > now:
             user.vip_until += timedelta(days=VIP_DURATION_DAYS)
         else:
@@ -1047,7 +1047,7 @@ async def process_comment(message: Message, state: FSMContext):
             return
 
         # Антиспам
-        ten_min_ago = datetime.utcnow() - timedelta(minutes=10)
+        ten_min_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
         recent = (await session.execute(
             select(func.count(Comment.id)).where(
                 Comment.user_id == user.id,
@@ -1333,7 +1333,7 @@ async def btn_buy(message: Message):
         if DYNAMIC_STAR_DISCOUNT_ENABLED:
             try:
                 start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
-                now_h = datetime.utcnow().hour
+                now_h = datetime.now(timezone.utc).hour
                 if start_h <= now_h < end_h:
                     bonus_text = f"\n🔥 <b>Сейчас действует бонус +{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}% монет!</b>"
                 else:
@@ -1533,7 +1533,7 @@ async def successful_payment(message: Message):
                     await session.rollback()
                     await message.answer("✅ Платёж уже был обработан ранее.")
                     return
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 user.vip_until = (
                     user.vip_until + timedelta(days=VIP_DURATION_DAYS)
                     if user.vip_until and user.vip_until > now
@@ -2354,8 +2354,8 @@ async def game_pay_session(callback: CallbackQuery):
         if is_admin_or_super(callback.from_user.id, user):
             gs = await get_or_create_game_session(session, user.id)
             gs.games_played = 0
-            gs.window_start = datetime.utcnow()
-            gs.paid_at = datetime.utcnow()
+            gs.window_start = datetime.now(timezone.utc)
+            gs.paid_at = datetime.now(timezone.utc)
             await session.commit()
             await callback.answer("✅ Сессия продлена (админ).", show_alert=True)
             return
@@ -2783,7 +2783,7 @@ async def btn_quests(message: Message):
         if not await require_nickname(message, user):
             return
 
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         quests = (await session.execute(
             select(DailyQuestProgress).where(
                 DailyQuestProgress.user_id == user.id,
@@ -2887,7 +2887,7 @@ async def _update_quest_progress(
     quest_type: str,
     amount: int = 1
 ):
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     quests = (await session.execute(
         select(DailyQuestProgress).where(
             DailyQuestProgress.user_id == user_id,
@@ -3052,7 +3052,7 @@ async def lottery_buy(callback: CallbackQuery):
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
         if admin_free:
             round_obj = await ensure_current_lottery_round(session)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             if round_obj.status != "open" or now >= round_obj.draw_starts_at:
                 await callback.answer("Продажа билетов закрыта до следующей недели.", show_alert=True)
                 return
@@ -3438,7 +3438,7 @@ async def cmd_health(message: Message):
         return
     await message.answer(
         "✅ Health OK\n"
-        f"• time_utc: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"• time_utc: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}\n"
         "• db: connected\n"
         "• bot: running",
     )

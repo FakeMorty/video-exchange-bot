@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from sqlalchemy import (
     func,
@@ -11,6 +11,10 @@ from typing import List
 
 class Base(DeclarativeBase):
     pass
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 
 class User(Base):
@@ -41,7 +45,7 @@ class User(Base):
     level: Mapped[int] = mapped_column(Integer, default=1)
     vip_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     promo_created_this_month: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Отношения
     videos: Mapped[List["Video"]] = relationship(back_populates="uploader")
@@ -89,7 +93,7 @@ class LootboxOpen(Base):
     price_stars: Mapped[int] = mapped_column(Integer, default=0)
     reward_coins: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     rarity: Mapped[str] = mapped_column(String(20), default="common")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
     user: Mapped["User"] = relationship(back_populates="lootbox_opens")
 
@@ -106,7 +110,7 @@ class TrustedUploader(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     admin_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     trusted_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
     admin: Mapped["User"] = relationship(foreign_keys=[admin_user_id], back_populates="trusted_uploaders")
     trusted: Mapped["User"] = relationship(foreign_keys=[trusted_user_id])
@@ -119,7 +123,7 @@ class UserActionLog(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(255), nullable=False)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="action_logs")
 
@@ -136,7 +140,7 @@ class BalanceLog(Base):
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     admin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
     user: Mapped["User"] = relationship(back_populates="balance_logs")
 
@@ -153,7 +157,7 @@ class Video(Base):
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     rejection_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     uploader: Mapped["User"] = relationship(back_populates="videos")
     views: Mapped[List["VideoView"]] = relationship(back_populates="video")
@@ -173,13 +177,13 @@ class VideoView(Base):
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
     watched_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now,
         server_default=func.now(),
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now,
         server_default=func.now(),
     )
 
@@ -197,7 +201,7 @@ class VideoRating(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
     rating: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="ratings")
     video: Mapped["Video"] = relationship(back_populates="ratings")
@@ -210,7 +214,7 @@ class Comment(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="comments")
     video: Mapped["Video"] = relationship(back_populates="comments")
@@ -226,7 +230,7 @@ class ContentReaction(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), nullable=False)
     reaction_type: Mapped[str] = mapped_column(String(10), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="reactions")
     video: Mapped["Video"] = relationship(back_populates="reactions")
@@ -241,7 +245,7 @@ class Payment(Base):
     stars_amount: Mapped[int] = mapped_column(Integer, nullable=False)
     coins_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="payments")
 
@@ -267,7 +271,7 @@ class Offer(Base):
     rent_cost_per_day: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     max_simultaneous_rentals: Mapped[int] = mapped_column(Integer, default=1)
     
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     creator: Mapped["User"] = relationship(back_populates="user_offers")
     participations: Mapped[List["OfferParticipation"]] = relationship(back_populates="offer")
@@ -284,7 +288,7 @@ class OfferParticipation(Base):
     offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="started")
     reward_given: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     unsubscribed_penalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -302,7 +306,7 @@ class OfferRental(Base):
     rent_days: Mapped[int] = mapped_column(Integer, nullable=False)
     cost_paid: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -315,7 +319,7 @@ class GameHistory(Base):
     bet: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     result: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
     user: Mapped["User"] = relationship(back_populates="game_history")
 
@@ -335,7 +339,7 @@ class DailyQuestProgress(Base):
     reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     reward_claimed: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="quest_progress")
 
@@ -364,7 +368,7 @@ class UserAdState(Base):
     forced_offer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     forced_offer_shown_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     videos_watched_since_ad: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="ad_state")
 
@@ -389,7 +393,7 @@ class Promocode(Base):
     created_via_stars: Mapped[bool] = mapped_column(Boolean, default=True)  # False если админ создал бесплатно
     stars_paid: Mapped[int] = mapped_column(Integer, default=0)              # сколько Stars заплачено
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     creator: Mapped["User"] = relationship(back_populates="created_promocodes")
     activations: Mapped[List["PromocodeActivation"]] = relationship(back_populates="promocode")
@@ -407,7 +411,7 @@ class PromocodeActivation(Base):
         ForeignKey("promocodes.id"), nullable=False, index=True
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     promocode: Mapped["Promocode"] = relationship(back_populates="activations")
     user: Mapped["User"] = relationship(back_populates="activated_promocodes")
@@ -421,7 +425,7 @@ class Feedback(Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="suggestion")
     text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="new")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
 
 class LotteryRound(Base):
@@ -439,7 +443,7 @@ class LotteryRound(Base):
     draw_starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     draw_ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     draw_reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     tickets: Mapped[List["LotteryTicket"]] = relationship(back_populates="round")
 
@@ -453,7 +457,7 @@ class LotteryTicket(Base):
     numbers: Mapped[str] = mapped_column(String(100), nullable=False)
     matched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reward_paid: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     round: Mapped["LotteryRound"] = relationship(back_populates="tickets")
     user: Mapped["User"] = relationship(back_populates="lottery_tickets")
@@ -497,7 +501,7 @@ class Event(Base):
     end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     creator: Mapped["User"] = relationship(foreign_keys=[created_by])
 class UserPerk(Base):
@@ -516,7 +520,7 @@ class UserPerk(Base):
     # style_id: 1-50 для custom_nick, None для остальных перков
     active_until: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    purchased_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    purchased_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="perks")
 
@@ -533,7 +537,7 @@ class VideoReport(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending / reviewed / dismissed
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     video: Mapped["Video"] = relationship(foreign_keys=[video_id])
     reporter: Mapped["User"] = relationship(foreign_keys=[reporter_user_id])
@@ -553,7 +557,7 @@ class ModNotification(Base):
     # kind: "video", "offer", "report"
     count: Mapped[int] = mapped_column(Integer, default=1)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -565,7 +569,7 @@ class KatyaChat(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(50), nullable=False, default="Болтовня")
     message_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="katya_chats")
 

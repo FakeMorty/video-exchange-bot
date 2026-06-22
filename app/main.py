@@ -6,7 +6,7 @@ from sqlalchemy import select
 from alembic import command
 from alembic.config import Config
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -139,7 +139,7 @@ async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
     
     # Время в МСК для удобства
-    draw_msk = draw_starts_at + __import__('datetime').timedelta(hours=3)
+    draw_msk = draw_starts_at + timedelta(hours=3)
     time_str = draw_msk.strftime("%H:%M")
     
     msg = (
@@ -201,13 +201,13 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
         try:
             async with async_session() as session:
                 round_obj = await ensure_current_lottery_round(session)
-                utc_now = datetime.utcnow()
+                utc_now = datetime.now(timezone.utc)
 
                 # Напоминание за 1 час до розыгрыша
                 if (
                     round_obj.status == "open"
                     and not round_obj.draw_reminder_sent
-                    and utc_now >= round_obj.draw_starts_at - __import__('datetime').timedelta(hours=REMINDER_HOURS_BEFORE)
+                    and utc_now >= round_obj.draw_starts_at - timedelta(hours=REMINDER_HOURS_BEFORE)
                 ):
                     round_obj.draw_reminder_sent = True
                     await session.commit()
@@ -698,6 +698,36 @@ async def _mod_notification_loop(bot):
             await asyncio.sleep(300)
 
 
+async def video_cache_cleanup_worker(stop_event: asyncio.Event):
+    """Периодически очищает кэш видео, если он стал слишком большим."""
+    cache_dir = "video_cache"
+    MAX_CACHE_SIZE_MB = 2000  # 2 ГБ
+    CLEANUP_INTERVAL = 3600  # Раз в час
+    while not stop_event.is_set():
+        try:
+            if os.path.exists(cache_dir):
+                total_size = 0
+                files = []
+                for f in os.listdir(cache_dir):
+                    path = os.path.join(cache_dir, f)
+                    if os.path.isfile(path):
+                        size = os.path.getsize(path)
+                        total_size += size
+                        files.append((path, os.path.getmtime(path), size))
+                
+                if total_size > MAX_CACHE_SIZE_MB * 1024 * 1024:
+                    # Сортируем по времени модификации (старые в начале)
+                    files.sort(key=lambda x: x[1])
+                    while total_size > MAX_CACHE_SIZE_MB * 1024 * 1024 and files:
+                        path, _, size = files.pop(0)
+                        os.remove(path)
+                        total_size -= size
+                    log_info(logger, f"Video cache cleaned. Current size: {total_size / (1024*1024):.2f} MB")
+        except Exception as e:
+            log_error(logger, f"Video cache cleanup error: {e}")
+        await asyncio.sleep(CLEANUP_INTERVAL)
+
+
 async def on_startup(app):
     bot = app['bot']
     await init_db()
@@ -780,6 +810,10 @@ async def main():
         if ENABLE_LOTTERY:
             lottery_task = asyncio.create_task(lottery_worker(bot, stop_event))
             log_info(logger, "Lottery worker enabled")
+        
+        cache_task = asyncio.create_task(video_cache_cleanup_worker(stop_event))
+        log_info(logger, "Video cache cleanup worker enabled")
+        
         await dp.start_polling(bot)
     finally:
         stop_event.set()
@@ -795,6 +829,14 @@ async def main():
             lottery_task.cancel()
             try:
                 await lottery_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        if cache_task is not None:
+            cache_task.cancel()
+            try:
+                await cache_task
             except asyncio.CancelledError:
                 pass
             except Exception:

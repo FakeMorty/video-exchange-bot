@@ -2,7 +2,7 @@ import math
 import asyncio
 import uuid
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -182,7 +182,7 @@ async def get_nick_style_id(session: AsyncSession, user_id: int) -> int | None:
             UserPerk.user_id == user_id,
             UserPerk.perk_type == "custom_nick",
             UserPerk.is_active == True,
-            UserPerk.active_until > datetime.utcnow(),
+            UserPerk.active_until > datetime.now(timezone.utc),
         )
     )).scalar_one_or_none()
     if custom and custom.style_id:
@@ -195,7 +195,7 @@ async def get_nick_style_id(session: AsyncSession, user_id: int) -> int | None:
                 UserPerk.user_id == user_id,
                 UserPerk.perk_type == perk_type,
                 UserPerk.is_active == True,
-                UserPerk.active_until > datetime.utcnow(),
+                UserPerk.active_until > datetime.now(timezone.utc),
             )
         )).scalar_one_or_none()
         if perk:
@@ -571,25 +571,23 @@ async def auto_approve_if_trusted(
 
 
 async def get_random_video_for_user(session: AsyncSession, user_id: int) -> "Video | None":
-    viewed = select(VideoView.video_id).where(VideoView.user_id == user_id)
     return (await session.execute(
         select(Video).where(
             Video.status == "approved",
             Video.content_type == "video",
             Video.uploader_user_id != user_id,
-            ~Video.id.in_(viewed)
+            ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists()
         ).order_by(func.random()).limit(1)
     )).scalar_one_or_none()
 
 
 async def get_random_photo_for_user(session: AsyncSession, user_id: int) -> "Video | None":
-    viewed = select(VideoView.video_id).where(VideoView.user_id == user_id)
     return (await session.execute(
         select(Video).where(
             Video.status == "approved",
             Video.content_type == "photo",
             Video.uploader_user_id != user_id,
-            ~Video.id.in_(viewed)
+            ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists()
         ).order_by(func.random()).limit(1)
     )).scalar_one_or_none()
 
@@ -603,7 +601,7 @@ async def record_view_and_charge(session: AsyncSession, user_id: int, video_id: 
         return False
     await log_balance_change(session, user, -cost, "watch", source_id=video_id)
     user.balance -= cost
-    view = VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.utcnow())
+    view = VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.now(timezone.utc))
     session.add(view)
     await session.commit()
     return True
@@ -623,7 +621,7 @@ async def record_view_and_charge_with_cost(
         return False
     await log_balance_change(session, user, -cost, "watch", source_id=video_id)
     user.balance -= cost
-    session.add(VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.utcnow()))
+    session.add(VideoView(user_id=user_id, video_id=video_id, watched_at=datetime.now(timezone.utc)))
     await session.commit()
     return True
 
@@ -673,14 +671,14 @@ async def record_photo_view(session: AsyncSession, user_id: int, photo_id: int) 
         )
     )).scalar_one_or_none()
     if not existing:
-        view = VideoView(user_id=user_id, video_id=photo_id, watched_at=datetime.utcnow())
+        view = VideoView(user_id=user_id, video_id=photo_id, watched_at=datetime.now(timezone.utc))
         session.add(view)
         await session.commit()
     return True
 
 
 async def check_daily_photo_limit(session: AsyncSession, user_id: int) -> bool:
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     count = (await session.execute(
         select(func.count(VideoView.id)).where(
             VideoView.user_id == user_id,
@@ -746,7 +744,7 @@ async def claim_daily_bonus(session: AsyncSession, user_id: int) -> tuple[bool, 
     user = await get_user_by_id(session, user_id)
     if not user:
         return False, "Пользователь не найден."
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if user.last_bonus_at and user.last_bonus_at.date() == now.date():
         return False, "Вы уже получили бонус сегодня."
     streak = 1
@@ -898,13 +896,13 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> Payme
         if DYNAMIC_STAR_DISCOUNT_ENABLED:
             try:
                 start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
-                now_h = datetime.utcnow().hour
+                now_h = datetime.now(timezone.utc).hour
                 if start_h <= now_h < end_h:
                     bonus_multiplier = DYNAMIC_STAR_DISCOUNT_MULTIPLIER
             except Exception:
                 pass
         # Первая покупка за день
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         first_today = not (await session.execute(
             select(Payment).where(
                 Payment.user_id == user.id,
@@ -949,7 +947,7 @@ async def get_offer_by_id(session: AsyncSession, offer_id: int) -> "Offer | None
 
 
 async def _get_today_offer_rewards_total(session: AsyncSession, user_id: int) -> Decimal:
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     value = (await session.execute(
         select(func.sum(BalanceLog.amount)).where(
             BalanceLog.user_id == user_id,
@@ -1018,7 +1016,7 @@ async def verify_offer_subscription(session: AsyncSession, user_id: int,
         return False
 
     part.status = "completed"
-    part.checked_at = datetime.utcnow()
+    part.checked_at = datetime.now(timezone.utc)
 
     today_offer_rewards = await _get_today_offer_rewards_total(session, user_id)
     cap_remaining = max(to_decimal(OFFER_DAILY_REWARD_CAP) - today_offer_rewards, Decimal("0"))
@@ -1073,7 +1071,7 @@ async def apply_offer_unsubscribe_penalty(
     )
     user.balance -= total_charge
     part.status = "unsubscribed"
-    part.unsubscribed_penalized_at = datetime.utcnow()
+    part.unsubscribed_penalized_at = datetime.now(timezone.utc)
     await session.commit()
     return rewarded_total, extra_penalty, total_charge
 
@@ -1126,7 +1124,7 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
 # ИГРОВЫЕ СЕССИИ
 # ============================
 async def get_or_create_game_session(session: AsyncSession, user_id: int) -> GameSession:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     window_start = now - timedelta(hours=GAME_SESSION_HOURS)
     gs = (await session.execute(
         select(GameSession).where(
@@ -1157,8 +1155,8 @@ async def pay_for_game_session(session: AsyncSession, user_id: int) -> bool:
     user.balance -= cost
     gs = await get_or_create_game_session(session, user_id)
     gs.games_played = 0
-    gs.window_start = datetime.utcnow()
-    gs.paid_at = datetime.utcnow()
+    gs.window_start = datetime.now(timezone.utc)
+    gs.paid_at = datetime.now(timezone.utc)
     await session.commit()
     return True
 
@@ -1175,7 +1173,7 @@ async def increment_game_played(session: AsyncSession, user_id: int):
 async def get_admin_extended_stats(session: AsyncSession) -> dict:
     users = (await session.execute(select(func.count(User.id)))).scalar_one()
     vip = (await session.execute(
-        select(func.count(User.id)).where(User.vip_until > datetime.utcnow())
+        select(func.count(User.id)).where(User.vip_until > datetime.now(timezone.utc))
     )).scalar_one()
     with_nickname = (await session.execute(
         select(func.count(User.id)).where(User.nickname_set)
@@ -1241,7 +1239,7 @@ async def get_user_dossier(session: AsyncSession, user_id: int) -> dict | None:
         )
     )).scalar_one()
     avg_rating = float(avg_rating) if avg_rating else 0.0
-    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     weekly_earned = (await session.execute(
         select(func.sum(BalanceLog.amount)).where(
             BalanceLog.user_id == user_id, BalanceLog.amount > 0,
@@ -1338,8 +1336,8 @@ async def create_promocode(
 
     if not admin_free:
         # Проверка VIP (бесплатный промокод раз в месяц)
-        if user.vip_until and user.vip_until > datetime.utcnow():
-            this_month = datetime.utcnow().month
+        if user.vip_until and user.vip_until > datetime.now(timezone.utc):
+            this_month = datetime.now(timezone.utc).month
             promo_month = user.promo_created_this_month
             # Сбрасываем счётчик если новый месяц
             if promo_month != this_month:
@@ -1354,7 +1352,7 @@ async def create_promocode(
             pass
 
     code = generate_promocode_str()
-    expires_at = datetime.utcnow() + timedelta(hours=hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
 
     promo = Promocode(
         creator_user_id=user.id,
@@ -1391,7 +1389,7 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         return "Промокод не найден."
     if not promo.is_active:
         return "Промокод отключён."
-    if promo.expires_at and promo.expires_at < datetime.utcnow():
+    if promo.expires_at and promo.expires_at < datetime.now(timezone.utc):
         return "Промокод истёк."
     if promo.used_count >= promo.max_uses:
         return "Лимит использований исчерпан."
@@ -1479,7 +1477,7 @@ def _deserialize_numbers(raw: str | None) -> list[int]:
         return []
 
 async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     key, start, draw_start, draw_end = _get_lottery_window(now)
     
     existing = (await session.execute(
@@ -1514,7 +1512,7 @@ async def get_latest_lottery_round(session: AsyncSession) -> LotteryRound | None
 
 async def buy_lottery_ticket(session: AsyncSession, user: User) -> tuple[LotteryTicket | None, str | None]:
     round_obj = await ensure_current_lottery_round(session)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if round_obj.status != "open" or now >= round_obj.draw_starts_at:
         return None, "Продажа билетов закрыта до следующей недели."
 
@@ -1689,7 +1687,7 @@ async def reset_ad_counter(session: AsyncSession, user_id: int) -> None:
     """Сбросить счётчик после показа рекламы."""
     state = await get_or_create_user_ad_state(session, user_id)
     state.videos_watched_since_ad = 0
-    state.updated_at = datetime.utcnow()
+    state.updated_at = datetime.now(timezone.utc)
     await session.commit()
 
 
@@ -1697,18 +1695,18 @@ async def can_show_offer_to_user(session: AsyncSession, user_id: int) -> bool:
     state = await get_or_create_user_ad_state(session, user_id)
     if state.last_offer_shown_at is None:
         return True
-    elapsed = (datetime.utcnow() - state.last_offer_shown_at).total_seconds() / 60
+    elapsed = (datetime.now(timezone.utc) - state.last_offer_shown_at).total_seconds() / 60
     return elapsed >= SMART_AD_MIN_INTERVAL_MINUTES
 
 
 async def mark_offer_shown(session: AsyncSession, user_id: int,
                            offer_id: int = None, forced: bool = False) -> None:
     state = await get_or_create_user_ad_state(session, user_id)
-    state.last_offer_shown_at = datetime.utcnow()
-    state.updated_at = datetime.utcnow()
+    state.last_offer_shown_at = datetime.now(timezone.utc)
+    state.updated_at = datetime.now(timezone.utc)
     if forced and offer_id:
         state.forced_offer_id = offer_id
-        state.forced_offer_shown_at = datetime.utcnow()
+        state.forced_offer_shown_at = datetime.now(timezone.utc)
     await session.commit()
 
 
@@ -1718,14 +1716,14 @@ async def should_show_low_balance_hint(session: AsyncSession, user: "User") -> b
     state = await get_or_create_user_ad_state(session, user.id)
     if state.last_low_balance_hint_at is None:
         return True
-    elapsed = (datetime.utcnow() - state.last_low_balance_hint_at).total_seconds() / 60
+    elapsed = (datetime.now(timezone.utc) - state.last_low_balance_hint_at).total_seconds() / 60
     return elapsed >= SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES
 
 
 async def mark_low_balance_hint_shown(session: AsyncSession, user_id: int) -> None:
     state = await get_or_create_user_ad_state(session, user_id)
-    state.last_low_balance_hint_at = datetime.utcnow()
-    state.updated_at = datetime.utcnow()
+    state.last_low_balance_hint_at = datetime.now(timezone.utc)
+    state.updated_at = datetime.now(timezone.utc)
     await session.commit()
 
 
@@ -1803,7 +1801,7 @@ async def get_active_events(session: AsyncSession):
 # ============================
 async def has_active_perk(session: AsyncSession, user_id: int, perk_type: str) -> bool:
     """Проверка, есть ли у пользователя активный перк указанного типа"""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     perk = (await session.execute(
         select(UserPerk).where(
             UserPerk.user_id == user_id,
@@ -1823,7 +1821,7 @@ async def get_coin_multiplier(session: AsyncSession, user_id: int) -> float:
     
     # VIP даёт множитель
     multiplier = 1.0
-    if user.vip_until and user.vip_until > datetime.utcnow():
+    if user.vip_until and user.vip_until > datetime.now(timezone.utc):
         from app.config import VIP_BONUS_MULTIPLIER
         multiplier = float(VIP_BONUS_MULTIPLIER)
     
@@ -1833,7 +1831,7 @@ async def get_coin_multiplier(session: AsyncSession, user_id: int) -> float:
             UserPerk.user_id == user_id,
             UserPerk.perk_type == "coin_multiplier",
             UserPerk.is_active == True,
-            UserPerk.active_until > datetime.utcnow(),
+            UserPerk.active_until > datetime.now(timezone.utc),
         )
     )).scalar_one_or_none()
     if coin_boost:
@@ -1849,7 +1847,7 @@ async def get_xp_multiplier(session: AsyncSession, user_id: int) -> float:
             UserPerk.user_id == user_id,
             UserPerk.perk_type == "xp_multiplier",
             UserPerk.is_active == True,
-            UserPerk.active_until > datetime.utcnow(),
+            UserPerk.active_until > datetime.now(timezone.utc),
         )
     )).scalar_one_or_none()
     return 2.0 if xp_boost else 1.0
@@ -1857,7 +1855,7 @@ async def get_xp_multiplier(session: AsyncSession, user_id: int) -> float:
 
 async def get_active_perks(session: AsyncSession, user_id: int) -> list[UserPerk]:
     """Получить все активные перки пользователя"""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return (await session.execute(
         select(UserPerk).where(
             UserPerk.user_id == user_id,
@@ -1879,7 +1877,7 @@ async def get_stars_discount(session: AsyncSession, user_id: int) -> float:
             UserPerk.user_id == user_id,
             UserPerk.perk_type == "stars_discount",
             UserPerk.is_active == True,
-            UserPerk.active_until > datetime.utcnow(),
+            UserPerk.active_until > datetime.now(timezone.utc),
         )
     )).scalar_one_or_none()
     if stars_discount_perk:
@@ -1901,7 +1899,7 @@ async def activate_perk(
     style_id: 1-50 для custom_nick, None для остальных.
     При продлении custom_nick: если передан новый style_id — заменяет старый.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     existing = (await session.execute(
         select(UserPerk).where(
             UserPerk.user_id == user_id,
@@ -2105,7 +2103,7 @@ async def flush_mod_notifications(bot, session: AsyncSession) -> int:
     # Пометить как отправленные
     for n in pending:
         n.is_sent = True
-        n.sent_at = datetime.utcnow()
+        n.sent_at = datetime.now(timezone.utc)
     await session.commit()
     return sent
 
@@ -2126,7 +2124,7 @@ async def should_flush_notifications(session: AsyncSession) -> bool:
             ModNotification.sent_at.isnot(None),
         ).order_by(ModNotification.sent_at.desc()).limit(1)
     )).scalar_one_or_none()
-    if last_sent and (datetime.utcnow() - last_sent.sent_at).total_seconds() < _MOD_NOTIFY_COOLDOWN:
+    if last_sent and (datetime.now(timezone.utc) - last_sent.sent_at).total_seconds() < _MOD_NOTIFY_COOLDOWN:
         return False
     return True
 
