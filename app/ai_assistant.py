@@ -14,7 +14,7 @@
 import asyncio
 import time
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import aiohttp
@@ -53,8 +53,11 @@ from app.models import KatyaChat
 logger = get_logger(__name__)
 router = Router()
 
-PRICE = to_decimal = lambda x: Decimal(str(x))
-_KATYA_PRICE = Decimal(str(AI_ASSISTANT_PRICE))
+# Helpers for pricing
+def to_decimal(val) -> Decimal:
+    return Decimal(str(val))
+
+_KATYA_PRICE = to_decimal(AI_ASSISTANT_PRICE)
 
 # ══════════════════════════════════════════════════
 #  Стикеры Кати — маппинг эмоция → sticker_id
@@ -356,7 +359,7 @@ async def _get_max_chats(user: "User") -> int:
     """Максимальное число чатов для пользователя."""
     if user.is_admin or user.telegram_id in ADMINS:
         return 999  # бесконечно
-    if user.vip_until and user.vip_until > datetime.utcnow():
+    if user.vip_until and user.vip_until > datetime.now(timezone.utc):
         return KATYA_MAX_CHATS_VIP
     return KATYA_MAX_CHATS
 

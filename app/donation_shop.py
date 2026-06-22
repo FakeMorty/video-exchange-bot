@@ -3,7 +3,7 @@
 Включает FSM-флоу для выбора кастомного стиля ника из 50 вариантов.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -562,7 +562,7 @@ async def donate_my_perks(callback: CallbackQuery):
                     icon = PERK_ICONS.get(perk.perk_type, "🔹")
                     name = PERK_NAMES.get(perk.perk_type, perk.perk_type)
 
-                days_left = (perk.active_until - datetime.utcnow()).days
+                days_left = (perk.active_until - datetime.now(timezone.utc)).days
                 text += f"{name}\n"
                 text += f"   ⏰ Осталось: <b>{days_left} дн.</b> (до {perk.active_until.strftime('%d.%m')})\n\n"
 

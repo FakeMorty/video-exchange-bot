@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from html import escape
 
 from aiogram import Router, F
@@ -307,7 +307,7 @@ async def admin_events_menu(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
     try:
         async with async_session() as session:
-            active = (await session.execute(select(Event).where(Event.is_active == True, Event.end_date > datetime.utcnow()).order_by(Event.start_date.desc()))).scalars().all()
+            active = (await session.execute(select(Event).where(Event.is_active == True, Event.end_date > datetime.now(timezone.utc)).order_by(Event.start_date.desc()))).scalars().all()
         text = "🎉 <b>События</b>\n\n" + ("\n".join([f"• {escape(ev.name)} ({ev.discount_percent}%)" for ev in active[:5]]) if active else "Нет активных событий.")
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="➕ Создать", callback_data="event_create_start")],
@@ -398,7 +398,7 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     data = await state.get_data()
     applies = data.get("applies", {})
-    start = datetime.utcnow()
+    start = datetime.now(timezone.utc)
     end = start + timedelta(days=data["duration_days"])
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
@@ -428,14 +428,14 @@ async def event_list_all(callback: CallbackQuery):
         await callback.answer()
         return
     for ev in events:
-        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.utcnow() else "🔴 Завершено"
+        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.now(timezone.utc) else "🔴 Завершено"
         text = (
             f"🎉 <b>{escape(ev.name)}</b>\n"
             f"Скидка: {ev.discount_percent}% | {status}\n"
             f"До: {ev.end_date.strftime('%d.%m.%Y %H:%M')}"
         )
         kb_rows = []
-        if ev.is_active and ev.end_date > datetime.utcnow():
+        if ev.is_active and ev.end_date > datetime.now(timezone.utc):
             kb_rows.append([InlineKeyboardButton(text="🛑 Остановить", callback_data=f"event_stop:{ev.id}")])
         kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_events_menu")])
         await callback.message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -462,7 +462,7 @@ async def admin_sale_stop(callback: CallbackQuery):
     async with async_session() as session:
         sale = await get_active_sale(session)
         if sale:
-            sale.end_date = datetime.utcnow()
+            sale.end_date = datetime.now(timezone.utc)
             await session.commit()
     await admin_sales_start(callback, None)
 
@@ -505,7 +505,7 @@ async def admin_sale_duration(message: Message, state: FSMContext):
 async def admin_sale_finish(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     data = await state.get_data()
-    end_date = datetime.utcnow() + timedelta(hours=data["duration_hours"])
+    end_date = datetime.now(timezone.utc) + timedelta(hours=data["duration_hours"])
     async with async_session() as session:
         sale = ActiveSale(discount_percent=data["discount_percent"], applies_to=data["applies_to"], end_date=end_date, announcement=message.text)
         session.add(sale)
@@ -1418,14 +1418,14 @@ async def admin_events_list_full(callback: CallbackQuery):
         return
 
     for ev in events:
-        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.utcnow() else "🔴 Завершено"
+        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.now(timezone.utc) else "🔴 Завершено"
         text = (
             f"🎉 <b>{escape(ev.name)}</b>\n"
             f"Скидка: {ev.discount_percent}% | {status}\n"
             f"До: {ev.end_date.strftime('%d.%m.%Y %H:%M')}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[])
-        if ev.is_active and ev.end_date > datetime.utcnow():
+        if ev.is_active and ev.end_date > datetime.now(timezone.utc):
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🛑 Остановить", callback_data=f"event_stop:{ev.id}")],
             ])
@@ -1448,7 +1448,7 @@ async def event_stop(callback: CallbackQuery):
             await callback.answer("Событие не найдено.", show_alert=True)
             return
         ev.is_active = False
-        ev.end_date = datetime.utcnow()
+        ev.end_date = datetime.now(timezone.utc)
         await session.commit()
     await callback.message.edit_text(
         f"🛑 Событие «{escape(ev.name)}» остановлено.",
@@ -1477,14 +1477,14 @@ async def admin_sales_list_full(callback: CallbackQuery):
         return
 
     for sale in sales:
-        status = "🟢 Активна" if sale.end_date > datetime.utcnow() else "🔴 Завершена"
+        status = "🟢 Активна" if sale.end_date > datetime.now(timezone.utc) else "🔴 Завершена"
         text = (
             f"🛍 <b>Акция #{sale.id}</b>\n"
             f"Скидка: {sale.discount_percent}% на {sale.applies_to} | {status}\n"
             f"До: {sale.end_date.strftime('%d.%m.%Y %H:%M')}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[])
-        if sale.end_date > datetime.utcnow():
+        if sale.end_date > datetime.now(timezone.utc):
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🛑 Остановить", callback_data=f"sale_stop:{sale.id}")],
             ])
@@ -1506,7 +1506,7 @@ async def sale_stop_force(callback: CallbackQuery):
         if not sale:
             await callback.answer("Акция не найдена.", show_alert=True)
             return
-        sale.end_date = datetime.utcnow()
+        sale.end_date = datetime.now(timezone.utc)
         await session.commit()
     await callback.message.edit_text(
         f"🛑 Акция #{sale_id} остановлена.",

@@ -3,7 +3,7 @@
 Полностью переработанная версия без аренды слотов.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -227,7 +227,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             
             # Создаём оффер в статусе pending (для модерации)
             from app.models import Offer
-            start = datetime.utcnow()
+            start = datetime.now(timezone.utc)
             end = start + timedelta(days=data["duration_days"])
             offer = Offer(
                 creator_user_id=user.id,
@@ -255,7 +255,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
         elif method == "stars":
             # Сначала создаём оффер в статусе payment_pending
             from app.models import Offer
-            start = datetime.utcnow()
+            start = datetime.now(timezone.utc)
             end = start + timedelta(days=data["duration_days"])
             offer = Offer(
                 creator_user_id=user.id,
@@ -302,7 +302,7 @@ async def _create_user_offer(session, user_id: int, data: dict, cost: Decimal):
     """Создаёт пользовательский оффер и отправляет на модерацию"""
     from app.models import Offer
     
-    start = datetime.utcnow()
+    start = datetime.now(timezone.utc)
     end = start + timedelta(days=data["duration_days"])
     
     offer = Offer(
