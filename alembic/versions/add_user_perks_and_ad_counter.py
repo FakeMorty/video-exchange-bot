@@ -25,8 +25,8 @@ def upgrade() -> None:
         op.create_table(
             'user_perks',
             sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-            sa.Column('user_id', sa.Integer(), sa.ForeignKey('users.id'), nullable=False, index=True),
-            sa.Column('perk_type', sa.String(50), nullable=False, index=True),
+            sa.Column('user_id', sa.Integer(), sa.ForeignKey('users.id'), nullable=False),
+            sa.Column('perk_type', sa.String(50), nullable=False),
             sa.Column('active_until', sa.DateTime(), nullable=False),
             sa.Column('is_active', sa.Boolean(), default=True),
             sa.Column('purchased_at', sa.DateTime(), server_default=sa.func.now()),

@@ -1,7 +1,11 @@
 import asyncio
+import os
+
+if not os.environ.get("DATABASE_URL"):
+    os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+
 from app.db import async_session, init_db
-from app.services import get_user, get_or_create_user
-from app.models import User
+from app.services import get_or_create_user
 
 async def test_db():
     try:

@@ -55,17 +55,16 @@ def upgrade() -> None:
     if 'placement_cost' not in columns:
         op.add_column('offers', sa.Column('placement_cost', sa.Numeric(precision=10, scale=2), nullable=False, server_default='0'))
     
-    # Удаляем старые колонки аренды если они есть
-    if 'is_rentable' in columns:
-        op.drop_column('offers', 'is_rentable')
-    if 'rent_cost_per_day' in columns:
-        op.drop_column('offers', 'rent_cost_per_day')
-    if 'max_simultaneous_rentals' in columns:
-        op.drop_column('offers', 'max_simultaneous_rentals')
-    
-    # 3. Удаляем таблицу offer_rentals если существует
-    if 'offer_rentals' in tables:
-        op.drop_table('offer_rentals')
+    # Код приложения всё ещё использует поля аренды, поэтому не удаляем их.
+    for col_name, col_type, default in [
+        ('is_rentable', sa.Boolean(), 'false'),
+        ('rent_cost_per_day', sa.Numeric(precision=10, scale=2), '0'),
+        ('max_simultaneous_rentals', sa.Integer(), '1'),
+    ]:
+        if col_name not in columns:
+            op.add_column('offers', sa.Column(col_name, col_type, nullable=False, server_default=default))
+
+    # 3. Сохраняем offer_rentals: модель есть в app.models, create_all тоже её создаёт.
 
 
 def downgrade() -> None:

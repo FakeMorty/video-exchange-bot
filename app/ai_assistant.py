@@ -415,6 +415,21 @@ async def _get_chat(session, chat_id: int) -> KatyaChat | None:
     )).scalar_one_or_none()
 
 
+async def _get_owned_chat(session, chat_id: int, telegram_user_id: int) -> KatyaChat | None:
+    """Возвращает чат, только если он принадлежит Telegram-пользователю.
+
+    KatyaChat.user_id хранит внутренний users.id, а callback.from_user.id — это
+    Telegram ID. Их нельзя сравнивать напрямую.
+    """
+    user = await get_user(session, telegram_user_id)
+    if not user:
+        return None
+    chat = await _get_chat(session, chat_id)
+    if not chat or chat.user_id != user.id:
+        return None
+    return chat
+
+
 # ══════════════════════════════════════════════════
 #  Безопасность: фильтрация утечек API-ключей
 # ══════════════════════════════════════════════════
@@ -753,8 +768,8 @@ async def katya_open_chat(callback: CallbackQuery, state: FSMContext):
     chat_id = int(callback.data.split(":")[1])
 
     async with async_session() as session:
-        chat = await _get_chat(session, chat_id)
-        if not chat or chat.user_id != callback.from_user.id:
+        chat = await _get_owned_chat(session, chat_id, callback.from_user.id)
+        if not chat:
             await callback.answer("❌ Чат не найден")
             return
 
@@ -780,8 +795,8 @@ async def katya_delete_confirm(callback: CallbackQuery, state: FSMContext):
     chat_id = int(callback.data.split(":")[1])
 
     async with async_session() as session:
-        chat = await _get_chat(session, chat_id)
-        if not chat or chat.user_id != callback.from_user.id:
+        chat = await _get_owned_chat(session, chat_id, callback.from_user.id)
+        if not chat:
             await callback.answer("❌ Чат не найден")
             return
         title = chat.title
@@ -799,7 +814,10 @@ async def katya_delete_yes(callback: CallbackQuery, state: FSMContext):
     chat_id = int(callback.data.split(":")[1])
 
     async with async_session() as session:
-        deleted = await _delete_chat(session, chat_id, callback.from_user.id)
+        user = await get_user(session, callback.from_user.id)
+        deleted = False
+        if user:
+            deleted = await _delete_chat(session, chat_id, user.id)
 
     if deleted:
         # Если были в этом чате — выходим
@@ -938,11 +956,11 @@ async def katya_chat_message(message: Message, state: FSMContext):
                 )
                 return
 
-            user.balance -= _KATYA_PRICE
             await log_balance_change(
                 session, user, -_KATYA_PRICE, "katya_chat",
                 details=f"chat={chat_id};msg={user_text[:60]}",
             )
+            user.balance -= _KATYA_PRICE
             # Увеличиваем счётчик сообщений в чате
             if chat_id:
                 chat = await _get_chat(session, chat_id)
@@ -975,11 +993,11 @@ async def katya_chat_message(message: Message, state: FSMContext):
             async with async_session() as session:
                 user = await get_user(session, user_id)
                 if user:
-                    user.balance += _KATYA_PRICE
                     await log_balance_change(
                         session, user, _KATYA_PRICE, "katya_chat_refund",
                         details="api_error",
                     )
+                    user.balance += _KATYA_PRICE
                     await session.commit()
         await message.answer(
             "😵 *хмурится*\n\n"
