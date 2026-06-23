@@ -2023,9 +2023,11 @@ async def cb_offer_start(callback: CallbackQuery):
             return
         offer = await get_offer_by_id(session, offer_id)
 
+    paid = to_decimal(part.reward_given)
+    cap_note = "" if paid == to_decimal(offer.reward_preview) else "\n⚠️ Сработал дневной лимит наград."
     await callback.answer(
-        f"✅ Получено {offer.reward_preview} монет!\n"
-        f"Подпишитесь и нажмите «Проверить».",
+        f"✅ Получено {paid} монет!\n"
+        f"Подпишитесь и нажмите «Проверить».{cap_note}",
         show_alert=True
     )
 
@@ -2055,12 +2057,18 @@ async def cb_offer_check(callback: CallbackQuery):
                 show_alert=True,
             )
             return
-        result = await verify_offer_subscription(session, user.id, offer_id)
-        if result:
-            await callback.answer(
-                f"✅ Подтверждено! Получено {offer.reward_final} монет!",
-                show_alert=True
-            )
+        ok, paid = await verify_offer_subscription(session, user.id, offer_id)
+        if ok:
+            if paid > 0:
+                await callback.answer(
+                    f"✅ Подтверждено! Получено {paid} монет!",
+                    show_alert=True
+                )
+            else:
+                await callback.answer(
+                    "✅ Подписка подтверждена. Награда уже выдана или дневной лимит исчерпан.",
+                    show_alert=True
+                )
         else:
             await callback.answer(
                 "❌ Не удалось подтвердить подписку.",

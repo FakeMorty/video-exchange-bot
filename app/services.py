@@ -1035,8 +1035,17 @@ async def start_offer_participation(session: AsyncSession, user_id: int,
     return part, True
 
 
-async def verify_offer_subscription(session: AsyncSession, user_id: int,
-                                    offer_id: int) -> bool:
+async def verify_offer_subscription(
+    session: AsyncSession,
+    user_id: int,
+    offer_id: int,
+) -> tuple[bool, Decimal]:
+    """Mark offer participation as completed and return actual paid amount.
+
+    The payout can be lower than offer.reward_final because OFFER_DAILY_REWARD_CAP
+    limits total offer rewards per day. The second tuple item is the amount that
+    was really added to the balance during this call.
+    """
     part = (await session.execute(
         select(OfferParticipation).where(
             OfferParticipation.user_id == user_id,
@@ -1044,22 +1053,23 @@ async def verify_offer_subscription(session: AsyncSession, user_id: int,
         )
     )).scalar_one_or_none()
     if not part:
-        return False
+        return False, Decimal("0")
     if part.status == "completed":
-        return True
+        return True, Decimal("0")
 
     offer = await get_offer_by_id(session, offer_id)
     user = await get_user_by_id(session, user_id)
     if not offer or not user:
-        return False
+        return False, Decimal("0")
 
     part.status = "completed"
     part.checked_at = utc_now()
 
+    already_paid = to_decimal(part.reward_given)
     today_offer_rewards = await _get_today_offer_rewards_total(session, user_id)
     cap_remaining = max(to_decimal(OFFER_DAILY_REWARD_CAP) - today_offer_rewards, Decimal("0"))
     additional = min(
-        to_decimal(offer.reward_final) - to_decimal(part.reward_given),
+        max(to_decimal(offer.reward_final) - already_paid, Decimal("0")),
         cap_remaining,
     )
     if additional > 0:
@@ -1071,10 +1081,10 @@ async def verify_offer_subscription(session: AsyncSession, user_id: int,
             source_id=offer_id,
         )
         user.balance += additional
-        part.reward_given = to_decimal(additional)
+        part.reward_given = already_paid + additional
 
     await session.commit()
-    return True
+    return True, additional
 
 
 def calculate_offer_unsubscribe_amounts(offer: "Offer", part: "OfferParticipation") -> tuple[Decimal, Decimal, Decimal]:

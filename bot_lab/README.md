@@ -46,10 +46,21 @@ python bot_lab/terminal_bot.py --memory-db
 
 ```text
 !buttons                    показать последние кнопки
+!seed-demo                  создать демо-видео и демо-оффер
 !user 200002 other_user Анна переключить Telegram-пользователя
 !reset                      пересоздать FSM/session storage
 !quit                       выйти
 ```
+
+## Демо-данные для просмотра и офферов
+
+Чтобы разделы «Смотреть» и «Офферы» были непустыми, выполни в REPL:
+
+```text
+!seed-demo
+```
+
+Команда создаёт одного demo-uploader, одно approved-видео и один активный rentable-оффер.
 
 ## Проверка сценария Кати
 

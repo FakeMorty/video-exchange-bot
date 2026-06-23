@@ -164,6 +164,14 @@ class BotLab:
             self.last_bot_message = msg
             return msg
 
+        if method_name == "SendVideo":
+            caption = getattr(method, "caption", None) or "[video]"
+            self._print_bot_text(caption, prefix="BOT VIDEO")
+            self._capture_markup(getattr(method, "reply_markup", None))
+            msg = Message(message_id=self._next_message_id(), date=datetime.now(), chat=self._chat(), caption=caption)
+            self.last_bot_message = msg
+            return msg
+
         if method_name == "SendSticker":
             print("\n🤖 BOT STICKER: [sticker]")
             return Message(message_id=self._next_message_id(), date=datetime.now(), chat=self._chat())
@@ -297,6 +305,7 @@ class BotLab:
 Команды лаборатории:
   !help             показать помощь
   !buttons          показать последние кнопки
+  !seed-demo        создать демо-видео и демо-оффер в lab-БД
   !user ID USERNAME FIRST_NAME  сменить пользователя
   !reset            очистить FSM текущей сессии диспетчера
   !quit             выйти
@@ -332,6 +341,9 @@ class BotLab:
         if cmd == "!buttons":
             self.print_buttons()
             return
+        if cmd == "!seed-demo":
+            await self.seed_demo_data()
+            return
         if cmd == "!user":
             if len(parts) < 4 or not parts[1].isdigit():
                 print("Использование: !user 123456 username Имя")
@@ -348,6 +360,64 @@ class BotLab:
             print("FSM/session storage recreated.")
             return
         print(f"Неизвестная lab-команда: {cmd}")
+
+    async def seed_demo_data(self) -> None:
+        """Creates enough data to test watch/offers flows in Bot Lab."""
+        from app.db import async_session
+        from app.models import Offer, User, Video
+        from app.services import get_or_create_user, to_decimal
+        from sqlalchemy import select
+
+        async with async_session() as session:
+            uploader, _ = await get_or_create_user(
+                session,
+                900001,
+                "demo_uploader",
+                "Demo",
+                "Uploader",
+            )
+            uploader.agreed_to_rules = True
+            uploader.nickname_set = True
+            uploader.display_name = "DemoUploader"
+
+            existing_video = (await session.execute(
+                select(Video).where(Video.telegram_file_unique_id == "bot_lab_demo_video_unique")
+            )).scalar_one_or_none()
+            if not existing_video:
+                session.add(Video(
+                    uploader_user_id=uploader.id,
+                    content_type="video",
+                    telegram_file_id="bot_lab_demo_video_file_id",
+                    telegram_file_unique_id="bot_lab_demo_video_unique",
+                    status="approved",
+                    duration_seconds=12,
+                    file_size=1024,
+                ))
+
+            existing_offer = (await session.execute(
+                select(Offer).where(Offer.title == "Bot Lab Demo Offer")
+            )).scalar_one_or_none()
+            if not existing_offer:
+                session.add(Offer(
+                    creator_user_id=None,
+                    title="Bot Lab Demo Offer",
+                    description="Демо-оффер для терминального тестирования.",
+                    channel_url="https://t.me/example",
+                    reward_preview=to_decimal(50),
+                    reward_final=to_decimal(350),
+                    penalty_unsubscribe=to_decimal(400),
+                    is_active=True,
+                    status="approved",
+                    duration_days=30,
+                    placement_cost=to_decimal(0),
+                    is_rentable=True,
+                    rent_cost_per_day=to_decimal(25),
+                    max_simultaneous_rentals=2,
+                ))
+
+            await session.commit()
+
+        print("✅ Demo data seeded: 1 approved video + 1 active/rentable offer")
 
 
 async def amain() -> int:
