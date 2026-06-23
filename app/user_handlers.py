@@ -1526,14 +1526,17 @@ async def successful_payment(message: Message):
                     payment = await get_payment_by_payload(session, payload)
                 if not payment or payment.user_id != user.id:
                     await session.rollback()
+                    session.expunge_all()
                     await message.answer("Ошибка платежа: пользователь не совпадает.")
                     return
                 if int(payment.stars_amount) != paid_stars:
                     await session.rollback()
+                    session.expunge_all()
                     await message.answer("Ошибка платежа: сумма не совпадает.")
                     return
                 if not await mark_payment_paid_once(session, payload):
                     await session.rollback()
+                    session.expunge_all()
                     await message.answer("✅ Платёж уже был обработан ранее.")
                     return
                 now = utc_now()
@@ -1580,14 +1583,17 @@ async def successful_payment(message: Message):
                     payment = await get_payment_by_payload(session, payload)
                 if not payment or payment.user_id != user.id:
                     await session.rollback()
+                    session.expunge_all()
                     await message.answer("Ошибка платежа: пользователь не совпадает.")
                     return
                 if int(payment.stars_amount) != paid_stars:
                     await session.rollback()
+                    session.expunge_all()
                     await message.answer("Ошибка платежа: сумма не совпадает.")
                     return
                 if not await mark_payment_paid_once(session, payload):
                     await session.rollback()
+                    session.expunge_all()
                     await message.answer("✅ Платёж уже был обработан ранее.")
                     return
                 promo, cost, error = await create_promocode(
@@ -1597,6 +1603,7 @@ async def successful_payment(message: Message):
                 )
                 if error:
                     await session.rollback()
+                    session.expunge_all()
                     await message.answer(f"❌ Ошибка создания промокода: {error}")
                 else:
                     await session.commit()
@@ -1631,10 +1638,12 @@ async def successful_payment(message: Message):
                 payment = await get_payment_by_payload(session, payload)
             if not payment or payment.user_id != user.id:
                 await session.rollback()
+                session.expunge_all()
                 await message.answer("Ошибка платежа: пользователь не совпадает.")
                 return
             if int(payment.stars_amount) != paid_stars:
                 await session.rollback()
+                session.expunge_all()
                 await message.answer("Ошибка платежа: сумма не совпадает.")
                 return
             reward, rarity_or_err = await open_lootbox_for_stars(
@@ -2909,6 +2918,7 @@ async def _update_quest_progress(
         await session.commit()
     except Exception:
         await session.rollback()
+        session.expunge_all()
 
 
 # =========================

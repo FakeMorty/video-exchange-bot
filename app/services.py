@@ -181,48 +181,48 @@ async def get_nick_style_id(session: AsyncSession, user_id: int) -> int | None:
     Приоритет: custom_nick со style_id > gold_nick (→2) > color_nick (→1).
     """
     from app.nick_styles import LEGACY_PERK_MAP
-    from sqlalchemy.exc import ProgrammingError, OperationalError
 
     # Сначала проверяем custom_nick (новый формат)
+    # Используем SAVEPOINT чтобы не испортить внешнюю транзакцию при отсутствии колонки style_id
     try:
-        custom = (await session.execute(
-            select(UserPerk).where(
-                UserPerk.user_id == user_id,
-                UserPerk.perk_type == "custom_nick",
-                UserPerk.is_active == True,
-                UserPerk.active_until > utc_now(),
+        async with session.begin_nested():
+            result = await session.execute(
+                select(UserPerk).where(
+                    UserPerk.user_id == user_id,
+                    UserPerk.perk_type == "custom_nick",
+                    UserPerk.is_active == True,
+                    UserPerk.active_until > utc_now(),
+                )
             )
-        )).scalar_one_or_none()
-        if custom:
-            # style_id may not exist in old DB – getattr safe
-            sid = getattr(custom, 'style_id', None)
-            if sid:
-                return sid
-    except (ProgrammingError, OperationalError, AttributeError) as e:
-        # column style_id missing in DB – fallback to legacy, don't crash
-        await session.rollback()
+            custom = result.scalar_one_or_none()
+            if custom:
+                sid = getattr(custom, 'style_id', None)
+                if sid:
+                    return sid
+    except Exception:
+        # Колонка style_id отсутствует в БД, или другая ошибка – молча fallback
+        # begin_nested автоматически откатит savepoint, внешняя транзакция цела,
+        # объекты не expired
         pass
 
     # Легаси: color_nick / gold_nick маппятся на стили 1 / 2
     try:
         for perk_type, mapped_id in LEGACY_PERK_MAP.items():
-            perk = (await session.execute(
+            result = await session.execute(
                 select(UserPerk).where(
                     UserPerk.user_id == user_id,
                     UserPerk.perk_type == perk_type,
                     UserPerk.is_active == True,
                     UserPerk.active_until > utc_now(),
                 )
-            )).scalar_one_or_none()
+            )
+            perk = result.scalar_one_or_none()
             if perk:
                 return mapped_id
     except Exception:
-        await session.rollback()
         pass
 
     return None
-
-
 
 
 async def get_styled_display_name(
@@ -318,6 +318,7 @@ async def log_user_action(
             await session.commit()
         except Exception:
             await session.rollback()
+        session.expunge_all()
 
 
 # ============================
@@ -633,6 +634,7 @@ async def record_view_and_charge(session: AsyncSession, user_id: int, video_id: 
         await session.commit()
     except IntegrityError:
         await session.rollback()
+        session.expunge_all()
         return False
     return True
 
@@ -657,6 +659,7 @@ async def record_view_and_charge_with_cost(
         await session.commit()
     except IntegrityError:
         await session.rollback()
+        session.expunge_all()
         return False
     return True
 
