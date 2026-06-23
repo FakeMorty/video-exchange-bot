@@ -14,7 +14,7 @@ class Base(DeclarativeBase):
 
 
 def utc_now():
-    return utc_now().replace(tzinfo=None)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class User(Base):
