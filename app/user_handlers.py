@@ -100,6 +100,31 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 router = Router()
 
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    """Глобально сбрасывает любой FSM-сценарий.
+
+    Хендлер зарегистрирован в user_router раньше state-specific обработчиков,
+    поэтому /cancel не застревает внутри меню/чата Кати или других сценариев.
+    """
+    await state.clear()
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        admin_flag = is_admin_or_super(message.from_user.id, user) if user else False
+    await message.answer(
+        "✅ Режим сброшен. Нажми /start или выбери действие в меню.",
+        reply_markup=main_menu(is_admin=admin_flag),
+    )
+
+
+@router.message(Command("katya"))
+async def cmd_katya(message: Message, state: FSMContext):
+    """Открывает Катю командой, даже если ReplyKeyboard в клиенте не обновилась."""
+    from app.ai_assistant import btn_katya
+    await btn_katya(message, state)
+
+
 _upload_notifications = defaultdict(lambda: {"count": 0, "task": None})
 
 async def _send_upload_notification(bot, chat_id, user_id):
