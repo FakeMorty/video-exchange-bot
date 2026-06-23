@@ -782,6 +782,23 @@ async def main():
     dp.include_router(donation_router)
     dp.include_router(ai_router)
 
+    # global error handler
+    from aiogram.types import ErrorEvent
+    @dp.error()
+    async def error_handler(event: ErrorEvent):
+        from app.logger import log_exception, get_logger
+        lg=get_logger("dp_error")
+        log_exception(lg, f"dp_error: {event.exception}")
+        return True
+
+    # /cancel to clear stuck FSM
+    from aiogram.filters import Command
+    @dp.message(Command("cancel"))
+    async def cmd_cancel(message, state):
+        from aiogram.fsm.context import FSMContext
+        await state.clear()
+        await message.answer("✅ /cancel ok – теперь /start")
+
     app = web.Application()
     app['bot'] = bot
     app.on_startup.append(on_startup)

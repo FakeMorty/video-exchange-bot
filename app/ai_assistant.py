@@ -855,7 +855,7 @@ def _get_chat_greeting(title: str) -> str:
 #  Обработчики — чат с Катей
 # ══════════════════════════════════════════════════
 
-@router.message(KatyaChatState.chatting)
+@router.message(KatyaChatState.chatting, F.text)
 async def katya_chat_message(message: Message, state: FSMContext):
     """Обработка сообщения в режиме чата с Катей."""
     user_id = message.from_user.id
