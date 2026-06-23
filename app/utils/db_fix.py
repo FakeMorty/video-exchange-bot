@@ -73,7 +73,7 @@ async def fix_database():
                 await conn.rollback()
         
 
-        # 2b. UserPerks style_id
+        # 2b. UserPerks style_id column
         try:
             await conn.execute(text("ALTER TABLE user_perks ADD COLUMN style_id INTEGER"))
             await conn.commit()
