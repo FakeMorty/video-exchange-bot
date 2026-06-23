@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from app.models import VideoReport, utc_now
+    from app.models import VideoReport
 
 import math
 import asyncio
@@ -13,6 +13,7 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
+    utc_now,
     ActiveSale, Event,
     User, Video, VideoView, VideoRating, Payment,
     Offer, OfferParticipation,
