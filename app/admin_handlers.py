@@ -1,3 +1,4 @@
+from app.models import utc_now
 import asyncio
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -187,6 +188,13 @@ async def db_open(callback: CallbackQuery):
     offset = int(parts[2]) if len(parts) > 2 else 0
     page_size = 8
 
+    # SQL injection protection: whitelist table names
+    from app.models import Base
+    allowed_tables = [mapper.class_.__tablename__ for mapper in Base.registry.mappers]
+    if table_name not in allowed_tables:
+        await callback.answer("Недопустимая таблица", show_alert=True)
+        return
+
     async with async_session() as session:
         try:
             total = (await session.execute(text(f'SELECT COUNT(*) FROM "{table_name}"'))).scalar_one()
@@ -243,7 +251,7 @@ async def admin_get_pending(callback: CallbackQuery):
                 await callback.message.answer_photo(video.telegram_file_id, caption=caption, reply_markup=moderation_keyboard(video.id))
             else:
                 await callback.message.answer_video(video.telegram_file_id, caption=caption, reply_markup=moderation_keyboard(video.id))
-        except:
+        except Exception:
             await callback.message.answer(f"⚠️ Ошибка медиа #{video.id}\n{caption}", reply_markup=moderation_keyboard(video.id))
     await callback.answer()
 
@@ -258,7 +266,7 @@ async def mod_approve(callback: CallbackQuery):
             uploader = await get_user_by_id(session, video.uploader_user_id)
             if uploader:
                 try: await callback.bot.send_message(uploader.telegram_id, f"✅ Публикация #{video_id} одобрена!")
-                except: pass
+                except Exception: pass
     await _safe_edit(callback, f"✅ #{video_id} ОДОБРЕНО", reply_markup=admin_after_action_keyboard())
     await callback.answer()
 
@@ -284,7 +292,7 @@ async def reject_reason(callback: CallbackQuery):
             uploader = await get_user_by_id(session, video.uploader_user_id)
             if uploader:
                 try: await callback.bot.send_message(uploader.telegram_id, f"❌ Публикация #{video_id} отклонена: {reason_text}")
-                except: pass
+                except Exception: pass
     await _safe_edit(callback, f"❌ #{video_id} ОТКЛОНЕНО ({reason_text})", reply_markup=admin_after_action_keyboard())
     await callback.answer()
 
@@ -307,7 +315,7 @@ async def admin_events_menu(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
     try:
         async with async_session() as session:
-            active = (await session.execute(select(Event).where(Event.is_active == True, Event.end_date > datetime.now(timezone.utc)).order_by(Event.start_date.desc()))).scalars().all()
+            active = (await session.execute(select(Event).where(Event.is_active.is_(True), Event.end_date > utc_now()).order_by(Event.start_date.desc()))).scalars().all()
         text = "🎉 <b>События</b>\n\n" + ("\n".join([f"• {escape(ev.name)} ({ev.discount_percent}%)" for ev in active[:5]]) if active else "Нет активных событий.")
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="➕ Создать", callback_data="event_create_start")],
@@ -398,7 +406,7 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     data = await state.get_data()
     applies = data.get("applies", {})
-    start = datetime.now(timezone.utc)
+    start = utc_now()
     end = start + timedelta(days=data["duration_days"])
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
@@ -428,14 +436,14 @@ async def event_list_all(callback: CallbackQuery):
         await callback.answer()
         return
     for ev in events:
-        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.now(timezone.utc) else "🔴 Завершено"
+        status = "🟢 Активно" if ev.is_active and ev.end_date > utc_now() else "🔴 Завершено"
         text = (
             f"🎉 <b>{escape(ev.name)}</b>\n"
             f"Скидка: {ev.discount_percent}% | {status}\n"
             f"До: {ev.end_date.strftime('%d.%m.%Y %H:%M')}"
         )
         kb_rows = []
-        if ev.is_active and ev.end_date > datetime.now(timezone.utc):
+        if ev.is_active and ev.end_date > utc_now():
             kb_rows.append([InlineKeyboardButton(text="🛑 Остановить", callback_data=f"event_stop:{ev.id}")])
         kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_events_menu")])
         await callback.message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -462,7 +470,7 @@ async def admin_sale_stop(callback: CallbackQuery):
     async with async_session() as session:
         sale = await get_active_sale(session)
         if sale:
-            sale.end_date = datetime.now(timezone.utc)
+            sale.end_date = utc_now()
             await session.commit()
     await admin_sales_start(callback, None)
 
@@ -505,7 +513,7 @@ async def admin_sale_duration(message: Message, state: FSMContext):
 async def admin_sale_finish(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     data = await state.get_data()
-    end_date = datetime.now(timezone.utc) + timedelta(hours=data["duration_hours"])
+    end_date = utc_now() + timedelta(hours=data["duration_hours"])
     async with async_session() as session:
         sale = ActiveSale(discount_percent=data["discount_percent"], applies_to=data["applies_to"], end_date=end_date, announcement=message.text)
         session.add(sale)
@@ -546,7 +554,7 @@ async def process_broadcast(message: Message, state: FSMContext):
             await message.bot.send_message(tid, f"📢 <b>Объявление:</b>\n\n{text_val}", parse_mode="HTML")
             sent += 1
             if sent % 20 == 0: await asyncio.sleep(0.5)
-        except: pass
+        except Exception: pass
     await message.answer(f"✅ Рассылка завершена: {sent}")
 
 
@@ -1418,14 +1426,14 @@ async def admin_events_list_full(callback: CallbackQuery):
         return
 
     for ev in events:
-        status = "🟢 Активно" if ev.is_active and ev.end_date > datetime.now(timezone.utc) else "🔴 Завершено"
+        status = "🟢 Активно" if ev.is_active and ev.end_date > utc_now() else "🔴 Завершено"
         text = (
             f"🎉 <b>{escape(ev.name)}</b>\n"
             f"Скидка: {ev.discount_percent}% | {status}\n"
             f"До: {ev.end_date.strftime('%d.%m.%Y %H:%M')}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[])
-        if ev.is_active and ev.end_date > datetime.now(timezone.utc):
+        if ev.is_active and ev.end_date > utc_now():
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🛑 Остановить", callback_data=f"event_stop:{ev.id}")],
             ])
@@ -1448,7 +1456,7 @@ async def event_stop(callback: CallbackQuery):
             await callback.answer("Событие не найдено.", show_alert=True)
             return
         ev.is_active = False
-        ev.end_date = datetime.now(timezone.utc)
+        ev.end_date = utc_now()
         await session.commit()
     await callback.message.edit_text(
         f"🛑 Событие «{escape(ev.name)}» остановлено.",
@@ -1477,14 +1485,14 @@ async def admin_sales_list_full(callback: CallbackQuery):
         return
 
     for sale in sales:
-        status = "🟢 Активна" if sale.end_date > datetime.now(timezone.utc) else "🔴 Завершена"
+        status = "🟢 Активна" if sale.end_date > utc_now() else "🔴 Завершена"
         text = (
             f"🛍 <b>Акция #{sale.id}</b>\n"
             f"Скидка: {sale.discount_percent}% на {sale.applies_to} | {status}\n"
             f"До: {sale.end_date.strftime('%d.%m.%Y %H:%M')}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[])
-        if sale.end_date > datetime.now(timezone.utc):
+        if sale.end_date > utc_now():
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🛑 Остановить", callback_data=f"sale_stop:{sale.id}")],
             ])
@@ -1506,7 +1514,7 @@ async def sale_stop_force(callback: CallbackQuery):
         if not sale:
             await callback.answer("Акция не найдена.", show_alert=True)
             return
-        sale.end_date = datetime.now(timezone.utc)
+        sale.end_date = utc_now()
         await session.commit()
     await callback.message.edit_text(
         f"🛑 Акция #{sale_id} остановлена.",

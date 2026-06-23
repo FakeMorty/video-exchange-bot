@@ -1,4 +1,4 @@
-from app.models import LotteryTicket, User
+from app.models import LotteryTicket, User, utc_now
 import os
 from sqlalchemy import func
 from app.models import Video
@@ -201,26 +201,26 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
         try:
             async with async_session() as session:
                 round_obj = await ensure_current_lottery_round(session)
-                utc_now = datetime.now(timezone.utc)
+                now_utc = utc_now()
 
                 # Напоминание за 1 час до розыгрыша
                 if (
                     round_obj.status == "open"
                     and not round_obj.draw_reminder_sent
-                    and utc_now >= round_obj.draw_starts_at - timedelta(hours=REMINDER_HOURS_BEFORE)
+                    and now_utc >= round_obj.draw_starts_at - timedelta(hours=REMINDER_HOURS_BEFORE)
                 ):
                     round_obj.draw_reminder_sent = True
                     await session.commit()
                     log_info(logger, f"Lottery round #{round_obj.id}: sending draw reminder")
                     await notify_lottery_reminder(bot, session, round_obj.id, round_obj.draw_starts_at)
 
-                if round_obj.status == "open" and utc_now >= round_obj.draw_starts_at:
+                if round_obj.status == "open" and now_utc >= round_obj.draw_starts_at:
                     round_obj.status = "drawing"
                     await session.commit()
                     log_info(logger, f"Lottery round #{round_obj.id} moved to drawing")
                     await notify_lottery_started(bot, session, round_obj.id)
 
-                if round_obj.status == "drawing" and utc_now >= round_obj.draw_ends_at:
+                if round_obj.status == "drawing" and now_utc >= round_obj.draw_ends_at:
                     while round_obj.status == "drawing":
                         next_num = await draw_next_lottery_number(session, round_obj)
                         if next_num is None:
@@ -796,10 +796,6 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
     await site.start()
-
-    # Manually trigger on_startup signals since we are using AppRunner
-    for startup_func in app.on_startup:
-        await startup_func(app)
 
     try:
         log_info(logger, "Polling started")

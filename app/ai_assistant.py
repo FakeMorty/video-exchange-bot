@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import aiohttp
+from typing import TYPE_CHECKING
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -48,7 +49,9 @@ from app.services import (
     is_admin_free_eligible,
 )
 from app.logger import get_logger
-from app.models import KatyaChat
+from app.models import KatyaChat, utc_now
+if TYPE_CHECKING:
+    from app.models import User
 
 logger = get_logger(__name__)
 router = Router()
@@ -359,7 +362,7 @@ async def _get_max_chats(user: "User") -> int:
     """Максимальное число чатов для пользователя."""
     if user.is_admin or user.telegram_id in ADMINS:
         return 999  # бесконечно
-    if user.vip_until and user.vip_until > datetime.now(timezone.utc):
+    if user.vip_until and user.vip_until > utc_now():
         return KATYA_MAX_CHATS_VIP
     return KATYA_MAX_CHATS
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
+from app.models import utc_now
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,7 +89,7 @@ async def run_selfcheck(session: AsyncSession) -> list[CheckItem]:
     except Exception as e:
         checks.append(CheckItem("pdf_font:arial", False, str(e)))
 
-    checks.append(CheckItem("time:utc", True, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
+    checks.append(CheckItem("time:utc", True, utc_now().strftime("%Y-%m-%d %H:%M:%S")))
     return checks
 
 

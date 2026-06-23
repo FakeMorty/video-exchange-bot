@@ -1,6 +1,7 @@
+from app.models import utc_now
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase.pdfmetrics import stringWidth
@@ -145,7 +146,7 @@ def build_blocks(root: Path):
 
     header = [
         "<PROJECT PDF DUMP>",
-        f"Generated at: {datetime.now(timezone.utc).isoformat()} UTC",
+        f"Generated at: {utc_now().isoformat()} UTC",
         f"Root: {root.resolve()}",
         f"Files included: {len(files)}",
         "",

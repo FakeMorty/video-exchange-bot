@@ -14,7 +14,7 @@ class Base(DeclarativeBase):
 
 
 def utc_now():
-    return datetime.now(timezone.utc)
+    return utc_now().replace(tzinfo=None)
 
 
 class User(Base):
@@ -434,7 +434,7 @@ class LotteryRound(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     week_key: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
-    ticket_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("3"))
+    ticket_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("30"))
     numbers_pool: Mapped[int] = mapped_column(Integer, nullable=False, default=36)
     numbers_per_ticket: Mapped[int] = mapped_column(Integer, nullable=False, default=6)
     drawn_numbers: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -15,7 +15,7 @@ from aiogram.types import (
 from sqlalchemy import select
 
 from app.db import async_session
-from app.models import Offer
+from app.models import Offer, utc_now
 from app.services import (
     get_user, log_balance_change, 
     ensure_payment_pending
@@ -108,7 +108,7 @@ async def user_offer_preview(message: Message, state: FSMContext):
         val = Decimal(message.text.strip())
         if val < 10:
             raise ValueError
-    except:
+    except Exception:
         await message.answer("❌ Введите число ≥ 10")
         return
     await state.update_data(reward_preview=val)
@@ -126,7 +126,7 @@ async def user_offer_final(message: Message, state: FSMContext):
         val = Decimal(message.text.strip())
         if val < 50:
             raise ValueError
-    except:
+    except Exception:
         await message.answer("❌ Введите число ≥ 50")
         return
     await state.update_data(reward_final=val)
@@ -147,7 +147,7 @@ async def user_offer_penalty(message: Message, state: FSMContext):
         penalty = Decimal(message.text.strip())
         if penalty < 0:
             raise ValueError
-    except:
+    except Exception:
         await message.answer("❌ Введите число ≥ 0")
         return
     
@@ -171,7 +171,7 @@ async def user_offer_duration(message: Message, state: FSMContext):
         days = int(message.text.strip())
         if days < 7 or days > 365:
             raise ValueError
-    except:
+    except Exception:
         await message.answer("❌ Введите число от 7 до 365")
         return
     
@@ -227,7 +227,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             
             # Создаём оффер в статусе pending (для модерации)
             from app.models import Offer
-            start = datetime.now(timezone.utc)
+            start = utc_now()
             end = start + timedelta(days=data["duration_days"])
             offer = Offer(
                 creator_user_id=user.id,
@@ -255,7 +255,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
         elif method == "stars":
             # Сначала создаём оффер в статусе payment_pending
             from app.models import Offer
-            start = datetime.now(timezone.utc)
+            start = utc_now()
             end = start + timedelta(days=data["duration_days"])
             offer = Offer(
                 creator_user_id=user.id,
@@ -302,7 +302,7 @@ async def _create_user_offer(session, user_id: int, data: dict, cost: Decimal):
     """Создаёт пользовательский оффер и отправляет на модерацию"""
     from app.models import Offer
     
-    start = datetime.now(timezone.utc)
+    start = utc_now()
     end = start + timedelta(days=data["duration_days"])
     
     offer = Offer(

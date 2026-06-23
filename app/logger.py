@@ -1,7 +1,8 @@
+from app.models import utc_now
 import json
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -10,7 +11,7 @@ def get_logger(name: str) -> logging.Logger:
 
 def _make_payload(message: str, **kwargs) -> str:
     payload = {
-        "time": datetime.now(timezone.utc).isoformat() + "Z",
+        "time": utc_now().isoformat() + "Z",
         "message": message,
     }
     payload.update(kwargs)
