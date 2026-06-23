@@ -181,33 +181,45 @@ async def get_nick_style_id(session: AsyncSession, user_id: int) -> int | None:
     Приоритет: custom_nick со style_id > gold_nick (→2) > color_nick (→1).
     """
     from app.nick_styles import LEGACY_PERK_MAP
+    from sqlalchemy.exc import ProgrammingError, OperationalError
 
-    # Сначала проверяем custom_nick (новый формат)
-    custom = (await session.execute(
-        select(UserPerk).where(
-            UserPerk.user_id == user_id,
-            UserPerk.perk_type == "custom_nick",
-            UserPerk.is_active == True,
-            UserPerk.active_until > utc_now(),
-        )
-    )).scalar_one_or_none()
-    if custom and custom.style_id:
-        return custom.style_id
-
-    # Легаси: color_nick / gold_nick маппятся на стили 1 / 2
-    for perk_type, mapped_id in LEGACY_PERK_MAP.items():
-        perk = (await session.execute(
+    try:
+        # Сначала проверяем custom_nick (новый формат)
+        custom = (await session.execute(
             select(UserPerk).where(
                 UserPerk.user_id == user_id,
-                UserPerk.perk_type == perk_type,
+                UserPerk.perk_type == "custom_nick",
                 UserPerk.is_active == True,
                 UserPerk.active_until > utc_now(),
             )
         )).scalar_one_or_none()
-        if perk:
-            return mapped_id
+        if custom:
+            # style_id may not exist in older DB schemas – getattr safe
+            style_id = getattr(custom, 'style_id', None)
+            if style_id:
+                return style_id
 
-    return None
+        # Легаси: color_nick / gold_nick маппятся на стили 1 / 2
+        for perk_type, mapped_id in LEGACY_PERK_MAP.items():
+            perk = (await session.execute(
+                select(UserPerk).where(
+                    UserPerk.user_id == user_id,
+                    UserPerk.perk_type == perk_type,
+                    UserPerk.is_active == True,
+                    UserPerk.active_until > utc_now(),
+                )
+            )).scalar_one_or_none()
+            if perk:
+                return mapped_id
+
+        return None
+    except (ProgrammingError, OperationalError, AttributeError) as e:
+        # Column style_id may be missing in old DB – fail safe
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        return None
 
 
 async def get_styled_display_name(
@@ -224,14 +236,23 @@ async def get_styled_display_name(
         False (default) — inline-режим: короткий, для строк
         True           — card-режим: многострочный, для профиля
     """
-    from app.nick_styles import format_nick_inline, format_nick_card
+    try:
+        from app.nick_styles import format_nick_inline, format_nick_card
 
-    name = get_display_name(user)
-    style_id = await get_nick_style_id(session, user.id)
+        name = get_display_name(user)
+        style_id = await get_nick_style_id(session, user.id)
 
-    if card:
-        return format_nick_card(name, style_id)
-    return format_nick_inline(name, style_id)
+        if card:
+            return format_nick_card(name, style_id)
+        return format_nick_inline(name, style_id)
+    except Exception:
+        # Fallback to plain name if styling fails
+        from app.services import get_display_name as _gdn
+        try:
+            return _gdn(user)
+        except Exception:
+            return getattr(user, 'display_name', None) or getattr(user, 'first_name', None) or f"User#{getattr(user, 'telegram_id', '?')}"
+
 
 
 def is_admin_or_super(telegram_id: int, user: "User" = None) -> bool:

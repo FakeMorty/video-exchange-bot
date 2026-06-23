@@ -72,6 +72,15 @@ async def fix_database():
             except Exception:
                 await conn.rollback()
         
+
+        # 2b. UserPerks style_id
+        try:
+            await conn.execute(text("ALTER TABLE user_perks ADD COLUMN style_id INTEGER"))
+            await conn.commit()
+            log_info(logger, "Added user_perks.style_id")
+        except Exception:
+            await conn.rollback()
+
         # 3. Active Sales Table
         if is_sqlite:
             await conn.execute(text("""
