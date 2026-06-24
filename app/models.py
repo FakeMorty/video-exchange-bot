@@ -45,6 +45,7 @@ class User(Base):
     level: Mapped[int] = mapped_column(Integer, default=1)
     vip_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     promo_created_this_month: Mapped[int] = mapped_column(Integer, default=0)
+    promo_month: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Отношения
@@ -333,7 +334,7 @@ class DailyQuestProgress(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     quest_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    quest_date: Mapped[datetime] = mapped_column(Date, nullable=False)
+    quest_date: Mapped[date] = mapped_column(Date, nullable=False)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     target: Mapped[int] = mapped_column(Integer, nullable=False)
     reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))

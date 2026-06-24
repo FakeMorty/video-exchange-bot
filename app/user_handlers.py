@@ -128,25 +128,27 @@ async def cmd_katya(message: Message, state: FSMContext):
 _upload_notifications = defaultdict(lambda: {"count": 0, "task": None})
 
 async def _send_upload_notification(bot, chat_id, user_id):
-    await asyncio.sleep(2.0)
-    data = _upload_notifications[user_id]
-    count = data.get("count", 0)
-    dup = data.get("dup_count", 0)
-    
-    msg = ""
-    if count > 0:
-        msg += f"✅ Отправлено на модерацию: <b>{count}</b> файлов!\n"
-    if dup > 0:
-        msg += f"⚠️ Пропущено дубликатов: <b>{dup}</b>."
+    try:
+        await asyncio.sleep(2.0)
+        data = _upload_notifications[user_id]
+        count = data.get("count", 0)
+        dup = data.get("dup_count", 0)
         
-    if msg:
-        try:
-            await bot.send_message(chat_id, msg.strip(), parse_mode="HTML")
-        except Exception:
-            pass
+        msg = ""
+        if count > 0:
+            msg += f"✅ Отправлено на модерацию: <b>{count}</b> файлов!\n"
+        if dup > 0:
+            msg += f"⚠️ Пропущено дубликатов: <b>{dup}</b>."
             
-    if user_id in _upload_notifications:
-        del _upload_notifications[user_id]
+        if msg:
+            try:
+                await bot.send_message(chat_id, msg.strip(), parse_mode="HTML")
+            except Exception:
+                pass
+    finally:
+        # Prevent memory leak - cleanup even on exception
+        if user_id in _upload_notifications:
+            del _upload_notifications[user_id]
 _offer_action_last_ts: dict[tuple[int, str], datetime] = {}
 _promo_activate_last_ts: dict[int, datetime] = {}
 
@@ -499,7 +501,7 @@ async def accept_rules(callback: CallbackQuery):
         user.agreed_to_rules = True
         from app.services import process_referral_reward
         if user.referred_by_user_id:
-            await process_referral_reward(session, user.id)
+            await process_referral_reward(session, user.referred_by_user_id)
         await session.commit()
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1003,6 +1005,7 @@ async def cb_rate(callback: CallbackQuery):
         await rate_video(session, user.id, video_id, rating)
         user.xp += XP_PER_RATING
         await _level_up_check(session, user, callback)
+        await session.commit()
         await _update_quest_progress(session, user.id, "rate", 1)
 
     await callback.answer(f"⭐ Оценка {rating} сохранена!")
@@ -1097,6 +1100,7 @@ async def process_comment(message: Message, state: FSMContext):
         ))
         user.xp += XP_PER_COMMENT
         await _level_up_check(session, user, message)
+        await session.commit()
         await _update_quest_progress(session, user.id, "comment", 1)
 
     await message.answer("✅ Комментарий опубликован!")
@@ -1147,6 +1151,8 @@ async def cb_react(callback: CallbackQuery):
             ))
             user.xp += XP_PER_REACTION
             await _level_up_check(session, user, callback)
+            # Commit XP and reaction immediately
+            await session.commit()
 
         await session.commit()
         await _update_quest_progress(session, user.id, "react", 1)
@@ -1210,12 +1216,14 @@ async def handle_video_upload(message: Message):
         if auto_approved:
             user.xp += XP_PER_UPLOAD
             await _level_up_check(session, user, message)
+            await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
             await message.answer(f"✅ Видео #{saved.id} автоматически одобрено! (доверенный автор)\n+{UPLOAD_REWARD:.0f} монет")
             return
 
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
+        await session.commit()
         await _update_quest_progress(session, user.id, "upload", 1)
         # Запланировать агрегированное уведомление админам
         await schedule_mod_notification(session, "video")
@@ -1264,12 +1272,14 @@ async def handle_photo_upload(message: Message):
         if auto_approved:
             user.xp += XP_PER_UPLOAD
             await _level_up_check(session, user, message)
+            await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
             await message.answer(f"✅ Фото #{saved.id} автоматически одобрено! (доверенный автор)\n+{PHOTO_UPLOAD_REWARD:.0f} монет")
             return
 
         user.xp += XP_PER_UPLOAD
         await _level_up_check(session, user, message)
+        await session.commit()
         await _update_quest_progress(session, user.id, "upload", 1)
         data = _upload_notifications[user.id]
         if "count" not in data:
@@ -2125,8 +2135,7 @@ async def offers_rent_list(callback: CallbackQuery):
 
 @router.callback_query(F.data == "btn_offers_back")
 async def btn_offers_back(callback: CallbackQuery):
-    async with async_session() as session:
-        await get_active_offers(session)
+    # Removed useless DB query - get_active_offers result was never used
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📢 Офферы (участие)",
@@ -2526,8 +2535,9 @@ async def coinflip_bet(callback: CallbackQuery):
                 await callback.answer("Бесплатные игры закончились.", show_alert=True)
                 return
 
-        coin_msg = await callback.message.answer_dice(emoji="🪙")
-        won = coin_msg.dice.value >= 4
+        # Use standard dice for honest 50/50: 🎲 gives 1-6
+        dice_msg = await callback.message.answer_dice(emoji="🎲")
+        won = dice_msg.dice.value >= 4
 
         user.balance -= to_decimal(bet)
         if not is_admin_or_super(callback.from_user.id, user):
@@ -3497,12 +3507,12 @@ async def cmd_version(message: Message):
         if not is_admin_or_super(message.from_user.id, user):
             return
             
-    version = "1.2.0"
+    version = "1.3.0"
     changes = (
         "🔥 <b>Версия:</b> " + version + "\n\n"
         "<b>Последние изменения:</b>\n"
-        "• SexTok: Absolute URL Fetching & Debug logs\n"
-        "• SexTok: CORS headers injected\n"
+        "• VideoFeed: Absolute URL Fetching & Debug logs\n"
+        "• VideoFeed: CORS headers injected\n"
         "• Quests: Перевод на русский\n"
         "• Games: Слоты, Дартс, Баскетбол\n"
         "• Economy: x10 Scale & Fixes\n"

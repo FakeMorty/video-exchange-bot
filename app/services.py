@@ -318,7 +318,7 @@ async def log_user_action(
             await session.commit()
         except Exception:
             await session.rollback()
-        session.expunge_all()
+            session.expunge_all()
 
 
 # ============================
@@ -577,7 +577,7 @@ async def auto_approve_if_trusted(
         return False
 
     v.status = "approved"
-    v.rejection_reason = "auto_moderation"
+    v.rejection_reason = None
     
     from app.config import PHOTO_UPLOAD_REWARD, UPLOAD_REWARD
     is_photo = v.content_type == "photo"
@@ -617,28 +617,7 @@ async def get_random_photo_for_user(session: AsyncSession, user_id: int) -> "Vid
     )).scalar_one_or_none()
 
 
-async def record_view_and_charge(session: AsyncSession, user_id: int, video_id: int) -> bool:
-    user = await get_user_by_id(session, user_id)
-    if not user:
-        return False
-    cost = to_decimal(WATCH_COST)
-    if user.balance < cost:
-        return False
-    await log_balance_change(session, user, -cost, "watch", source_id=video_id)
-    user.balance -= cost
-    # защита от дубля просмотра (uq_user_video_view)
-    from sqlalchemy.exc import IntegrityError
-    try:
-        view = VideoView(user_id=user_id, video_id=video_id, watched_at=utc_now())
-        session.add(view)
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
-        session.expunge_all()
-        return False
-    return True
-
-
+# record_view_and_charge removed - dead code, use record_view_and_charge_with_cost instead
 async def record_view_and_charge_with_cost(
     session: AsyncSession,
     user_id: int,
@@ -1380,16 +1359,19 @@ async def create_promocode(
         return None, 0, f"Срок от 1 до {PROMOCODE_MAX_HOURS} часов."
 
     star_cost = calculate_promocode_star_cost(coin_amount, max_uses)
-    is_admin_or_super(creator_tg_id, user)
+    # Dead call removed: is_admin_or_super(creator_tg_id, user)
 
     if not admin_free:
         # Проверка VIP (бесплатный промокод раз в месяц)
+        # Correct logic: separate month-tracking field
         if user.vip_until and user.vip_until > utc_now():
             this_month = utc_now().month
-            promo_month = user.promo_created_this_month
+            # Use dedicated promo_month field to track last reset month
+            promo_month = getattr(user, 'promo_month', 0) or 0
             # Сбрасываем счётчик если новый месяц
             if promo_month != this_month:
                 user.promo_created_this_month = 0
+                user.promo_month = this_month
             if user.promo_created_this_month < VIP_FREE_PROMO_PER_MONTH:
                 star_cost = 0
                 user.promo_created_this_month += 1
@@ -1656,11 +1638,12 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
     for t in tickets:
         matched = len(set(_deserialize_numbers(t.numbers)) & drawn)
         t.matched_count = matched
-        if matched >= 6:
+        n = round_obj.numbers_per_ticket
+        if matched >= n:
             winners_6.append(t)
-        elif matched == 5:
+        elif matched == n - 1:
             winners_5.append(t)
-        elif matched == 4:
+        elif matched == n - 2:
             winners_4.append(t)
 
     pool = to_decimal(round_obj.prize_pool)
@@ -1788,7 +1771,7 @@ def should_inject_ad_in_video() -> bool:
 
 
 async def get_active_sale(session: AsyncSession):
-    stmt = select(ActiveSale).where(ActiveSale.end_date > func.now()).order_by(ActiveSale.id.desc()).limit(1)
+    stmt = select(ActiveSale).where(ActiveSale.end_date > utc_now()).order_by(ActiveSale.id.desc()).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -1838,7 +1821,7 @@ async def get_active_events(session: AsyncSession):
     """Получить все активные события"""
     stmt = select(Event).where(
         Event.is_active == True,
-        Event.end_date > func.now()
+        Event.end_date > utc_now()
     ).order_by(Event.discount_percent.desc())
     result = await session.execute(stmt)
     return result.scalars().all()
@@ -2183,19 +2166,27 @@ async def should_flush_notifications(session: AsyncSession) -> bool:
 
 async def approve_all_pending(session: AsyncSession, admin_id: int) -> int:
     """Одобрить все pending-видео и фото. Возвращает количество."""
-    from app.models import Video
+    from app.models import Video, User
     pending = (await session.execute(
         select(Video).where(Video.status == "pending")
     )).scalars().all()
+    if not pending:
+        return 0
+    # N+1 fix: load all uploaders in one query
+    uploader_ids = list({v.uploader_user_id for v in pending})
+    uploaders = (await session.execute(
+        select(User).where(User.id.in_(uploader_ids))
+    )).scalars().all()
+    uploader_map = {u.id: u for u in uploaders}
     count = 0
     for v in pending:
         v.status = "approved"
-        v.rejection_reason = "bulk_approved"
+        v.rejection_reason = None
         # Начисляем награду загрузчику
-        uploader = await get_user_by_id(session, v.uploader_user_id)
+        uploader = uploader_map.get(v.uploader_user_id)
         if uploader:
             reward = to_decimal(UPLOAD_REWARD if v.content_type == "video" else PHOTO_UPLOAD_REWARD)
-            await log_balance_change(session, uploader, reward, "upload_reward", source_id=v.id)
+            await log_balance_change(session, uploader, reward, "upload_reward", source_id=v.id, auto_commit=False)
             uploader.balance += reward
         count += 1
     await session.commit()

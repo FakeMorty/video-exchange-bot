@@ -257,13 +257,16 @@ async def lottery_draw_next_handler(request: web.Request) -> web.Response:
             round_obj.status = "drawing"
             await session.commit()
         num = await draw_next_lottery_number(session, round_obj)
-        if num is None:
-            stats = await settle_lottery_round(session, round_obj)
-            return web.json_response({"ok": True, "finished": True, "stats": stats})
-        if round_obj.status == "completed":
+        finished = (num is None) or (round_obj.status == "completed")
+        if finished:
+            # Ensure completed status before settle to avoid double-settle edge cases
+            if round_obj.status != "completed":
+                round_obj.status = "completed"
+                await session.commit()
             stats = await settle_lottery_round(session, round_obj)
             return web.json_response(
-                {"ok": True, "number": num, "finished": True, "stats": stats, "state": get_lottery_state_dict(round_obj)}
+                {"ok": True, "finished": True, "stats": stats, "state": get_lottery_state_dict(round_obj)} if num is not None
+                else {"ok": True, "finished": True, "stats": stats}
             )
         return web.json_response({"ok": True, "number": num, "state": get_lottery_state_dict(round_obj)})
 
@@ -472,7 +475,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
 
 
 
-async def api_sextok_feed(request: web.Request) -> web.Response:
+async def api_videofeed_feed(request: web.Request) -> web.Response:
     try:
         async with async_session() as session:
             videos = (await session.execute(
@@ -518,14 +521,14 @@ async def api_video_stream(request: web.Request) -> web.Response:
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
-async def sextok_page_handler(request: web.Request) -> web.Response:
+async def videofeed_page_handler(request: web.Request) -> web.Response:
     html = """
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>SexTok</title>
+  <title>VideoFeed</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, sans-serif;}
@@ -575,7 +578,7 @@ async def sextok_page_handler(request: web.Request) -> web.Response:
             if (host === "null" || host === "about:blank" || !host.startsWith("http")) {
                 host = window.location.href.split('/').slice(0, 3).join('/');
             }
-            const api_url = host + '/api/sextok/feed';
+            const api_url = host + '/api/videofeed/feed';
             
             document.getElementById('feed').innerHTML = '<div style="color:yellow; text-align:center; padding-top: 50vh;">Fetching: ' + api_url + '</div>';
             
@@ -791,20 +794,12 @@ async def main():
         log_exception(lg, f"dp_error: {event.exception}")
         return True
 
-    # /cancel to clear stuck FSM
-    from aiogram.filters import Command
-    @dp.message(Command("cancel"))
-    async def cmd_cancel(message, state):
-        from aiogram.fsm.context import FSMContext
-        await state.clear()
-        await message.answer("✅ /cancel ok – теперь /start")
-
     app = web.Application()
     app['bot'] = bot
     app.on_startup.append(on_startup)
     app.router.add_get("/", handle_health_check)
-    app.router.add_get("/sextok", sextok_page_handler)
-    app.router.add_get("/api/sextok/feed", api_sextok_feed)
+    app.router.add_get("/videofeed", videofeed_page_handler)
+    app.router.add_get("/api/videofeed/feed", api_videofeed_feed)
     app.router.add_get("/api/video/{id}", api_video_stream)
     app.router.add_get("/lottery/state", lottery_state_handler)
     app.router.add_post("/lottery/draw-next", lottery_draw_next_handler)

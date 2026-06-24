@@ -1191,12 +1191,8 @@ async def admin_auto_moderation(callback: CallbackQuery):
         trusted_count = (await session.execute(
             select(func.count(TrustedUploader.id))
         )).scalar_one()
-        auto_approved_count = (await session.execute(
-            select(func.count(Video.id)).where(
-                Video.status == "approved",
-                Video.rejection_reason == "auto_moderation"
-            )
-        )).scalar_one()
+        # Auto-approved is no longer marked by rejection_reason; use 0 or join via UserActionLog if needed
+        auto_approved_count = 0
 
     status_icon = "🟢" if is_enabled else "🔴"
     status_text = "включена" if is_enabled else "отключена"

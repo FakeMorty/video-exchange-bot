@@ -259,7 +259,7 @@ LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
 LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
 LOTTERY_DRAW_START_HOUR_UTC = _get_int("LOTTERY_DRAW_START_HOUR_UTC", 18)
 LOTTERY_DRAW_END_HOUR_UTC = _get_int("LOTTERY_DRAW_END_HOUR_UTC", 20)
-LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "super-secret-key-12345")
+LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "")
 
 # ============================
 # ЛУТБОКСЫ
@@ -280,7 +280,7 @@ ENABLE_ADMIN_FREE = _get_bool("ENABLE_ADMIN_FREE", False)
 # AI-АССИСТЕНТ (DeepSeek V4 Flash via OpenModel)
 # ============================
 ENABLE_AI_ASSISTANT = _get_bool("ENABLE_AI_ASSISTANT", True)
-AI_ASSISTANT_API_KEY = _get_str("AI_ASSISTANT_API_KEY", "om-2iuAzLeMjkk4EuxYnw5iHKjk6pGz1oxnJxujXFf")
+AI_ASSISTANT_API_KEY = _get_str("AI_ASSISTANT_API_KEY", "")
 AI_ASSISTANT_BASE_URL = _get_str("AI_ASSISTANT_BASE_URL", "https://api.openmodel.ai")
 AI_ASSISTANT_MODEL = _get_str("AI_ASSISTANT_MODEL", "deepseek-v4-flash")
 AI_ASSISTANT_MAX_TOKENS = _get_int("AI_ASSISTANT_MAX_TOKENS", 2048)
