@@ -474,7 +474,9 @@ async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
         from app.config import PHOTO_UPLOAD_REWARD, UPLOAD_REWARD
         is_photo = v.content_type == "photo"
         reward_val = PHOTO_UPLOAD_REWARD if is_photo else UPLOAD_REWARD
-        reward = to_decimal(reward_val)
+        # Apply coin_multiplier perk
+        multiplier = await get_coin_multiplier(session, uploader.id)
+        reward = round_coin(to_decimal(reward_val) * to_decimal(multiplier))
         
         await log_balance_change(session, uploader, reward, "upload_approved", source_id=v.id)
         uploader.balance += reward
@@ -1365,13 +1367,13 @@ async def create_promocode(
         # Проверка VIP (бесплатный промокод раз в месяц)
         # Correct logic: separate month-tracking field
         if user.vip_until and user.vip_until > utc_now():
-            this_month = utc_now().month
+            month_key = utc_now().year * 12 + utc_now().month
             # Use dedicated promo_month field to track last reset month
             promo_month = getattr(user, 'promo_month', 0) or 0
             # Сбрасываем счётчик если новый месяц
-            if promo_month != this_month:
+            if promo_month != month_key:
                 user.promo_created_this_month = 0
-                user.promo_month = this_month
+                user.promo_month = month_key
             if user.promo_created_this_month < VIP_FREE_PROMO_PER_MONTH:
                 star_cost = 0
                 user.promo_created_this_month += 1
@@ -1591,12 +1593,14 @@ def get_lottery_state_dict(round_obj: LotteryRound | None) -> dict:
     if not round_obj:
         return {"status": "no_round"}
     drawn = _deserialize_numbers(round_obj.drawn_numbers)
+    tickets_count = int(round_obj.prize_pool / round_obj.ticket_price) if round_obj.ticket_price else 0
     return {
         "round_id": round_obj.id,
         "week_key": round_obj.week_key,
         "status": round_obj.status,
         "ticket_price": float(round_obj.ticket_price),
         "prize_pool": float(round_obj.prize_pool),
+        "tickets_count": tickets_count,
         "numbers_pool": round_obj.numbers_pool,
         "numbers_per_ticket": round_obj.numbers_per_ticket,
         "drawn_numbers": drawn,

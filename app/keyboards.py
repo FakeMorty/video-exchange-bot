@@ -203,8 +203,9 @@ def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
 # =========================
 def games_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎲 Кости (PvP)", callback_data="dice_menu")],
-        [InlineKeyboardButton(text="🎰 Угадай число", callback_data="guess_menu")],
+        [InlineKeyboardButton(text="🎲 Кости", callback_data="dice_menu")],
+        [InlineKeyboardButton(text="🪙 Орёл/Решка", callback_data="game_coinflip")],
+        [InlineKeyboardButton(text="🎯 Угадай число", callback_data="guess_menu")],
         [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])

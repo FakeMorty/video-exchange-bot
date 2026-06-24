@@ -54,6 +54,7 @@ from app.models import (
 )
 from app.services import (
     get_or_create_user, get_user, get_user_by_id, get_setting, save_video, save_photo,
+    get_xp_multiplier, get_coin_multiplier, get_stars_discount,
     get_random_video_for_user, get_random_photo_for_user,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
     record_photo_view,
@@ -504,6 +505,16 @@ async def accept_rules(callback: CallbackQuery):
             await process_referral_reward(session, user.referred_by_user_id)
         await session.commit()
 
+    # If user already has nickname, show main menu immediately
+    if user.nickname_set and user.display_name:
+        admin_flag = is_any_admin(callback.from_user.id, user)
+        await callback.message.answer(
+            "✅ Правила приняты! Добро пожаловать!",
+            reply_markup=main_menu(is_admin=admin_flag)
+        )
+        await callback.answer()
+        return
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="✏️ Установить ник",
@@ -690,12 +701,14 @@ async def buy_vip(callback: CallbackQuery):
 
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
         if not admin_free:
-            # Обычная оплата — выставляем инвойс
+            # Обычная оплата — выставляем инвойс, применяем stars_discount perk
+            discount = await get_stars_discount(session, user.id)
+            vip_price_final = max(1, int(VIP_PRICE_STARS * (1 - discount)))
             await ensure_payment_pending(
                 session,
                 user_id=user.id,
                 payload=payload,
-                stars_amount=int(VIP_PRICE_STARS),
+                stars_amount=vip_price_final,
             )
             await session.commit()
             await callback.message.answer_invoice(
@@ -703,7 +716,7 @@ async def buy_vip(callback: CallbackQuery):
                 description=f"VIP на {VIP_DURATION_DAYS} дней",
                 payload=payload,
                 currency="XTR",
-                prices=[LabeledPrice(label="VIP", amount=VIP_PRICE_STARS)]
+                prices=[LabeledPrice(label="VIP", amount=vip_price_final)]
             )
             await callback.answer()
             return
@@ -1003,7 +1016,8 @@ async def cb_rate(callback: CallbackQuery):
             await callback.answer()
             return
         await rate_video(session, user.id, video_id, rating)
-        user.xp += XP_PER_RATING
+        xp_mult = await get_xp_multiplier(session, user.id)
+        user.xp += int(XP_PER_RATING * xp_mult)
         await _level_up_check(session, user, callback)
         await session.commit()
         await _update_quest_progress(session, user.id, "rate", 1)
@@ -1098,7 +1112,8 @@ async def process_comment(message: Message, state: FSMContext):
             video_id=video_id,
             text=message.text
         ))
-        user.xp += XP_PER_COMMENT
+        xp_mult = await get_xp_multiplier(session, user.id)
+        user.xp += int(XP_PER_COMMENT * xp_mult)
         await _level_up_check(session, user, message)
         await session.commit()
         await _update_quest_progress(session, user.id, "comment", 1)
@@ -1134,6 +1149,14 @@ async def cb_react(callback: CallbackQuery):
             await callback.answer()
             return
 
+        # Check exclusive reactions perk
+        exclusive_list = {"💎", "👑", "🔥", "⚡"}
+        if reaction in exclusive_list:
+            from app.services import has_active_perk
+            if not await has_active_perk(session, user.id, "exclusive_reactions"):
+                await callback.answer("❌ Эта реакция доступна только с перком «Эксклюзивные реакции»", show_alert=True)
+                return
+
         existing = (await session.execute(
             select(ContentReaction).where(
                 ContentReaction.user_id == user.id,
@@ -1149,7 +1172,8 @@ async def cb_react(callback: CallbackQuery):
                 video_id=video_id,
                 reaction_type=reaction
             ))
-            user.xp += XP_PER_REACTION
+            xp_mult = await get_xp_multiplier(session, user.id)
+            user.xp += int(XP_PER_REACTION * xp_mult)
             await _level_up_check(session, user, callback)
             # Commit XP and reaction immediately
             await session.commit()
@@ -1214,14 +1238,16 @@ async def handle_video_upload(message: Message):
         auto_approved = await auto_approve_if_trusted(session, saved.id, user.id)
         
         if auto_approved:
-            user.xp += XP_PER_UPLOAD
+            xp_mult = await get_xp_multiplier(session, user.id)
+            user.xp += int(XP_PER_UPLOAD * xp_mult)
             await _level_up_check(session, user, message)
             await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
             await message.answer(f"✅ Видео #{saved.id} автоматически одобрено! (доверенный автор)\n+{UPLOAD_REWARD:.0f} монет")
             return
 
-        user.xp += XP_PER_UPLOAD
+        xp_mult = await get_xp_multiplier(session, user.id)
+        user.xp += int(XP_PER_UPLOAD * xp_mult)
         await _level_up_check(session, user, message)
         await session.commit()
         await _update_quest_progress(session, user.id, "upload", 1)
@@ -1270,14 +1296,16 @@ async def handle_photo_upload(message: Message):
         auto_approved = await auto_approve_if_trusted(session, saved.id, user.id)
         
         if auto_approved:
-            user.xp += XP_PER_UPLOAD
+            xp_mult = await get_xp_multiplier(session, user.id)
+            user.xp += int(XP_PER_UPLOAD * xp_mult)
             await _level_up_check(session, user, message)
             await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
             await message.answer(f"✅ Фото #{saved.id} автоматически одобрено! (доверенный автор)\n+{PHOTO_UPLOAD_REWARD:.0f} монет")
             return
 
-        user.xp += XP_PER_UPLOAD
+        xp_mult = await get_xp_multiplier(session, user.id)
+        user.xp += int(XP_PER_UPLOAD * xp_mult)
         await _level_up_check(session, user, message)
         await session.commit()
         await _update_quest_progress(session, user.id, "upload", 1)
@@ -1891,6 +1919,15 @@ async def lootbox_buy(callback: CallbackQuery):
     await callback.answer()
 
 
+
+@router.callback_query(F.data == "btn_buy")
+async def cb_btn_buy(callback: CallbackQuery):
+    # Reuse btn_buy logic
+    from aiogram.types import Message as TGMessage
+    # create a fake message proxy – easier: call internal logic directly
+    await btn_buy(callback.message)  # type: ignore
+    await callback.answer()
+
 # =========================
 # OFFERS
 # =========================
@@ -1902,30 +1939,12 @@ async def btn_offers(message: Message):
             return
         if not await require_nickname(message, user):
             return
-        offers = await get_active_offers(session)
 
-    if not offers:
-        await message.answer("😔 Активных офферов пока нет. Загляните позже!")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="📢 Офферы (участие)",
-            callback_data="offers_participation"
-        )],
-        [InlineKeyboardButton(
-            text="📣 Арендовать рекламный слот",
-            callback_data="offers_rent_list"
-        )],
-        [InlineKeyboardButton(
-            text="📋 Мои аренды",
-            callback_data="my_rentals"
-        )],
-    ])
+    from app.user_offer_handlers import user_offers_menu
     await message.answer(
         "📢 <b>Офферы</b>\n\nВыберите раздел:",
         parse_mode="HTML",
-        reply_markup=kb
+        reply_markup=user_offers_menu()
     )
 
 
@@ -2475,7 +2494,10 @@ async def dice_bet(callback: CallbackQuery):
             net = -to_decimal(bet)
             result_text = f"🎲 Выпало: {dice_value}\n😔 Проиграли -{bet} монет"
 
-        user.xp += XP_PER_GAME
+        xp_mult = await get_xp_multiplier(session, user.id)
+
+
+        user.xp += int(XP_PER_GAME * xp_mult)
         await _level_up_check(session, user, callback)
 
         session.add(GameHistory(
@@ -2542,7 +2564,9 @@ async def coinflip_bet(callback: CallbackQuery):
         user.balance -= to_decimal(bet)
         if not is_admin_or_super(callback.from_user.id, user):
             await increment_game_played(session, user.id)
-        user.xp += XP_PER_GAME
+        xp_mult = await get_xp_multiplier(session, user.id)
+
+        user.xp += int(XP_PER_GAME * xp_mult)
 
         if won:
             win = to_decimal(bet) * 2
@@ -2651,7 +2675,9 @@ async def guess_num(callback: CallbackQuery, state: FSMContext):
         user.balance -= to_decimal(bet)
         if not is_admin_or_super(callback.from_user.id, user):
             await increment_game_played(session, user.id)
-        user.xp += XP_PER_GAME
+        xp_mult = await get_xp_multiplier(session, user.id)
+
+        user.xp += int(XP_PER_GAME * xp_mult)
 
         if guess == actual:
             multiplier = 5

@@ -167,7 +167,10 @@ async def show_donation_shop(callback: CallbackQuery):
         "Все цены указаны в монетах.\n\n"
         "Выбери, что хочешь купить:"
     )
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=donation_shop_keyboard())
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=donation_shop_keyboard())
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=donation_shop_keyboard())
     await callback.answer()
 
 
@@ -573,3 +576,19 @@ async def donate_my_perks(callback: CallbackQuery):
         ])
         await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
         await callback.answer()
+
+# =========================
+# BACK BUTTON HANDLER
+# =========================
+@router.callback_query(F.data == "btn_profile")
+async def back_to_profile(callback: CallbackQuery):
+    # Simple back: show profile hint
+    try:
+        await callback.message.edit_text(
+            "👤 Нажмите кнопку 👤 Профиль в главном меню, чтобы вернуться.",
+            reply_markup=None
+        )
+    except Exception:
+        await callback.message.answer("👤 Нажмите кнопку 👤 Профиль в главном меню.")
+    await callback.answer()
+
