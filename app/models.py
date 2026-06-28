@@ -570,6 +570,7 @@ class KatyaChat(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    character: Mapped[str] = mapped_column(String(20), nullable=False, default="katya")
     title: Mapped[str] = mapped_column(String(50), nullable=False, default="Болтовня")
     message_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

@@ -289,8 +289,10 @@ AI_ASSISTANT_HISTORY_LIMIT = _get_int("AI_ASSISTANT_HISTORY_LIMIT", 10)  # па�
 AI_ASSISTANT_DAILY_LIMIT = _get_int("AI_ASSISTANT_DAILY_LIMIT", 50)
 AI_ASSISTANT_PRICE = _get_int("AI_ASSISTANT_PRICE", 5)
 
-# Стикерпак Кати
+# Стикерпак Кати, Софы и Сани
 KATYA_STICKER_PACK = _get_str("KATYA_STICKER_PACK", "katya_by_Wseksbot")
+SOFA_STICKER_PACK = _get_str("SOFA_STICKER_PACK", "sofa_by_Wseksbot")
+SANYA_STICKER_PACK = _get_str("SANYA_STICKER_PACK", "sanya_by_Wseksbot")
 
 # Лимиты чатов с Катей
 KATYA_MAX_CHATS = _get_int("KATYA_MAX_CHATS", 5)

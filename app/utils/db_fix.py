@@ -130,4 +130,12 @@ async def fix_database():
             except Exception:
                 await conn.rollback()
 
+        # Ensure character exists in katya_chats table
+        try:
+            await conn.execute(text("ALTER TABLE katya_chats ADD COLUMN character VARCHAR(20) NOT NULL DEFAULT 'katya'"))
+            await conn.commit()
+            log_info(logger, "Added katya_chats.character")
+        except Exception:
+            await conn.rollback()
+
     log_info(logger, "DB fix complete!")
