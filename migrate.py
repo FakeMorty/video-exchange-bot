@@ -13,6 +13,13 @@ def run(cmd: str) -> tuple[bool, str]:
 
 
 def main():
+    import os
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    is_sqlite = (not db_url) or "sqlite" in db_url
+    if is_sqlite:
+        print("==> SQLite detected. Skipping Alembic migrations because SQLAlchemy will auto-create all tables on startup.")
+        return
+
     print("==> Running Alembic migrations...")
 
     ok, output = run("alembic upgrade head")

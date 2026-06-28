@@ -744,12 +744,17 @@ async def on_startup(app):
         log_error(logger, f"Database maintenance error: {e}")
 
     try:
-        def run_migrations():
-            alembic_cfg = Config("alembic.ini")
-            command.upgrade(alembic_cfg, "head")
-        
-        await asyncio.to_thread(run_migrations)
-        log_info(logger, "Alembic migrations synced")
+        from app.config import DATABASE_URL
+        is_sqlite = (not DATABASE_URL) or "sqlite" in DATABASE_URL
+        if is_sqlite:
+            log_info(logger, "SQLite detected. Skipping Alembic migration sync.")
+        else:
+            def run_migrations():
+                alembic_cfg = Config("alembic.ini")
+                command.upgrade(alembic_cfg, "head")
+            
+            await asyncio.to_thread(run_migrations)
+            log_info(logger, "Alembic migrations synced")
     except Exception as e:
         log_error(logger, f"Migration sync error: {e}")
         

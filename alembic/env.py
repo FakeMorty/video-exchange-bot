@@ -24,7 +24,7 @@ target_metadata = Base.metadata
 def _sync_url_from_env() -> str:
     db_url = (os.getenv("DATABASE_URL") or "").strip()
     if not db_url:
-        raise RuntimeError("DATABASE_URL is required for Alembic migrations")
+        return "sqlite+aiosqlite:///bot.db"
 
     if db_url.startswith("postgres://"):
         return db_url.replace("postgres://", "postgresql+asyncpg://", 1)
