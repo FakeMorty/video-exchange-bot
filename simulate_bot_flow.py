@@ -148,20 +148,20 @@ async def run_comprehensive_tests():
     print("\n[Шаг 3/5] Начинаем поочередное нажатие ВСЕХ кнопок Главного Меню бота...")
     
     buttons_to_test = [
-        ("👤 Профиль", show_profile, []),
-        ("📊 Уровень", show_level, []),
-        ("👑 VIP", show_vip, []),
-        ("🎬 Смотреть", btn_watch, []),
-        ("📤 Загрузить", btn_upload, []),
-        ("🎁 Бонус", btn_bonus, []),
-        ("👥 Рефералы", btn_referrals, []),
-        ("💳 Купить монеты", btn_buy, []),
-        ("📢 Офферы", btn_offers, []),
-        ("🎮 Игры", btn_games, []),
-        ("🏆 Топы", btn_tops, []),
-        ("📋 Квесты", btn_quests, []),
-        ("🎰 Лотерея-лото", btn_lottery, []),
-        ("🎟 Промокоды", btn_promo, []),
+        ("👤 Профиль", show_profile, [state]),
+        ("📊 Уровень", show_level, [state]),
+        ("👑 VIP", show_vip, [state]),
+        ("🎬 Смотреть", btn_watch, [state]),
+        ("📤 Загрузить", btn_upload, [state]),
+        ("🎁 Бонус", btn_bonus, [state]),
+        ("👥 Рефералы", btn_referrals, [state]),
+        ("💳 Купить монеты", btn_buy, [state]),
+        ("📢 Офферы", btn_offers, [state]),
+        ("🎮 Игры", btn_games, [state]),
+        ("🏆 Топы", btn_tops, [state]),
+        ("📋 Квесты", btn_quests, [state]),
+        ("🎰 Лотерея-лото", btn_lottery, [state]),
+        ("🎟 Промокоды", btn_promo, [state]),
         ("💬 Жалобы и предложения", feedback_start, [state]),
         ("💋 Катя (ИИ-Подруга)", btn_katya, [state]),
     ]
@@ -380,7 +380,7 @@ async def run_comprehensive_tests():
     print("\n  👉 [Глубокий сценарий 3] Симуляция получения Ежедневного Бонуса...")
     try:
         msg_bonus = create_mock_message("🎁 Бонус", user_id)
-        await btn_bonus(msg_bonus)
+        await btn_bonus(msg_bonus, state)
         
         # Проверяем в БД: обновились ли поля бонуса
         async with async_session() as session:

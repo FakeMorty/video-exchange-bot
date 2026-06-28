@@ -453,25 +453,26 @@ def _sanitize_response(text: str) -> str:
 
 async def call_katya(messages: list[dict]) -> str | None:
     """
-    Вызов OpenModel Messages API (Anthropic-совместимый).
-    Возвращает текст ответа или None при ошибке.
+    Вызов OpenAI-совместимого Chat Completions API.
+    Предотвращает ошибки несовместимости эндпоинтов.
     """
     headers = {
         "Content-Type": "application/json",
-        "x-api-key": AI_ASSISTANT_API_KEY,
-        "anthropic-version": "2023-06-01",
+        "Authorization": f"Bearer {AI_ASSISTANT_API_KEY}",
     }
+    
+    openai_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+    
     payload = {
         "model": AI_ASSISTANT_MODEL,
+        "messages": openai_messages,
         "max_tokens": AI_ASSISTANT_MAX_TOKENS,
-        "system": SYSTEM_PROMPT,
-        "messages": messages,
     }
 
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
             async with session.post(
-                f"{AI_ASSISTANT_BASE_URL}/v1/messages",
+                f"{AI_ASSISTANT_BASE_URL.rstrip('/')}/v1/chat/completions",
                 headers=headers,
                 json=payload,
             ) as resp:
@@ -481,20 +482,18 @@ async def call_katya(messages: list[dict]) -> str | None:
                     return None
 
                 data = await resp.json()
-                content_blocks = data.get("content", [])
-                text_parts = []
-                for block in content_blocks:
-                    if block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-
-                result = "\n".join(text_parts) if text_parts else None
+                choices = data.get("choices", [])
+                result = None
+                if choices:
+                    result = choices[0].get("message", {}).get("content", "").strip()
+                
                 if result:
                     result = _sanitize_response(result)
 
                 usage = data.get("usage", {})
                 logger.info(
-                    f"Katya API: in={usage.get('input_tokens',0)}, "
-                    f"out={usage.get('output_tokens',0)}"
+                    f"Katya API: in={usage.get('prompt_tokens',0)}, "
+                    f"out={usage.get('completion_tokens',0)}"
                 )
                 return result
 

@@ -119,6 +119,99 @@ async def cmd_cancel(message: Message, state: FSMContext):
     )
 
 
+@router.message(CommandStart())
+async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
+    if not message.from_user:
+        return
+    await state.clear()
+    args = (command.args or "").strip()
+
+    if args.startswith("promo_"):
+        promo_code = args.replace("promo_", "")
+        async with async_session() as session:
+            user, is_new = await get_or_create_user(
+                session, message.from_user.id,
+                message.from_user.username,
+                message.from_user.first_name,
+                message.from_user.last_name,
+            )
+            if user.status == "banned":
+                await message.answer("🚫 Вы заблокированы в боте.")
+                return
+            result = await activate_promocode(session, user.id, promo_code)
+            await message.answer(result)
+            if not user.agreed_to_rules:
+                from app.keyboards import rules_keyboard
+                await message.answer(
+                    "📋 <b>Правила бота</b>\n\n"
+                    "1. Нельзя публиковать запрещённый или шок-контент.\n"
+                    "2. Нельзя использовать баги и накручивать награды.\n"
+                    "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
+                    "Нажмите кнопку ниже, чтобы принять правила.",
+                    parse_mode="HTML",
+                    reply_markup=rules_keyboard()
+                )
+                return
+            admin_flag = is_any_admin(message.from_user.id, user)
+            vip_str = " 👑" if is_vip(user) else ""
+            styled_name = await get_styled_display_name(session, user)
+            await message.answer(
+                f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
+                f"💰 Баланс: <b>{user.balance}</b> монет",
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+            return
+
+    referral_code = args if args else None
+    async with async_session() as session:
+        user, is_new = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.username,
+            message.from_user.first_name,
+            message.from_user.last_name,
+            referral_code,
+        )
+        if user.status == "banned":
+            await message.answer("🚫 Вы заблокированы в боте.")
+            return
+
+        if not user.agreed_to_rules:
+            from app.keyboards import rules_keyboard
+            await message.answer(
+                "📋 <b>Правила бота</b>\n\n"
+                "1. Нельзя публиковать запрещённый или шок-контент.\n"
+                "2. Нельзя использовать баги и накручивать награды.\n"
+                "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
+                "Нажмите кнопку ниже, чтобы принять правила.",
+                parse_mode="HTML",
+                reply_markup=rules_keyboard()
+            )
+            return
+
+        if not user.nickname_set or not user.display_name:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✏️ Установить ник",
+                    callback_data="set_nickname_start"
+                )]
+            ])
+            from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
+            await message.answer(
+                "👋 Добро пожаловать!\n\n"
+                "⚠️ Перед началом нужно установить ник.\n"
+                f"Первая установка бесплатна!\n"
+                f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+                f"• Только буквы, цифры, _ и -",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            return
+
+        await send_welcome_banner(message, session, user)
+
+
 @router.message(Command("katya"))
 async def cmd_katya(message: Message, state: FSMContext):
     """Открывает Катю командой, даже если ReplyKeyboard в клиенте не обновилась."""
@@ -406,100 +499,6 @@ async def send_welcome_banner(message_or_callback, session, user):
         )
 
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
-    if not message.from_user:
-        return
-    await state.clear()
-    args = (command.args or "").strip()
-
-    if args.startswith("promo_"):
-        promo_code = args.replace("promo_", "")
-        async with async_session() as session:
-            user, is_new = await get_or_create_user(
-                session, message.from_user.id,
-                message.from_user.username,
-                message.from_user.first_name,
-                message.from_user.last_name,
-            )
-            if user.status == "banned":
-                await message.answer("🚫 Вы заблокированы в боте.")
-                return
-            result = await activate_promocode(session, user.id, promo_code)
-            await message.answer(result)
-            if not user.agreed_to_rules:
-                from app.keyboards import rules_keyboard
-                await message.answer(
-                    "📋 <b>Правила бота</b>\n\n"
-                    "1. Нельзя публиковать запрещённый или шок-контент.\n"
-                    "2. Нельзя использовать баги и накручивать награды.\n"
-                    "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
-                    "Нажмите кнопку ниже, чтобы принять правила.",
-                    parse_mode="HTML",
-                    reply_markup=rules_keyboard()
-                )
-                return
-            admin_flag = is_any_admin(message.from_user.id, user)
-            vip_str = " 👑" if is_vip(user) else ""
-            styled_name = await get_styled_display_name(session, user)
-            await message.answer(
-                f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
-                f"💰 Баланс: <b>{user.balance}</b> монет",
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
-            )
-            return
-
-    referral_code = args if args else None
-    async with async_session() as session:
-        user, is_new = await get_or_create_user(
-            session,
-            message.from_user.id,
-            message.from_user.username,
-            message.from_user.first_name,
-            message.from_user.last_name,
-            referral_code,
-        )
-        if user.status == "banned":
-            await message.answer("🚫 Вы заблокированы в боте.")
-            return
-
-        if not user.agreed_to_rules:
-            from app.keyboards import rules_keyboard
-            await message.answer(
-                "📋 <b>Правила бота</b>\n\n"
-                "1. Нельзя публиковать запрещённый или шок-контент.\n"
-                "2. Нельзя использовать баги и накручивать награды.\n"
-                "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
-                "Нажмите кнопку ниже, чтобы принять правила.",
-                parse_mode="HTML",
-                reply_markup=rules_keyboard()
-            )
-            return
-
-        if not user.nickname_set or not user.display_name:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="✏️ Установить ник",
-                    callback_data="set_nickname_start"
-                )]
-            ])
-            from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
-            await message.answer(
-                "👋 Добро пожаловать!\n\n"
-                "⚠️ Перед началом нужно установить ник.\n"
-                f"Первая установка бесплатна!\n"
-                f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
-                f"• Только буквы, цифры, _ и -",
-                parse_mode="HTML",
-                reply_markup=kb
-            )
-            return
-
-        await send_welcome_banner(message, session, user)
-
-
-
 @router.callback_query(F.data == "accept_rules")
 async def accept_rules(callback: CallbackQuery):
     async with async_session() as session:
@@ -552,7 +551,8 @@ async def cmd_admin_redirect(message: Message):
 # PROFILE
 # =========================
 @router.message(F.text == BTN_PROFILE)
-async def show_profile(message: Message):
+async def show_profile(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -605,7 +605,8 @@ async def show_profile(message: Message):
 # LEVEL
 # =========================
 @router.message(F.text == BTN_LEVEL)
-async def show_level(message: Message):
+async def show_level(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -639,7 +640,8 @@ async def show_level(message: Message):
 # VIP
 # =========================
 @router.message(F.text == BTN_VIP)
-async def show_vip(message: Message):
+async def show_vip(message: Message, state: FSMContext):
+    await state.clear()
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
@@ -755,7 +757,8 @@ async def buy_vip(callback: CallbackQuery):
 # WATCH
 # =========================
 @router.message(F.text == BTN_WATCH)
-async def btn_watch(message: Message):
+async def btn_watch(message: Message, state: FSMContext):
+    await state.clear()
     from app.services import is_admin_or_super
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
@@ -1192,7 +1195,8 @@ async def cb_react(callback: CallbackQuery):
 # UPLOAD
 # =========================
 @router.message(F.text == BTN_UPLOAD)
-async def btn_upload(message: Message):
+async def btn_upload(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -1325,7 +1329,8 @@ async def handle_photo_upload(message: Message):
 # BONUS
 # =========================
 @router.message(F.text == BTN_BONUS)
-async def btn_bonus(message: Message):
+async def btn_bonus(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -1346,7 +1351,8 @@ async def btn_bonus(message: Message):
 # REFERRALS
 # =========================
 @router.message(F.text == BTN_REFERRALS)
-async def btn_referrals(message: Message):
+async def btn_referrals(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -1373,7 +1379,8 @@ async def btn_referrals(message: Message):
 # BUY COINS
 # =========================
 @router.message(F.text == BTN_BUY)
-async def btn_buy(message: Message):
+async def btn_buy(message: Message, state: FSMContext):
+    await state.clear()
     try:
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
@@ -1925,18 +1932,19 @@ async def lootbox_buy(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "btn_buy")
-async def cb_btn_buy(callback: CallbackQuery):
+async def cb_btn_buy(callback: CallbackQuery, state: FSMContext):
     # Reuse btn_buy logic
     from aiogram.types import Message as TGMessage
     # create a fake message proxy – easier: call internal logic directly
-    await btn_buy(callback.message)  # type: ignore
+    await btn_buy(callback.message, state)  # type: ignore
     await callback.answer()
 
 # =========================
 # OFFERS
 # =========================
 @router.message(F.text == BTN_OFFERS)
-async def btn_offers(message: Message):
+async def btn_offers(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -2387,7 +2395,8 @@ async def my_rentals(callback: CallbackQuery):
 # GAMES (с игровыми сессиями)
 # =========================
 @router.message(F.text == BTN_GAMES)
-async def btn_games(message: Message):
+async def btn_games(message: Message, state: FSMContext):
+    await state.clear()
     from app.keyboards import games_menu_keyboard
     from app.services import can_play_free_game
     from app.config import GAME_SESSION_COST
@@ -2737,7 +2746,8 @@ async def games_back(callback: CallbackQuery):
 # TOPS
 # =========================
 @router.message(F.text == BTN_TOPS)
-async def btn_tops(message: Message):
+async def btn_tops(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -2860,7 +2870,8 @@ async def top_richest(callback: CallbackQuery):
 # QUESTS
 # =========================
 @router.message(F.text == BTN_QUESTS)
-async def btn_quests(message: Message):
+async def btn_quests(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -3104,7 +3115,8 @@ async def _send_lottery_menu(message_or_callback_message: Message) -> None:
 
 
 @router.message(F.text == BTN_LOTTERY)
-async def btn_lottery(message: Message):
+async def btn_lottery(message: Message, state: FSMContext):
+    await state.clear()
     await _send_lottery_menu(message)
 
 
@@ -3221,6 +3233,7 @@ async def lottery_live_info(callback: CallbackQuery):
 # =========================
 @router.message(F.text == BTN_FEEDBACK)
 async def feedback_start(message: Message, state: FSMContext):
+    await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🐞 Сообщить о баге", callback_data="feedback_kind:bug")],
         [InlineKeyboardButton(text="💡 Предложить идею", callback_data="feedback_kind:suggestion")],
@@ -3311,7 +3324,8 @@ async def feedback_submit(message: Message, state: FSMContext):
 # ПРОМОКОДЫ (НОВЫЙ РАЗДЕЛ)
 # =========================
 @router.message(F.text == BTN_PROMO)
-async def btn_promo(message: Message):
+async def btn_promo(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
