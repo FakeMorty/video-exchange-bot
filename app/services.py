@@ -2168,12 +2168,13 @@ async def should_flush_notifications(session: AsyncSession) -> bool:
 # APPROVE ALL
 # ============================
 
-async def approve_all_pending(session: AsyncSession, admin_id: int) -> int:
+async def approve_all_pending(session: AsyncSession, admin_id: int, limit: int = None) -> int:
     """Одобрить все pending-видео и фото. Возвращает количество."""
     from app.models import Video, User
-    pending = (await session.execute(
-        select(Video).where(Video.status == "pending")
-    )).scalars().all()
+    query = select(Video).where(Video.status == "pending")
+    if limit:
+        query = query.limit(limit)
+    pending = (await session.execute(query)).scalars().all()
     if not pending:
         return 0
     # N+1 fix: load all uploaders in one query

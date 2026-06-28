@@ -1557,14 +1557,38 @@ async def admin_approve_all_confirm(callback: CallbackQuery):
     if not is_super_admin(callback.from_user.id):
         await callback.answer("Только супер-админ.", show_alert=True)
         return
+    
+    BATCH_SIZE = 50
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
         admin_id = admin.id if admin else 0
-        count = await approve_all_pending(session, admin_id)
-    await callback.message.edit_text(
-        f"✅ <b>Одобрено {count} файлов!</b>\n\nНаграды начислены всем загрузчикам.",
-        parse_mode="HTML",
-    )
+        
+        count = await approve_all_pending(session, admin_id, limit=BATCH_SIZE)
+        remaining = await count_pending_videos(session)
+        
+    if remaining > 0:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"🔄 Одобрить следующие {min(BATCH_SIZE, remaining)}", callback_data="admin_approve_all_confirm")],
+            [InlineKeyboardButton(text="◀️ В админку", callback_data="admin_center")]
+        ])
+        await callback.message.edit_text(
+            f"✅ <b>Одобрен пакет из {count} файлов!</b>\n\n"
+            f"Осталось в очереди: <b>{remaining}</b> файлов.\n\n"
+            f"Нажмите кнопку ниже, чтобы одобрить следующий пакет по {BATCH_SIZE} файлов.",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В админку", callback_data="admin_center")]
+        ])
+        await callback.message.edit_text(
+            f"✅ <b>Одобрено {count} файлов!</b>\n\n"
+            f"Очередь модерации полностью очищена! 🎉",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+        
     await callback.answer(f"Одобрено {count} файлов!")
 
 
