@@ -2,6 +2,7 @@ from app.models import utc_now
 import asyncio
 from datetime import datetime, timezone, timedelta
 from html import escape
+from decimal import Decimal
 
 from aiogram import Router, F
 from aiogram.filters import Command

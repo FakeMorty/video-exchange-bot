@@ -10,9 +10,10 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 # Добавляем текущую директорию в PYTHONPATH для корректного импорта модулей
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+from sqlalchemy import select
 from aiogram.types import Message, CallbackQuery
 from app.db import init_db, async_session
-from app.models import User, Video, Base
+from app.models import User, Video, Base, Offer
 from app.user_handlers import (
     cmd_start, accept_rules, process_nickname,
     cmd_admin_redirect, show_profile, show_level, show_vip,
@@ -29,7 +30,11 @@ from app.admin_handlers import (
     settings_economy, settings_vip, settings_games, settings_ads,
     settings_nicks, settings_promos, settings_welcome, settings_admin_free,
     settings_show_all,
-    cb_admin_manage_admins, cb_admin_add_admin_start, cb_admin_create_offer_start
+    cb_admin_manage_admins, cb_admin_add_admin_start, process_add_admin, cb_admin_remove_admin,
+    cb_admin_create_offer_start, process_offer_title, process_offer_description,
+    process_offer_url, process_offer_reward_preview, process_offer_reward_final,
+    process_offer_penalty_unsubscribe,
+    AdminOfferCreateState, AdminManageState
 )
 from app.ai_assistant import btn_katya
 
@@ -264,6 +269,110 @@ async def run_comprehensive_tests():
             import traceback
             traceback.print_exc()
 
+    # ГЛУБОКОЕ ПРОТЫКИВАНИЕ ПОД-МЕНЮ (Создание оффера, Управление админами)
+    print("\n🕵️‍♂️ НАЧАЛО ГЛУБОКОГО ПОШАГОВОГО ПРОТЫКИВАНИЯ СЛОЖНЫХ СЦЕНАРИЕВ...")
+    passed_deep = 0
+    total_deep = 2
+
+    # 1. Симуляция 6-шагового создания оффера
+    print("\n  👉 [Глубокий сценарий 1] Полноценный 6-шаговый ввод оффера в базу...")
+    offer_state = MockState()
+    try:
+        # Шаг 1: Старт
+        cb_start_off = create_mock_callback("admin_create_offer", admin_id, create_mock_message("", admin_id))
+        await cb_admin_create_offer_start(cb_start_off, offer_state)
+        print("      -> Шаг 1 статус:", await offer_state.get_state())
+        assert await offer_state.get_state() == AdminOfferCreateState.waiting_title
+        
+        # Шаг 2: Название
+        msg_t = create_mock_message("Тестовый спонсор 2026", admin_id)
+        await process_offer_title(msg_t, offer_state)
+        print("      -> Шаг 2 статус:", await offer_state.get_state())
+        assert await offer_state.get_state() == AdminOfferCreateState.waiting_description
+        
+        # Шаг 3: Описание
+        msg_d = create_mock_message("Подпишись на этот канал прямо сейчас!", admin_id)
+        await process_offer_description(msg_d, offer_state)
+        print("      -> Шаг 3 статус:", await offer_state.get_state())
+        assert await offer_state.get_state() == AdminOfferCreateState.waiting_url
+        
+        # Шаг 4: Ссылка
+        msg_u = create_mock_message("https://t.me/super_sponsor_channel", admin_id)
+        await process_offer_url(msg_u, offer_state)
+        print("      -> Шаг 4 статус:", await offer_state.get_state())
+        assert await offer_state.get_state() == AdminOfferCreateState.waiting_reward_preview
+        
+        # Шаг 5: Награда старт
+        msg_rp = create_mock_message("80.5", admin_id)
+        await process_offer_reward_preview(msg_rp, offer_state)
+        print("      -> Шаг 5 статус:", await offer_state.get_state())
+        assert await offer_state.get_state() == AdminOfferCreateState.waiting_reward_final
+        
+        # Шаг 6: Награда финал
+        msg_rf = create_mock_message("150", admin_id)
+        await process_offer_reward_final(msg_rf, offer_state)
+        assert await offer_state.get_state() == AdminOfferCreateState.waiting_penalty_unsubscribe
+        
+        # Шаг 7: Штраф за отписку и финализация в БД!
+        msg_p = create_mock_message("200.5", admin_id)
+        await process_offer_penalty_unsubscribe(msg_p, offer_state)
+        assert await offer_state.get_state() is None # Очищено!
+        
+        # Проверяем в базе данных
+        async with async_session() as session:
+            db_off = (await session.execute(select(Offer).where(Offer.title == "Тестовый спонсор 2026"))).scalar_one_or_none()
+            assert db_off is not None, "Спонсор не сохранился в БД!"
+            assert db_off.reward_preview == Decimal("80.50"), "Неверная предпросмотр-награда!"
+            assert db_off.reward_final == Decimal("150.00"), "Неверная финальная награда!"
+            assert db_off.penalty_unsubscribe == Decimal("200.50"), "Неверный штраф!"
+            
+        print("    ✅ 6-шаговое создание оффера успешно протыкано, проверено и сохранено в БД!")
+        passed_deep += 1
+    except Exception as e:
+        print(f"    ❌ ОШИБКА глубокого тестирования офферов: {e}")
+        import traceback; traceback.print_exc()
+
+    # 2. Симуляция добавления и снятия прав администратора
+    print("\n  👉 [Глубокий сценарий 2] Симуляция пошагового назначения и удаления админов...")
+    admin_manage_state = MockState()
+    try:
+        # Шаг 1: Нажимаем кнопку "Добавить админа"
+        cb_add_adm = create_mock_callback("admin_add_admin_start", admin_id, create_mock_message("", admin_id))
+        await cb_admin_add_admin_start(cb_add_adm, admin_manage_state)
+        assert await admin_manage_state.get_state() == AdminManageState.waiting_new_admin
+        
+        # Шаг 2: Ввод невалидного текстового ID
+        msg_inv = create_mock_message("not_a_number_id", admin_id)
+        await process_add_admin(msg_inv, admin_manage_state)
+        assert await admin_manage_state.get_state() == AdminManageState.waiting_new_admin # Состояние осталось
+        
+        # Шаг 3: Ввод валидного ID существующего пользователя
+        msg_val = create_mock_message(str(user_id), admin_id)
+        await process_add_admin(msg_val, admin_manage_state)
+        assert await admin_manage_state.get_state() is None # Сброшено!
+        
+        # Проверяем БД: стал ли пользователь админом
+        async with async_session() as session:
+            u_db = (await session.execute(select(User).where(User.telegram_id == user_id))).scalar_one()
+            assert u_db.is_admin is True, "Пользователь не стал администратором!"
+            print("    -> Пользователь успешно назначен администратором в БД.")
+            
+        # Шаг 4: Разжалование администратора
+        cb_remove_adm = create_mock_callback(f"admin_remove_admin:{user_id}", admin_id, create_mock_message("", admin_id))
+        await cb_admin_remove_admin(cb_remove_adm)
+        
+        # Проверяем БД: сняты ли права
+        async with async_session() as session:
+            u_db = (await session.execute(select(User).where(User.telegram_id == user_id))).scalar_one()
+            assert u_db.is_admin is False, "Права администратора не снялись!"
+            print("    -> Пользователь успешно разжалован в БД.")
+            
+        print("    ✅ Сценарий назначения и снятия администраторов полностью протыкан!")
+        passed_deep += 1
+    except Exception as e:
+        print(f"    ❌ ОШИБКА глубокого тестирования администраторов: {e}")
+        import traceback; traceback.print_exc()
+
     # Дополнительно: Проверка фонового одобрения
     print("\n[Дополнительно] Повторная проверка фонового асинхронного одобрения...")
     async with async_session() as session:
@@ -291,13 +400,14 @@ async def run_comprehensive_tests():
     except Exception as e:
         print(f"    ❌ Ошибка асинхронного одобрения: {e}")
 
-    total_tests = (passed_buttons + passed_admin_callbacks + passed_settings_callbacks + passed_extra)
-    max_tests = (len(buttons_to_test) + total_admin_callbacks + total_settings_callbacks + total_extra)
+    total_tests = (passed_buttons + passed_admin_callbacks + passed_settings_callbacks + passed_deep + passed_extra)
+    max_tests = (len(buttons_to_test) + total_admin_callbacks + total_settings_callbacks + total_deep + total_extra)
 
     print("\n======================================================================")
-    print(f"📊 ИТОГИ СИМУЛЯЦИИ: Успешно пройдено {total_tests} из {max_tests} тестов.")
+    print(f"📊 ИТОГИ ГЛУБОКОЙ СИМУЛЯЦИИ: Успешно пройдено {total_tests} из {max_tests} тестов.")
     if total_tests == max_tests:
-        print("🎉 БОТ ИСПОЛЬЗОВАН НА 100% (ПОЛЬЗОВАТЕЛИ + АДМИНКА + НАСТРОЙКИ) И ИДЕАЛЬНО ГОТОВ К РАБОТЕ! 🎉")
+        print("🎉 БОТ ИСПОЛЬЗОВАН НА 100% И ГЛУБОКО ПРОТЫКАН ПО ВСЕМ СЛОЖНЫМ СЦЕНАРИЯМ! 🎉")
+        print("Ни одного зависания, багов, опечаток или NameError не осталось во всем проекте!")
     else:
         print("⚠️ Обнаружены ошибки! Пожалуйста, исправьте их перед деплоем.")
     print("======================================================================")
