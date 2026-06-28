@@ -41,7 +41,8 @@ from app.admin_handlers import (
     cb_admin_create_offer_start, process_offer_title, process_offer_description,
     process_offer_url, process_offer_reward_preview, process_offer_reward_final,
     process_offer_penalty_unsubscribe,
-    AdminOfferCreateState, AdminManageState
+    AdminOfferCreateState, AdminManageState,
+    admin_select_user, cb_admin_user_edit_nick_start, cb_admin_user_give_coins_start
 )
 from app.ai_assistant import btn_katya
 
@@ -227,6 +228,9 @@ async def run_comprehensive_tests():
         ("👑 Управление админами (НОВАЯ)", cb_admin_manage_admins, []),
         ("➕ Добавить админа - старт (НОВАЯ)", cb_admin_add_admin_start, [state]),
         ("➕ Создать оффер - старт (НОВАЯ)", cb_admin_create_offer_start, [state]),
+        ("👤 Выбрать пользователя (НОВАЯ)", admin_select_user, []),
+        ("✏️ Изменить ник пользователя (НОВАЯ)", cb_admin_user_edit_nick_start, [state]),
+        ("💰 Начислить монеты (НОВАЯ)", cb_admin_user_give_coins_start, [state]),
     ]
 
     passed_admin_callbacks = 0
@@ -234,7 +238,15 @@ async def run_comprehensive_tests():
 
     for label, handler, extra_args in admin_callbacks:
         print(f"  👉 Клики в админке: '{label}'...")
-        cb = create_mock_callback("dummy_data", admin_id, admin_msg)
+        cb_data = "dummy_data"
+        if label == "👤 Выбрать пользователя (НОВАЯ)":
+            cb_data = f"admin_select_user:{user_id}"
+        elif label == "✏️ Изменить ник пользователя (НОВАЯ)":
+            cb_data = f"admin_user_edit_nick_start:{user_id}"
+        elif label == "💰 Начислить монеты (НОВАЯ)":
+            cb_data = f"admin_user_give_coins_start:{user_id}"
+            
+        cb = create_mock_callback(cb_data, admin_id, admin_msg)
         try:
             if len(extra_args) > 0:
                 await handler(cb, *extra_args)

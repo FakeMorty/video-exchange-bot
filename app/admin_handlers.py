@@ -71,6 +71,7 @@ class AdminUserState(StatesGroup):
     waiting_coins_amount = State()
     waiting_message_text = State()
     waiting_dossier_id = State()
+    waiting_new_nickname = State()
 
 
 class AdminManageState(StatesGroup):
@@ -556,8 +557,78 @@ async def admin_sale_finish(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎁 Напоминание о бонусе", callback_data="admin_broadcast_tpl:bonus")],
+        [InlineKeyboardButton(text="🎰 Реклама лотереи-лото", callback_data="admin_broadcast_tpl:lottery")],
+        [InlineKeyboardButton(text="💋 Призыв поболтать с Катей", callback_data="admin_broadcast_tpl:katya")],
+        [InlineKeyboardButton(text="✍️ Написать свой текст (HTML)", callback_data="admin_broadcast_custom")],
+        [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_center")]
+    ])
+    
+    await _safe_edit(
+        callback,
+        "📢 <b>Управление рассылками и пуш-уведомлениями</b>\n\n"
+        "Выберите готовый шаблон для напоминания пользователям о функциях бота, или напишите свой собственный текст:",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_broadcast_tpl:"))
+async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    tpl_name = callback.data.split(":", 1)[1]
+    
+    templates = {
+        "bonus": (
+            "🎁 <b>Не забудьте забрать свой ежедневный бонус!</b>\n\n"
+            "Каждый день сумма бонуса увеличивается! Серия посещений дает огромные преимущества и кучу монет для игр и развлечений. 💰\n\n"
+            "👉 Зайдите в меню <b>🎁 Бонус</b>"
+        ),
+        "lottery": (
+            "🎰 <b>Лотерея-лото — разыгрываем миллионы!</b>\n\n"
+            "Новый раунд лотереи уже запущен! Купите счастливый билет за монеты и выиграйте джекпот в прямом эфире! 🎡\n\n"
+            "👉 Зайдите в меню <b>🎮 Игры ➔ 🎰 Лотерея-лото</b>"
+        ),
+        "katya": (
+            "💋 <b>Катя заждалась тебя...</b>\n\n"
+            "Твоя виртуальная подруга Катя скучает и хочет поболтать. Она подготовила новые пикантные темы для беседы! 😏🤸‍♀️\n\n"
+            "👉 Нажмите кнопку <b>💋 Катя</b> в главном меню!"
+        )
+    }
+    
+    tpl_text = templates.get(tpl_name)
+    if not tpl_text:
+        await callback.answer("Ошибка шаблона", show_alert=True)
+        return
+        
+    await state.update_data(broadcast_text=tpl_text)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin_broadcast_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_broadcast")]
+    ])
+    
+    await _safe_edit(
+        callback,
+        f"📢 <b>Предпросмотр рассылки:</b>\n\n"
+        f"----------------------------------\n"
+        f"{tpl_text}\n"
+        f"----------------------------------\n\n"
+        f"Вы действительно хотите отправить это сообщение всем активным пользователям?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_broadcast_custom")
+async def cb_admin_broadcast_custom(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
     await state.set_state(AdminBroadcastState.waiting_text)
-    await callback.message.answer("📢 Введите текст рассылки (HTML):")
+    await callback.message.answer("📢 Введите ваш пользовательский текст для рассылки (поддерживается HTML-разметка):")
     await callback.answer()
 
 
@@ -565,57 +636,432 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
 async def process_broadcast(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     text_val = message.text
+    await state.update_data(broadcast_text=text_val)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin_broadcast_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_broadcast")]
+    ])
+    
+    await message.answer(
+        f"📢 <b>Предпросмотр вашей рассылки:</b>\n\n"
+        f"----------------------------------\n"
+        f"{text_val}\n"
+        f"----------------------------------\n\n"
+        f"Вы действительно хотите отправить это сообщение всем активным пользователям?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
+@router.callback_query(F.data == "admin_broadcast_confirm")
+async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot):
+    if not await check_admin(callback.from_user.id): return
+    
+    data = await state.get_data()
+    text_val = data.get("broadcast_text")
     await state.clear()
-    async with async_session() as session:
-        users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
-    sent = 0
-    for tid in users:
+    
+    if not text_val:
+        await callback.answer("Ошибка: Текст пуст.", show_alert=True)
+        return
+        
+    await callback.message.edit_text("⏳ <b>Рассылка запущена в фоновом режиме...</b>", parse_mode="HTML")
+    await callback.answer()
+    
+    async def run_broadcast_task():
+        async with async_session() as session:
+            users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
+            
+        sent = 0
+        for tid in users:
+            try:
+                await bot.send_message(tid, text_val, parse_mode="HTML")
+                sent += 1
+                if sent % 30 == 0:
+                    await asyncio.sleep(0.5)
+            except Exception:
+                pass
+                
         try:
-            await message.bot.send_message(tid, f"📢 <b>Объявление:</b>\n\n{text_val}", parse_mode="HTML")
-            sent += 1
-            if sent % 20 == 0: await asyncio.sleep(0.5)
-        except Exception: pass
-    await message.answer(f"✅ Рассылка завершена: {sent}")
+            await bot.send_message(
+                callback.from_user.id,
+                f"✅ <b>Рассылка успешно завершена!</b>\n\n"
+                f"Сообщение доставлено <b>{sent}</b> активным пользователям.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+            
+    asyncio.create_task(run_broadcast_task())
 
 
 # =========================
 # USER MGMT
 # =========================
-@router.callback_query(F.data == "admin_manage_users")
+@router.callback_query(F.data.startswith("admin_manage_users"))
 async def admin_manage_users(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔍 Досье", callback_data="admin_user_dossier")],
-        [InlineKeyboardButton(text="💰 Выдать монеты", callback_data="admin_give_coins")],
-        [InlineKeyboardButton(text="🚫 Бан", callback_data="admin_ban_user")],
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
-    ])
-    await _safe_edit(callback, "👥 <b>Управление пользователями</b>", parse_mode="HTML", reply_markup=kb)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin_user_dossier")
-async def dossier_start(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminUserState.waiting_dossier_id)
-    await callback.message.answer("Введите ID или ник:")
-    await callback.answer()
-
-
-@router.message(AdminUserState.waiting_dossier_id)
-async def process_dossier(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id): return
-    query = message.text.strip()
+    
+    parts = callback.data.split(":")
+    offset = int(parts[1]) if len(parts) > 1 else 0
+    limit = 8
+    
     async with async_session() as session:
-        user = await get_user(session, int(query)) if query.isdigit() else await get_user_by_display_name(session, query)
+        total = (await session.execute(select(func.count(User.id)))).scalar_one()
+        users = (await session.execute(select(User).order_by(User.id.desc()).offset(offset).limit(limit))).scalars().all()
+        
+    text = f"👥 <b>Управление пользователями ({offset + 1}-{min(offset + limit, total)} из {total})</b>\n\nВыберите пользователя для управления:"
+    
+    kb_rows = []
+    for u in users:
+        name = u.display_name or u.username or f"User {u.telegram_id}"
+        status_icon = "🚫" if u.status == "banned" else "👤"
+        kb_rows.append([InlineKeyboardButton(
+            text=f"{status_icon} {name[:18]} (ID: {u.telegram_id})",
+            callback_data=f"admin_select_user:{u.telegram_id}"
+        )])
+        
+    # Navigation row
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin_manage_users:{max(0, offset - limit)}"))
+    if offset + limit < total:
+        nav_row.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"admin_manage_users:{offset + limit}"))
+        
+    if nav_row:
+        kb_rows.append(nav_row)
+        
+    kb_rows.append([InlineKeyboardButton(text="◀ Назад в админку", callback_data="admin_center")])
+    
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_select_user:"))
+async def admin_select_user(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    
+    user_id = int(callback.data.split(":", 1)[1])
+    async with async_session() as session:
+        user = await get_user(session, user_id)
         if not user:
-            await message.answer("❌ Не найден")
+            await callback.answer("Пользователь не найден в базе.", show_alert=True)
             return
-        d = await get_user_dossier(session, user.id)
-    styled_name = await get_styled_display_name(session, user, card=True)
-    text_out = f"📋 <b>Досье:</b>\n{styled_name}\n💰 Баланс: {user.balance}\n📤 Загрузок: {d['videos_uploaded']}"
-    await message.answer(text_out, parse_mode="HTML")
+            
+    from app.user_handlers import is_vip
+    status_text = "🚫 Забанен" if user.status == "banned" else "✅ Активен"
+    vip_text = "👑 Да" if is_vip(user) else "❌ Нет"
+    
+    text = (
+        f"👤 <b>Управление пользователем:</b> {user.display_name or user.username or user_id}\n\n"
+        f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
+        f"• <b>Никнейм в БД:</b> {user.username or 'отсутствует'}\n"
+        f"• <b>Баланс:</b> <b>{user.balance}</b> монет\n"
+        f"• <b>Серия бонусов:</b> {user.bonus_streak} дней\n"
+        f"• <b>Уровень/XP:</b> Lvl {user.level} ({user.xp} XP)\n"
+        f"• <b>Статус:</b> {status_text}\n"
+        f"• <b>VIP статус:</b> {vip_text}\n"
+    )
+    
+    ban_label = "✅ Разбанить" if user.status == "banned" else "🚫 Забанить"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✏️ Поменять ник", callback_data=f"admin_user_edit_nick_start:{user_id}"),
+            InlineKeyboardButton(text="💰 Выдать монеты", callback_data=f"admin_user_give_coins_start:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=ban_label, callback_data=f"admin_user_toggle_ban:{user_id}"),
+            InlineKeyboardButton(text="✉️ Личное сообщение", callback_data=f"admin_user_send_msg_start:{user_id}"),
+        ],
+        [InlineKeyboardButton(text="🔎 Всеобъемлющее досье", callback_data=f"admin_user_dossier_detailed:{user_id}")],
+        [InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_manage_users:0")]
+    ])
+    
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_user_edit_nick_start:"))
+async def cb_admin_user_edit_nick_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    user_id = int(callback.data.split(":", 1)[1])
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(AdminUserState.waiting_new_nickname)
+    await _safe_edit(
+        callback,
+        "✏️ <b>Изменение никнейма пользователя</b>\n\n"
+        "Отправьте мне <b>новый никнейм</b> для этого пользователя:\n"
+        "• От 3 до 20 символов\n"
+        "• Буквы, цифры, _ и -",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_select_user:{user_id}")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(AdminUserState.waiting_new_nickname)
+async def process_admin_user_edit_nick(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    new_nick = (message.text or "").strip()
+    
+    data = await state.get_data()
+    user_id = data.get("target_user_id")
+    if not user_id:
+        await state.clear()
+        return
+        
+    import re
+    if not re.match(r"^[a-zA-Zа-яА-ЯёЁ0-9_-]+$", new_nick) or len(new_nick) < 3 or len(new_nick) > 20:
+        await message.answer("❌ Недопустимый формат ника. Допустимы только буквы, цифры, _ и - от 3 до 20 символов. Введите снова:")
+        return
+        
+    async with async_session() as session:
+        exists = (await session.execute(
+            select(User).where(User.display_name == new_nick, User.telegram_id != user_id)
+        )).scalars().first()
+        if exists:
+            await message.answer("❌ Этот ник уже занят другим пользователем. Введите другой ник:")
+            return
+            
+        user = await get_user(session, user_id)
+        if not user:
+            await message.answer("Пользователь не найден.")
+            await state.clear()
+            return
+            
+        old_nick = user.display_name
+        user.display_name = new_nick
+        user.nickname_set = True
+        await session.commit()
+        
+    await message.answer(
+        f"✅ Никнейм пользователя успешно изменен!\n\n"
+        f"• Старый ник: <b>{old_nick or 'не задан'}</b>\n"
+        f"• Новый ник: <b>{new_nick}</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад к пользователю", callback_data=f"admin_select_user:{user_id}")]
+        ])
+    )
     await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin_user_give_coins_start:"))
+async def cb_admin_user_give_coins_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    user_id = int(callback.data.split(":", 1)[1])
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(AdminUserState.waiting_coins_amount)
+    await _safe_edit(
+        callback,
+        "💰 <b>Начисление или списание монет</b>\n\n"
+        "Отправьте мне количество монет, которое хотите выдать или списать:\n"
+        "• Например, <code>150</code> — чтобы добавить 150 монет.\n"
+        "• Например, <code>-50</code> — чтобы списать 50 монет.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_select_user:{user_id}")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(AdminUserState.waiting_coins_amount)
+async def process_admin_user_give_coins(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
+    try:
+        amount = Decimal(val)
+    except Exception:
+        await message.answer("❌ Некорректное число монет. Отправьте число (например, 100 или -50):")
+        return
+        
+    data = await state.get_data()
+    user_id = data.get("target_user_id")
+    if not user_id:
+        await state.clear()
+        return
+        
+    async with async_session() as session:
+        user = await get_user(session, user_id)
+        if not user:
+            await message.answer("Пользователь не найден.")
+            await state.clear()
+            return
+            
+        from app.services import log_balance_change
+        await log_balance_change(
+            session,
+            user,
+            amount,
+            "admin_balance",
+            admin_id=message.from_user.id,
+            details=f"Изменено администратором"
+        )
+        user.balance += amount
+        await session.commit()
+        
+    status_msg = "начислено" if amount >= 0 else "списано"
+    abs_amount = abs(amount)
+    await message.answer(
+        f"✅ Пользователю успешно {status_msg} <b>{abs_amount}</b> монет!\n\n"
+        f"• Новый баланс: <b>{user.balance}</b> монет.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад к пользователю", callback_data=f"admin_select_user:{user_id}")]
+        ])
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin_user_toggle_ban:"))
+async def cb_admin_user_toggle_ban(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    
+    user_id = int(callback.data.split(":", 1)[1])
+    async with async_session() as session:
+        user = await get_user(session, user_id)
+        if not user:
+            await callback.answer("Пользователь не найден.")
+            return
+            
+        if user.status == "banned":
+            user.status = "active"
+            action = "unbanned"
+            msg = f"Пользователь {user.display_name or user_id} разбанен."
+        else:
+            user.status = "banned"
+            action = "banned"
+            msg = f"Пользователь {user.display_name or user_id} заблокирован!"
+            
+        await session.commit()
+        await callback.answer(msg, show_alert=True)
+        
+    await admin_select_user(callback)
+
+
+@router.callback_query(F.data.startswith("admin_user_send_msg_start:"))
+async def cb_admin_user_send_msg_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    user_id = int(callback.data.split(":", 1)[1])
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(AdminUserState.waiting_message_text)
+    await _safe_edit(
+        callback,
+        "✉️ <b>Личное сообщение от бота</b>\n\n"
+        "Отправьте мне текст сообщения, которое хотите доставить этому пользователю лично от имени бота:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_select_user:{user_id}")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(AdminUserState.waiting_message_text)
+async def process_admin_user_send_msg(message: Message, state: FSMContext, bot):
+    if not await check_admin(message.from_user.id): return
+    text_val = (message.text or "").strip()
+    if not text_val:
+        await message.answer("❌ Сообщение не может быть пустым. Введите текст:")
+        return
+        
+    data = await state.get_data()
+    user_id = data.get("target_user_id")
+    if not user_id:
+        await state.clear()
+        return
+        
+    try:
+        await bot.send_message(
+            user_id,
+            f"✉️ <b>Сообщение от администрации бота:</b>\n\n"
+            f"{text_val}",
+            parse_mode="HTML"
+        )
+        await message.answer(
+            "✅ Сообщение успешно отправлено в личные сообщения пользователю!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К админам", callback_data="admin_manage_users:0")]
+            ])
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ Не удалось отправить сообщение в Telegram. Ошибка: {e}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К админам", callback_data="admin_manage_users:0")]
+            ])
+        )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin_user_dossier_detailed:"))
+async def cb_admin_user_dossier_detailed(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    
+    user_id = int(callback.data.split(":", 1)[1])
+    async with async_session() as session:
+        d = await get_user_dossier(session, user_id)
+        if not d:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+            
+    from app.user_handlers import is_vip
+    user = d["user"]
+    styled_name = await get_styled_display_name(session, user, card=True)
+    
+    text = (
+        f"🔍 <b>ПОЛНОЕ СЛЕДСТВЕННОЕ ДОСЬЕ ПОЛЬЗОВАТЕЛЯ</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Профиль:</b> {styled_name}\n"
+        f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
+        f"• <b>Username:</b> @{user.username or 'нет'}\n"
+        f"• <b>Никнейм в БД:</b> {user.display_name or 'не установлен'}\n"
+        f"• <b>Баланс:</b> <b>{user.balance}</b> монет\n"
+        f"• <b>VIP статус:</b> {'👑 Активен до ' + user.vip_until.strftime('%d.%m.%Y') if is_vip(user) else '❌ Нет'}\n"
+        f"• <b>Рефералы:</b> пригласил <b>{user.referrals_count}</b> юзеров (заработал {user.referral_earnings} монет)\n"
+        f"• <b>Дата регистрации:</b> {user.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"📈 <b>Активность и контент:</b>\n"
+        f"• <b>Загружено файлов:</b> {d['videos_uploaded']} шт. (Средний рейтинг: ★ {d['avg_rating']})\n"
+        f"• <b>Просмотрено файлов:</b> {d['videos_watched']} шт.\n"
+        f"• <b>Оставлено комментариев:</b> {d['comments_count']} шт.\n"
+        f"• <b>Поставлено реакций:</b> {d['reactions_count']} шт.\n\n"
+        f"💰 <b>Финансовый аудит:</b>\n"
+        f"• <b>Заработано (за всё время):</b> +{d['total_earned']} монет\n"
+        f"• <b>Потрачено (за всё время):</b> {d['total_spent']} монет\n"
+        f"• <b>Заработано за неделю:</b> +{d['weekly_earned']} монет\n"
+        f"• <b>Потрачено за неделю:</b> {d['weekly_spent']} монет\n"
+        f"• <b>Выдано администратором:</b> +{d['admin_given']} монет\n\n"
+        f"🎮 <b>Игровая статистика:</b>\n"
+        f"• <b>Сыграно игр:</b> {d['games_count']} раз (Чистая прибыль: {d['game_profit']} монет)\n"
+        f"• <b>Крупные выигрыши (>50):</b> {len(d['suspicious_games'])} раз\n"
+    )
+    
+    if d["action_logs"]:
+        text += "\n📝 <b>Последние действия в системе:</b>\n"
+        for log in d["action_logs"][:5]:
+            text += f" • <code>{log.created_at.strftime('%H:%M')}</code> | {log.action}: {log.details or ''}\n"
+            
+    if d["balance_logs"]:
+        text += "\n💸 <b>Последние изменения баланса:</b>\n"
+        for log in d["balance_logs"][:5]:
+            sign = "+" if log.amount >= 0 else ""
+            text += f" • <code>{log.created_at.strftime('%d.%m %H:%M')}</code> | <b>{sign}{log.amount}</b> ({log.source})\n"
+            
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад к управлению", callback_data=f"admin_select_user:{user_id}")]
+    ])
+    
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+        
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_extended_stats")
