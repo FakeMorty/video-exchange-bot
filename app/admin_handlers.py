@@ -1552,44 +1552,80 @@ async def admin_approve_all(callback: CallbackQuery):
     await callback.answer()
 
 
+async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id: int, bot):
+    import asyncio
+    from app.db import async_session
+    from app.services import approve_all_pending
+    
+    total_approved = 0
+    BATCH_SIZE = 50
+    
+    while True:
+        try:
+            async with async_session() as session:
+                count = await approve_all_pending(session, admin_user_id, limit=BATCH_SIZE)
+                total_approved += count
+                if count < BATCH_SIZE:
+                    break
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            try:
+                await bot.send_message(
+                    admin_chat_id,
+                    f"⚠️ <b>Произошла ошибка во время фонового одобрения:</b> {e}\n"
+                    f"Одобрено файлов на момент сбоя: <b>{total_approved}</b>",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            return
+            
+    try:
+        await bot.send_message(
+            admin_chat_id,
+            f"🎉 <b>Фоновое одобрение успешно завершено!</b>\n\n"
+            f"Всего одобрено файлов: <b>{total_approved}</b>.\n"
+            f"Награды начислены всем загрузчикам.",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+
 @router.callback_query(F.data == "admin_approve_all_confirm")
-async def admin_approve_all_confirm(callback: CallbackQuery):
+async def admin_approve_all_confirm(callback: CallbackQuery, bot):
     if not is_super_admin(callback.from_user.id):
         await callback.answer("Только супер-админ.", show_alert=True)
         return
     
-    BATCH_SIZE = 50
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
         admin_id = admin.id if admin else 0
+        total_pending = await count_pending_videos(session)
         
-        count = await approve_all_pending(session, admin_id, limit=BATCH_SIZE)
-        remaining = await count_pending_videos(session)
+    if total_pending == 0:
+        await callback.message.edit_text("Очередь модерации пуста!")
+        await callback.answer("Очередь пуста!")
+        return
         
-    if remaining > 0:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🔄 Одобрить следующие {min(BATCH_SIZE, remaining)}", callback_data="admin_approve_all_confirm")],
+    await callback.message.edit_text(
+        f"⏳ <b>Запущено фоновое одобрение!</b>\n\n"
+        f"Бот начал обрабатывать <b>{total_pending}</b> файлов в фоновом режиме.\n"
+        f"Вы можете закрыть бота и заниматься своими делами. По завершении вы получите личное сообщение от бота! 🚀",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ В админку", callback_data="admin_center")]
         ])
-        await callback.message.edit_text(
-            f"✅ <b>Одобрен пакет из {count} файлов!</b>\n\n"
-            f"Осталось в очереди: <b>{remaining}</b> файлов.\n\n"
-            f"Нажмите кнопку ниже, чтобы одобрить следующий пакет по {BATCH_SIZE} файлов.",
-            parse_mode="HTML",
-            reply_markup=kb
+    )
+    await callback.answer("Фоновое одобрение запущено!")
+    
+    asyncio.create_task(
+        approve_all_pending_background_task(
+            admin_chat_id=callback.message.chat.id,
+            admin_user_id=admin_id,
+            bot=bot
         )
-    else:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ В админку", callback_data="admin_center")]
-        ])
-        await callback.message.edit_text(
-            f"✅ <b>Одобрено {count} файлов!</b>\n\n"
-            f"Очередь модерации полностью очищена! 🎉",
-            parse_mode="HTML",
-            reply_markup=kb
-        )
-        
-    await callback.answer(f"Одобрено {count} файлов!")
+    )
 
 
 # ============================
