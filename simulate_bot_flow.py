@@ -28,7 +28,8 @@ from app.admin_handlers import (
     admin_trusted_uploaders, admin_reports_menu,
     settings_economy, settings_vip, settings_games, settings_ads,
     settings_nicks, settings_promos, settings_welcome, settings_admin_free,
-    settings_show_all
+    settings_show_all,
+    cb_admin_manage_admins, cb_admin_add_admin_start, cb_admin_create_offer_start
 )
 from app.ai_assistant import btn_katya
 
@@ -210,6 +211,9 @@ async def run_comprehensive_tests():
         ("⚡ Авто-модерация", admin_auto_moderation, []),
         ("🤝 Доверенные авторы", admin_trusted_uploaders, []),
         ("🚨 Жалобы пользователей", admin_reports_menu, []),
+        ("👑 Управление админами (НОВАЯ)", cb_admin_manage_admins, []),
+        ("➕ Добавить админа - старт (НОВАЯ)", cb_admin_add_admin_start, [state]),
+        ("➕ Создать оффер - старт (НОВАЯ)", cb_admin_create_offer_start, [state]),
     ]
 
     passed_admin_callbacks = 0

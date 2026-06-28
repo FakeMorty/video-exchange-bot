@@ -1732,3 +1732,294 @@ async def report_remove_video(callback: CallbackQuery):
             r.reviewed_by = admin.id if admin else 0
         await session.commit()
     await callback.answer(f"Видео #{video_id} удалено, жалобы закрыты 🗑", show_alert=True)
+
+
+# ====================================================
+# УПРАВЛЕНИЕ АДМИНИСТРАТОРАМИ (👑 Только Super-Admin)
+# ====================================================
+@router.callback_query(F.data == "admin_manage_admins")
+async def cb_admin_manage_admins(callback: CallbackQuery):
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только для супер-админов.", show_alert=True)
+        return
+        
+    async with async_session() as session:
+        admins = (await session.execute(select(User).where(User.is_admin == True))).scalars().all()
+        
+    text = "👑 <b>Управление администраторами</b>\n\n"
+    if not admins:
+        text += "В базе данных нет администраторов. Только супер-админы из .env."
+    else:
+        text += "Список администраторов в базе данных:\n"
+        for i, adm in enumerate(admins, 1):
+            name = adm.display_name or adm.username or f"ID {adm.telegram_id}"
+            text += f"{i}. {name} (ID: <code>{adm.telegram_id}</code>)\n"
+            
+    kb_rows = []
+    kb_rows.append([InlineKeyboardButton(text="➕ Назначить админа", callback_data="admin_add_admin_start")])
+    
+    for adm in admins:
+        name = adm.display_name or adm.username or f"ID {adm.telegram_id}"
+        kb_rows.append([InlineKeyboardButton(text=f"❌ Снять: {name[:20]}", callback_data=f"admin_remove_admin:{adm.telegram_id}")])
+        
+    kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")])
+    
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_add_admin_start")
+async def cb_admin_add_admin_start(callback: CallbackQuery, state: FSMContext):
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только для супер-админов.", show_alert=True)
+        return
+        
+    await state.set_state(AdminManageState.waiting_new_admin)
+    await _safe_edit(
+        callback,
+        "✏️ <b>Назначение администратора</b>\n\n"
+        "Отправьте мне <b>Telegram ID</b> пользователя, которого хотите назначить администратором в боте.\n\n"
+        "<i>Пользователь должен хотя бы раз запустить бота перед этим, чтобы запись о нём была в базе данных.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_manage_admins")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(AdminManageState.waiting_new_admin)
+async def process_add_admin(message: Message, state: FSMContext):
+    if not is_super_admin(message.from_user.id):
+        return
+        
+    text_val = (message.text or "").strip()
+    if not text_val.isdigit():
+        await message.answer("❌ Telegram ID должен состоять только из цифр. Пожалуйста, попробуйте снова или отправьте команду отмены.")
+        return
+        
+    tid = int(text_val)
+    async with async_session() as session:
+        user = await get_user(session, tid)
+        if not user:
+            await message.answer(
+                f"❌ Пользователь с Telegram ID <code>{tid}</code> не найден в базе данных.\n"
+                f"Убедитесь, что он запустил бота и создал профиль.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ К админам", callback_data="admin_manage_admins")]
+                ])
+            )
+            return
+            
+        if user.is_admin:
+            await message.answer(
+                f"ℹ️ Пользователь <b>{user.display_name or user.username or tid}</b> уже является администратором.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ К админам", callback_data="admin_manage_admins")]
+                ])
+            )
+            await state.clear()
+            return
+            
+        user.is_admin = True
+        await session.commit()
+        
+    await message.answer(
+        f"✅ Пользователь <b>{user.display_name or user.username or tid}</b> успешно назначен администратором!",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К админам", callback_data="admin_manage_admins")]
+        ])
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin_remove_admin:"))
+async def cb_admin_remove_admin(callback: CallbackQuery):
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только для супер-админов.", show_alert=True)
+        return
+        
+    tid = int(callback.data.split(":", 1)[1])
+    async with async_session() as session:
+        user = await get_user(session, tid)
+        if user:
+            user.is_admin = False
+            await session.commit()
+            await callback.answer(f"Администратор {user.display_name or tid} удален.")
+        else:
+            await callback.answer("Пользователь не найден.")
+            
+    await cb_admin_manage_admins(callback)
+
+
+# ====================================================
+# СОЗДАНИЕ ОФФЕРОВ (FSM)
+# ====================================================
+@router.callback_query(F.data == "admin_create_offer")
+async def cb_admin_create_offer_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+        
+    await state.set_state(AdminOfferCreateState.waiting_title)
+    await _safe_edit(
+        callback,
+        "📝 <b>Создание оффера (Шаг 1/6)</b>\n\n"
+        "Введите <b>название оффера</b> (например, <i>Подписка на игровой канал</i>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(AdminOfferCreateState.waiting_title)
+async def process_offer_title(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("❌ Название не должно быть пустым. Введите название:")
+        return
+        
+    await state.update_data(title=title)
+    await state.set_state(AdminOfferCreateState.waiting_description)
+    await message.answer(
+        "📝 <b>Создание оффера (Шаг 2/6)</b>\n\n"
+        "Введите <b>описание оффера</b> (что нужно сделать пользователю):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_description)
+async def process_offer_description(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    description = (message.text or "").strip()
+    if not description:
+        await message.answer("❌ Описание не должно быть пустым. Введите описание:")
+        return
+        
+    await state.update_data(description=description)
+    await state.set_state(AdminOfferCreateState.waiting_url)
+    await message.answer(
+        "🔗 <b>Создание оффера (Шаг 3/6)</b>\n\n"
+        "Введите <b>ссылку на Telegram-канал</b> (например, <code>https://t.me/my_channel</code>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_url)
+async def process_offer_url(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    url = (message.text or "").strip()
+    if not url or "t.me/" not in url:
+        await message.answer("❌ Ссылка должна вести на Telegram-канал (содержать t.me/). Введите ссылку:")
+        return
+        
+    await state.update_data(channel_url=url)
+    await state.set_state(AdminOfferCreateState.waiting_reward_preview)
+    await message.answer(
+        "💰 <b>Создание оффера (Шаг 4/6)</b>\n\n"
+        "Введите <b>награду за старт</b> (число монет, например, <code>50</code>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_reward_preview)
+async def process_offer_reward_preview(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
+    try:
+        reward = Decimal(val)
+        if reward < 0: raise ValueError()
+    except Exception:
+        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        return
+        
+    await state.update_data(reward_preview=str(reward))
+    await state.set_state(AdminOfferCreateState.waiting_reward_final)
+    await message.answer(
+        "💰 <b>Создание оффера (Шаг 5/6)</b>\n\n"
+        "Введите <b>награду за финальную подписку</b> (число монет, например, <code>350</code>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_reward_final)
+async def process_offer_reward_final(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
+    try:
+        reward = Decimal(val)
+        if reward < 0: raise ValueError()
+    except Exception:
+        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        return
+        
+    await state.update_data(reward_final=str(reward))
+    await state.set_state(AdminOfferCreateState.waiting_penalty_unsubscribe)
+    await message.answer(
+        "⚠️ <b>Создание оффера (Шаг 6/6)</b>\n\n"
+        "Введите <b>штраф за отписку от канала</b> (число монет, например, <code>400</code>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_penalty_unsubscribe)
+async def process_offer_penalty_unsubscribe(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
+    try:
+        penalty = Decimal(val)
+        if penalty < 0: raise ValueError()
+    except Exception:
+        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        return
+        
+    data = await state.get_data()
+    async with async_session() as session:
+        from app.services import admin_create_offer
+        offer = await admin_create_offer(
+            session,
+            title=data["title"],
+            description=data["description"],
+            channel_url=data["channel_url"],
+            reward_preview=Decimal(data["reward_preview"]),
+            reward_final=Decimal(data["reward_final"]),
+            is_rentable=False,
+            penalty_unsubscribe=penalty,
+            rent_cost_per_day=Decimal("0"),
+            max_simultaneous_rentals=1
+        )
+        await session.commit()
+        
+    await message.answer(
+        f"🎉 <b>Оффер успешно создан!</b>\n\n"
+        f"• Название: <b>{offer.title}</b>\n"
+        f"• Награда: {offer.reward_preview} + {offer.reward_final} монет\n"
+        f"• Штраф: {offer.penalty_unsubscribe} монет\n"
+        f"• Ссылка: {offer.channel_url}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К офферам", callback_data="admin_offers_menu")]
+        ])
+    )
+    await state.clear()
