@@ -43,6 +43,25 @@ logger = get_logger(__name__)
 
 router = Router()
 
+from aiogram.filters import Command, CommandStart, CommandObject
+
+@router.message(Command("cancel"))
+async def cmd_cancel_admin(message: Message, state: FSMContext):
+    await state.clear()
+    from app.keyboards import main_menu
+    from app.services import get_user, is_any_admin
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        admin_flag = is_any_admin(message.from_user.id, user)
+    await message.answer("❌ Действие отменено.", reply_markup=main_menu(is_admin=admin_flag))
+
+
+@router.message(CommandStart())
+async def cmd_start_admin(message: Message, command: CommandObject, state: FSMContext):
+    await state.clear()
+    from app.user_handlers import cmd_start
+    await cmd_start(message, command, state)
+
 
 # =========================
 # STATES
