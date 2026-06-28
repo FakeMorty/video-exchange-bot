@@ -347,16 +347,65 @@ async def process_nickname(message: Message, state: FSMContext):
         await state.clear()
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
-            admin_flag = is_any_admin(message.from_user.id, user)
-        await message.answer(
-            "Теперь вы можете пользоваться ботом!",
-            reply_markup=main_menu(is_admin=admin_flag)
-        )
+            await send_welcome_banner(message, session, user)
 
 
 # =========================
 # START / RULES
 # =========================
+async def send_welcome_banner(message_or_callback, session, user):
+    target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
+    admin_flag = is_any_admin(user.telegram_id, user)
+    vip_str = " 👑" if is_vip(user) else ""
+    import os
+    from aiogram.types import FSInputFile
+    styled_name = await get_styled_display_name(session, user)
+    msg_text = (
+        f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
+        f"💰 Баланс: <b>{user.balance}</b> монет"
+    )
+    custom_welcome = await get_setting(session, "welcome_text", "")
+    if custom_welcome:
+        msg_text += f"\n\n{custom_welcome}"
+    
+    banner_file_id = await get_setting(session, "welcome_banner_id", "")
+    
+    if banner_file_id:
+        try:
+            await target.answer_photo(
+                photo=banner_file_id,
+                caption=msg_text,
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+        except Exception:
+            await target.answer(
+                msg_text,
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+    elif os.path.exists("app/banner.jpg"):
+        try:
+            await target.answer_photo(
+                photo=FSInputFile("app/banner.jpg"),
+                caption=msg_text,
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+        except Exception:
+            await target.answer(
+                msg_text,
+                parse_mode="HTML",
+                reply_markup=main_menu(is_admin=admin_flag)
+            )
+    else:
+        await target.answer(
+            msg_text,
+            parse_mode="HTML",
+            reply_markup=main_menu(is_admin=admin_flag)
+        )
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
     if not message.from_user:
@@ -447,48 +496,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             )
             return
 
-        admin_flag = is_any_admin(message.from_user.id, user)
-        vip_str = " 👑" if is_vip(user) else ""
-        import os
-        from aiogram.types import FSInputFile
-        styled_name = await get_styled_display_name(session, user)
-        msg_text = (
-            f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
-            f"💰 Баланс: <b>{user.balance}</b> монет"
-        )
-        custom_welcome = await get_setting(session, "welcome_text", "")
-        if custom_welcome:
-            msg_text += f"\n\n{custom_welcome}"
-        
-        banner_file_id = await get_setting(session, "welcome_banner_id", "")
-        
-        if banner_file_id:
-            try:
-                await message.answer_photo(
-                    photo=banner_file_id,
-                    caption=msg_text,
-                    parse_mode="HTML",
-                    reply_markup=main_menu(is_admin=admin_flag)
-                )
-            except Exception:
-                await message.answer(
-                    msg_text,
-                    parse_mode="HTML",
-                    reply_markup=main_menu(is_admin=admin_flag)
-                )
-        elif os.path.exists("app/banner.jpg"):
-            await message.answer_photo(
-                photo=FSInputFile("app/banner.jpg"),
-                caption=msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
-            )
-        else:
-            await message.answer(
-                msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
-            )
+        await send_welcome_banner(message, session, user)
 
 
 
@@ -507,11 +515,7 @@ async def accept_rules(callback: CallbackQuery):
 
     # If user already has nickname, show main menu immediately
     if user.nickname_set and user.display_name:
-        admin_flag = is_any_admin(callback.from_user.id, user)
-        await callback.message.answer(
-            "✅ Правила приняты! Добро пожаловать!",
-            reply_markup=main_menu(is_admin=admin_flag)
-        )
+        await send_welcome_banner(callback, session, user)
         await callback.answer()
         return
 
