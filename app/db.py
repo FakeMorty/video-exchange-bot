@@ -7,9 +7,19 @@ def _fix_url(url: str) -> str:
     if not url:
         return "sqlite+aiosqlite:///bot.db"
     if url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    
+    if "sslmode=" in url:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url)
+        query_params = urllib.parse.parse_qs(parsed.query)
+        query_params.pop("sslmode", None)
+        new_query = urllib.parse.urlencode(query_params, doseq=True)
+        parsed = parsed._replace(query=new_query)
+        url = urllib.parse.urlunparse(parsed)
+        
     return url
 
 # Настройки для Render PostgreSQL (обязателен SSL)

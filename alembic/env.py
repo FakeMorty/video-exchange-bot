@@ -27,9 +27,19 @@ def _sync_url_from_env() -> str:
         return "sqlite+aiosqlite:///bot.db"
 
     if db_url.startswith("postgres://"):
-        return db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if db_url.startswith("postgresql://"):
-        return db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        
+    if "sslmode=" in db_url:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(db_url)
+        query_params = urllib.parse.parse_qs(parsed.query)
+        query_params.pop("sslmode", None)
+        new_query = urllib.parse.urlencode(query_params, doseq=True)
+        parsed = parsed._replace(query=new_query)
+        db_url = urllib.parse.urlunparse(parsed)
+        
     return db_url
 
 
