@@ -1815,6 +1815,7 @@ async def lootbox_buy(callback: CallbackQuery):
     if not ENABLE_LOOTBOXES:
         await callback.answer("Лутбоксы отключены.", show_alert=True)
         return
+    from app.services import _roll_lootbox_reward_coins, open_lootbox_for_coins
     kind = callback.data.split(":", 1)[1]
     if kind == "coins":
         async with async_session() as session:
@@ -1833,7 +1834,6 @@ async def lootbox_buy(callback: CallbackQuery):
 
             if admin_free:
                 # Бесплатный лутбокс для админа
-                from app.services import _roll_lootbox_reward_coins, open_lootbox_for_coins
                 reward, rarity = _roll_lootbox_reward_coins()
                 await log_balance_change(session, user, reward, "lootbox_reward_admin_free",
                                          details=f"ADMIN_FREE rarity={rarity}")

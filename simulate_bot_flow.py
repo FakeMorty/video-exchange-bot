@@ -10,16 +10,23 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 # Добавляем текущую директорию в PYTHONPATH для корректного импорта модулей
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from sqlalchemy import select
 from aiogram.types import Message, CallbackQuery
+from sqlalchemy import select
 from app.db import init_db, async_session
-from app.models import User, Video, Base, Offer
+from app.models import (
+    User, Video, Base, Offer, LootboxOpen, Promocode,
+    PromocodeActivation, Feedback, DailyQuestProgress
+)
 from app.user_handlers import (
     cmd_start, accept_rules, process_nickname,
     cmd_admin_redirect, show_profile, show_level, show_vip,
     btn_watch, btn_upload, btn_bonus, btn_referrals, btn_buy,
     btn_offers, btn_games, btn_tops, btn_quests, btn_lottery,
-    feedback_start, btn_promo
+    feedback_start, feedback_submit, btn_promo,
+    lootbox_menu, lootbox_buy,
+    promo_create_start, promo_amount, promo_uses, promo_hours,
+    promo_activate_start, promo_activate_code,
+    PromoCreateState, PromoActivateState, FeedbackState
 )
 from app.admin_handlers import (
     admin_approve_all_confirm,
@@ -73,6 +80,7 @@ def create_mock_message(text: str, user_id: int, username: str = "test_user") ->
     msg.chat.id = user_id
     msg.answer = AsyncMock()
     msg.answer_photo = AsyncMock()
+    msg.answer_invoice = AsyncMock()
     msg.edit_text = AsyncMock()
     msg.reply = AsyncMock()
     
@@ -272,7 +280,7 @@ async def run_comprehensive_tests():
     # ГЛУБОКОЕ ПРОТЫКИВАНИЕ ПОД-МЕНЮ (Создание оффера, Управление админами)
     print("\n🕵️‍♂️ НАЧАЛО ГЛУБОКОГО ПОШАГОВОГО ПРОТЫКИВАНИЯ СЛОЖНЫХ СЦЕНАРИЕВ...")
     passed_deep = 0
-    total_deep = 2
+    total_deep = 6
 
     # 1. Симуляция 6-шагового создания оффера
     print("\n  👉 [Глубокий сценарий 1] Полноценный 6-шаговый ввод оффера в базу...")
@@ -281,31 +289,26 @@ async def run_comprehensive_tests():
         # Шаг 1: Старт
         cb_start_off = create_mock_callback("admin_create_offer", admin_id, create_mock_message("", admin_id))
         await cb_admin_create_offer_start(cb_start_off, offer_state)
-        print("      -> Шаг 1 статус:", await offer_state.get_state())
         assert await offer_state.get_state() == AdminOfferCreateState.waiting_title
         
         # Шаг 2: Название
         msg_t = create_mock_message("Тестовый спонсор 2026", admin_id)
         await process_offer_title(msg_t, offer_state)
-        print("      -> Шаг 2 статус:", await offer_state.get_state())
         assert await offer_state.get_state() == AdminOfferCreateState.waiting_description
         
         # Шаг 3: Описание
         msg_d = create_mock_message("Подпишись на этот канал прямо сейчас!", admin_id)
         await process_offer_description(msg_d, offer_state)
-        print("      -> Шаг 3 статус:", await offer_state.get_state())
         assert await offer_state.get_state() == AdminOfferCreateState.waiting_url
         
         # Шаг 4: Ссылка
         msg_u = create_mock_message("https://t.me/super_sponsor_channel", admin_id)
         await process_offer_url(msg_u, offer_state)
-        print("      -> Шаг 4 статус:", await offer_state.get_state())
         assert await offer_state.get_state() == AdminOfferCreateState.waiting_reward_preview
         
         # Шаг 5: Награда старт
         msg_rp = create_mock_message("80.5", admin_id)
         await process_offer_reward_preview(msg_rp, offer_state)
-        print("      -> Шаг 5 статус:", await offer_state.get_state())
         assert await offer_state.get_state() == AdminOfferCreateState.waiting_reward_final
         
         # Шаг 6: Награда финал
@@ -372,6 +375,169 @@ async def run_comprehensive_tests():
     except Exception as e:
         print(f"    ❌ ОШИБКА глубокого тестирования администраторов: {e}")
         import traceback; traceback.print_exc()
+
+    # 3. Симуляция Ежедневного Бонуса (Daily Bonus)
+    print("\n  👉 [Глубокий сценарий 3] Симуляция получения Ежедневного Бонуса...")
+    try:
+        msg_bonus = create_mock_message("🎁 Бонус", user_id)
+        await btn_bonus(msg_bonus)
+        
+        # Проверяем в БД: обновились ли поля бонуса
+        async with async_session() as session:
+            u_db = (await session.execute(select(User).where(User.telegram_id == user_id))).scalar_one()
+            assert u_db.last_bonus_at is not None, "Дата последнего бонуса пуста!"
+            assert u_db.bonus_streak == 1, "Счетчик серии бонусов не увеличился!"
+            # Начальный баланс был 100 монет, за 1-й день серии дают 20 монет -> баланс должен быть 120
+            assert u_db.balance == Decimal("120.00")
+            print(f"    -> Серия бонусов: {u_db.bonus_streak}, Новый баланс: {u_db.balance} монет")
+        print("    ✅ Ежедневный бонус успешно протестирован и зачислен в БД!")
+        passed_deep += 1
+    except Exception as e:
+        print(f"    ❌ ОШИБКА получения ежедневного бонуса: {e}")
+        import traceback; traceback.print_exc()
+
+    # 4. Симуляция покупки Лутбокса за монеты (Lootbox Buy Flow)
+    print("\n  👉 [Глубокий сценарий 4] Покупка лутбокса за монеты...")
+    try:
+        # Сначала покажем меню
+        cb_lb_menu = create_mock_callback("lootbox_menu", user_id, create_mock_message("", user_id))
+        await lootbox_menu(cb_lb_menu)
+        
+        # Симулируем покупку за монеты (цена 100 монет)
+        cb_lb_buy = create_mock_callback("lootbox_buy:coins", user_id, create_mock_message("", user_id))
+        await lootbox_buy(cb_lb_buy)
+        
+        # Проверяем в БД: списались ли монеты и создалась ли запись открытия
+        async with async_session() as session:
+            u_db = (await session.execute(select(User).where(User.telegram_id == user_id))).scalar_one()
+            opens = (await session.execute(select(LootboxOpen).where(LootboxOpen.user_id == u_db.id))).scalars().all()
+            
+            assert len(opens) == 1, "Запись об открытии лутбокса не добавилась в БД!"
+            # Баланс был 120, вычли 100 за лутбокс, но лутбокс выдает случайную награду (добавим ее к проверке)
+            expected_balance = Decimal("120.00") - Decimal("100.00") + opens[0].reward_coins
+            assert u_db.balance == expected_balance, f"Неверный баланс: {u_db.balance} != {expected_balance}"
+            print(f"    -> Открыт лутбокс! Выигрыш: {opens[0].reward_coins} монет, Редкость: {opens[0].rarity}, Новый баланс: {u_db.balance}")
+            
+        print("    ✅ Покупка и открытие лутбокса успешно протыканы в БД!")
+        passed_deep += 1
+    except Exception as e:
+        print(f"    ❌ ОШИБКА глубокого тестирования лутбоксов: {e}")
+        import traceback; traceback.print_exc()
+
+    # 5. Симуляция пошагового создания и активации Промокода
+    print("\n  👉 [Глубокий сценарий 5] Пошаговое создание промокода (User А) и активация (User B)...")
+    promo_state = MockState()
+    promo_user_id_b = 888777666
+    
+    try:
+        # Шаг 1: Создаем второго пользователя (User B) в БД и делаем User A (Gamer-X) VIP-пользователем!
+        async with async_session() as session:
+            user_b = await session.merge(User(
+                telegram_id=promo_user_id_b,
+                username="promo_user_b",
+                first_name="UserB",
+                last_name="Test",
+                is_admin=False,
+                agreed_to_rules=True,
+                nickname_set=True,
+                display_name="UserB"
+            ))
+            
+            # Находим User А и даем ему VIP на 30 дней
+            u_a = (await session.execute(select(User).where(User.telegram_id == user_id))).scalar_one()
+            from datetime import datetime, timedelta
+            u_a.vip_until = datetime.utcnow() + timedelta(days=30)
+            u_a.promo_created_this_month = 0
+            u_a.promo_month = datetime.utcnow().month
+            
+            await session.commit()
+            
+        # Шаг 2: Старт создания промокода (User A - Gamer-X)
+        cb_promo_start = create_mock_callback("promo_create", user_id, create_mock_message("", user_id))
+        await promo_create_start(cb_promo_start, promo_state)
+        assert await promo_state.get_state() == PromoCreateState.waiting_amount
+        
+        # Шаг 3: Ввод суммы (50 монет)
+        msg_pa = create_mock_message("50", user_id)
+        await promo_amount(msg_pa, promo_state)
+        assert await promo_state.get_state() == PromoCreateState.waiting_uses
+        
+        # Шаг 4: Ввод количеств использований (1 использование)
+        msg_pu = create_mock_message("1", user_id)
+        await promo_uses(msg_pu, promo_state)
+        assert await promo_state.get_state() == PromoCreateState.waiting_hours
+        
+        # Шаг 5: Время действия (24 часа) - Финализирует создание промокода за монеты
+        msg_ph = create_mock_message("24", user_id)
+        
+        # Подменим bot.get_me() для вызова в обработчике
+        mock_bot_info = MagicMock()
+        mock_bot_info.username = "bot_username"
+        msg_ph.bot = MagicMock()
+        msg_ph.bot.get_me = AsyncMock(return_value=mock_bot_info)
+        
+        await promo_hours(msg_ph, promo_state)
+        assert await promo_state.get_state() is None # Очищен!
+        
+        # Извлекаем промокод из БД
+        async with async_session() as session:
+            promo_db = (await session.execute(select(Promocode))).scalars().first()
+            assert promo_db is not None, "Промокод не создался в БД!"
+            promo_code_str = promo_db.code
+            print(f"    -> Создан промокод: «{promo_code_str}» на сумму {promo_db.coin_amount} монет.")
+            
+        # Шаг 6: Активация промокода (User B)
+        cb_promo_act = create_mock_callback("promo_activate", promo_user_id_b, create_mock_message("", promo_user_id_b))
+        promo_act_state = MockState()
+        await promo_activate_start(cb_promo_act, promo_act_state)
+        assert await promo_act_state.get_state() == PromoActivateState.waiting_code
+        
+        # Отправляем сам код
+        msg_act_code = create_mock_message(promo_code_str, promo_user_id_b)
+        await promo_activate_code(msg_act_code, promo_act_state)
+        assert await promo_act_state.get_state() is None # Очищен!
+        
+        # Проверяем баланс User B (был 0 монет, после активации промокода на 50 должен быть 50)
+        async with async_session() as session:
+            u_b_db = (await session.execute(select(User).where(User.telegram_id == promo_user_id_b))).scalar_one()
+            assert u_b_db.balance == Decimal("50.00"), f"Неверный баланс после активации: {u_b_db.balance}"
+            print(f"    -> User B успешно активировал промокод! Новый баланс User B: {u_b_db.balance} монет.")
+            
+        print("    ✅ Сценарий создания и активации промокодов успешно протыкан!")
+        passed_deep += 1
+    except Exception as e:
+        print(f"    ❌ ОШИБКА глубокого тестирования промокодов: {e}")
+        import traceback; traceback.print_exc()
+
+    # 6. Симуляция отправки Жалоб/Обращений пользователей (Feedback Flow)
+    print("\n  👉 [Глубокий сценарий 6] Отправка обращения о баге в техподдержку...")
+    feed_state = MockState()
+    try:
+        # Шаг 1: Нажимаем кнопку обращений и выбираем категорию "bug"
+        cb_feed_start = create_mock_callback("feedback_kind:bug", user_id, create_mock_message("", user_id))
+        # Настройка state-данных, имитирующих выбор категории
+        await feed_state.update_data(feedback_kind="bug")
+        await feed_state.set_state(FeedbackState.waiting_text)
+        
+        # Шаг 2: Отправляем текст жалобы
+        msg_feed_txt = create_mock_message("Я нашел баг на экране Кати! Кнопка зависает.", user_id)
+        await feedback_submit(msg_feed_txt, feed_state)
+        assert await feed_state.get_state() is None # Очищено!
+        
+        # Проверяем БД
+        async with async_session() as session:
+            feedback_db = (await session.execute(select(Feedback).where(Feedback.user_id == 1))).scalars().first() # User A id is 1
+            assert feedback_db is not None, "Обращение не сохранилось в БД!"
+            assert feedback_db.kind == "bug"
+            assert "зависает" in feedback_db.text
+            print(f"    -> Обращение сохранено в БД! Тип: {feedback_db.kind}, Текст: «{feedback_db.text}»")
+            
+        print("    ✅ Сценарий отправки обращений в техподдержку полностью протыкан!")
+        passed_deep += 1
+    except Exception as e:
+        print(f"    ❌ ОШИБКА глубокого тестирования обращений: {e}")
+        import traceback; traceback.print_exc()
+
 
     # Дополнительно: Проверка фонового одобрения
     print("\n[Дополнительно] Повторная проверка фонового асинхронного одобрения...")
