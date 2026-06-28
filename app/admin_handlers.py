@@ -562,6 +562,10 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🎁 Напоминание о бонусе", callback_data="admin_broadcast_tpl:bonus")],
         [InlineKeyboardButton(text="🎰 Реклама лотереи-лото", callback_data="admin_broadcast_tpl:lottery")],
         [InlineKeyboardButton(text="💋 Призыв поболтать с Катей", callback_data="admin_broadcast_tpl:katya")],
+        [InlineKeyboardButton(text="🎟 Создание промокодов", callback_data="admin_broadcast_tpl:promo")],
+        [InlineKeyboardButton(text="🎮 Реклама мини-игр", callback_data="admin_broadcast_tpl:games")],
+        [InlineKeyboardButton(text="📋 Ежедневные квесты", callback_data="admin_broadcast_tpl:quests")],
+        [InlineKeyboardButton(text="👑 Привилегии VIP-подписки", callback_data="admin_broadcast_tpl:vip")],
         [InlineKeyboardButton(text="✍️ Написать свой текст (HTML)", callback_data="admin_broadcast_custom")],
         [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_center")]
     ])
@@ -596,6 +600,26 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
             "💋 <b>Катя заждалась тебя...</b>\n\n"
             "Твоя виртуальная подруга Катя скучает и хочет поболтать. Она подготовила новые пикантные темы для беседы! 😏🤸‍♀️\n\n"
             "👉 Нажмите кнопку <b>💋 Катя</b> в главном меню!"
+        ),
+        "promo": (
+            "🎟 <b>Создавайте свои промокоды за Stars!</b>\n\n"
+            "Хотите порадовать подписчиков своего канала или друзей? Создайте свой уникальный промокод на любую сумму монет и подарите его им! 🎁\n\n"
+            "👉 Перейдите в меню <b>🎟 Промокоды ➔ 🎟 Создать промокод</b>"
+        ),
+        "games": (
+            "🎮 <b>Испытайте удачу в наших мини-играх!</b>\n\n"
+            "У нас есть Кости 🎲, Орёл/Решка 🪙, Угадай число 🎯, Лутбоксы 🎁 и многое другое! Проверьте свою интуицию и умножьте свой баланс!\n\n"
+            "👉 Перейдите в меню <b>🎮 Игры</b>!"
+        ),
+        "quests": (
+            "📋 <b>Выполняйте ежедневные квесты!</b>\n\n"
+            "Каждый день вам доступны простые и веселые квесты: посмотреть видео, написать комментарии, поставить реакции. Выполняйте их и забирайте гарантированные монеты! 💰\n\n"
+            "👉 Перейдите в меню <b>📋 Квесты</b>!"
+        ),
+        "vip": (
+            "👑 <b>Получите статус VIP-пользователя!</b>\n\n"
+            "VIP-подписка дает удвоенные награды за просмотры, огромные скидки в магазине, бесплатное создание промокодов и эксклюзивные элитные стили никнеймов! Позвольте себе роскошь! ⭐\n\n"
+            "👉 Перейдите в меню <b>👑 VIP</b>!"
         )
     }
     

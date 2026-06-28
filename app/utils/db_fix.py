@@ -121,4 +121,13 @@ async def fix_database():
             """))
         await conn.commit()
 
+        # 5. Ensure last_freebie_week and last_freebie_year exist in users table
+        for col in ["last_freebie_week", "last_freebie_year"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT 0"))
+                await conn.commit()
+                log_info(logger, f"Added users.{col}")
+            except Exception:
+                await conn.rollback()
+
     log_info(logger, "DB fix complete!")

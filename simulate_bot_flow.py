@@ -26,7 +26,8 @@ from app.user_handlers import (
     lootbox_menu, lootbox_buy,
     promo_create_start, promo_amount, promo_uses, promo_hours,
     promo_activate_start, promo_activate_code,
-    PromoCreateState, PromoActivateState, FeedbackState
+    PromoCreateState, PromoActivateState, FeedbackState,
+    btn_faq
 )
 from app.admin_handlers import (
     admin_approve_all_confirm,
@@ -165,6 +166,7 @@ async def run_comprehensive_tests():
         ("🎟 Промокоды", btn_promo, [state]),
         ("💬 Жалобы и предложения", feedback_start, [state]),
         ("💋 Катя (ИИ-Подруга)", btn_katya, [state]),
+        ("ℹ️ FAQ / Помощь", btn_faq, [state]),
     ]
 
     passed_buttons = 0

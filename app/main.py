@@ -731,6 +731,50 @@ async def video_cache_cleanup_worker(stop_event: asyncio.Event):
         await asyncio.sleep(CLEANUP_INTERVAL)
 
 
+async def auto_broadcast_worker(bot):
+    import asyncio
+    import random
+    from app.db import async_session
+    from app.models import User
+    from sqlalchemy import select
+    
+    # Готовые шаблоны сообщений рассылки для ротации
+    templates = [
+        "🎁 <b>Не забудьте забрать свой ежедневный бонус!</b>\n\nКаждый день сумма бонуса увеличивается! Серия посещений дает огромные преимущества и кучу монет для игр и развлечений. 💰\n\n👉 Зайдите в меню <b>🎁 Бонус</b>",
+        "🎰 <b>Лотерея-лото — разыгрываем миллионы!</b>\n\nНовый раунд лотереи уже запущен! Купите счастливый билет за монеты и выиграйте джекпот в прямом эфире! 🎡\n\n👉 Зайдите в меню <b>🎮 Игры ➔ 🎰 Лотерея-лото</b>",
+        "💋 <b>Катя заждалась тебя...</b>\n\nТвоя виртуальная подруга Катя скучает и хочет поболтать. Она подготовила новые пикантные темы для беседы! 😏🤸‍♀️\n\n👉 Нажмите кнопку <b>💋 Катя</b> в главном меню!",
+        "🎟 <b>Создавайте свои промокоды за Stars!</b>\n\nХотите порадовать подписчиков своего канала или друзей? Создайте свой уникальный промокод на любую сумму монет и подарите его им! 🎁\n\n👉 Перейдите в меню <b>🎟 Промокоды ➔ 🎟 Создать промокод</b>",
+        "🎮 <b>Испытайте удачу в наших мини-играх!</b>\n\nУ нас есть Кости 🎲, Орёл/Решка 🪙, Угадай число 🎯, Лутбоксы 🎁 и многое другое! Проверьте свою интуицию и умножьте свой баланс!\n\n👉 Перейдите в меню <b>🎮 Игры</b>!",
+        "📋 <b>Выполняйте ежедневные квесты!</b>\n\nКаждый день вам доступны простые и веселые квесты: посмотреть видео, написать комментарии, поставить реакции. Выполняйте их и забирайте гарантированные монеты! 💰\n\n👉 Перейдите в меню <b>📋 Квесты</b>!",
+        "👑 <b>Получите статус VIP-пользователя!</b>\n\nVIP-подписка дает удвоенные награды за просмотры, огромные скидки в магазине, бесплатное создание промокодов и эксклюзивные элитные стили никнеймов! Позвольте себе роскошь! ⭐\n\n👉 Перейдите в меню <b>👑 VIP</b>!"
+    ]
+    
+    await asyncio.sleep(60) # подождать старта бота
+    while True:
+        try:
+            # Рандомный интервал от 20 минут до 6 часов
+            interval_sec = random.randint(20 * 60, 6 * 3600)
+            await asyncio.sleep(interval_sec)
+            
+            # Выбираем случайное сообщение
+            msg_text = random.choice(templates)
+            
+            async with async_session() as session:
+                users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
+                
+            sent = 0
+            for tid in users:
+                try:
+                    await bot.send_message(tid, msg_text, parse_mode="HTML")
+                    sent += 1
+                    if sent % 30 == 0:
+                        await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+        except Exception as e:
+            await asyncio.sleep(60)
+
+
 async def on_startup(app):
     bot = app['bot']
     await init_db()
@@ -769,6 +813,7 @@ async def on_startup(app):
 
     # Фоновая задача: агрегированные уведомления модерации
     asyncio.create_task(_mod_notification_loop(bot))
+    asyncio.create_task(auto_broadcast_worker(bot))
     log_info(logger, "Service initialized")
 
 

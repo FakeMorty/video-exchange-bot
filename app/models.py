@@ -46,6 +46,8 @@ class User(Base):
     vip_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     promo_created_this_month: Mapped[int] = mapped_column(Integer, default=0)
     promo_month: Mapped[int] = mapped_column(Integer, default=0)
+    last_freebie_week: Mapped[int] = mapped_column(Integer, default=0)
+    last_freebie_year: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Отношения

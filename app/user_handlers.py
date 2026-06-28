@@ -94,7 +94,7 @@ from app.keyboards import (
     low_balance_offer_keyboard, BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_BONUS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_QUESTS, BTN_VIP, BTN_LEVEL,
-    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY,
+    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_FAQ, BTN_AI,
 )
 from app.logger import get_logger
 
@@ -3335,6 +3335,7 @@ async def btn_promo(message: Message, state: FSMContext):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎟 Создать промокод", callback_data="promo_create")],
             [InlineKeyboardButton(text="🔑 Активировать промокод", callback_data="promo_activate")],
+            [InlineKeyboardButton(text="🎁 Еженедельная Халява", callback_data="promo_freebie_start")],
             [InlineKeyboardButton(text="📋 Мои промокоды", callback_data="promo_my")],
         ])
         await message.answer(
@@ -3474,6 +3475,63 @@ async def promo_activate_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(PromoActivateState.waiting_code)
 async def promo_activate_code(message: Message, state: FSMContext):
+    data = await state.get_data()
+    is_freebie = data.get("freebie_mode", False)
+    
+    if is_freebie:
+        code_input = (message.text or "").strip().lower()
+        current_word = get_current_freebie_word()
+        
+        if code_input != current_word:
+            await message.answer(
+                "❌ <b>Неверное секретное слово!</b>\n\n"
+                "Убедитесь, что вы правильно списали слово (регистр не важен), или поищите актуальное слово в наших соцсетях!",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+            
+        async with async_session() as session:
+            user = await get_user(session, message.from_user.id)
+            if not user:
+                await state.clear()
+                return
+                
+            from app.models import utc_now
+            current_week = utc_now().isocalendar()[1]
+            current_year = utc_now().isocalendar()[0]
+            
+            if user.last_freebie_week == current_week and user.last_freebie_year == current_year:
+                await message.answer("❌ Вы уже забирали Халяву на этой неделе!")
+                await state.clear()
+                return
+                
+            import random
+            reward_multiplier = random.randint(1, 20)
+            reward = Decimal(str(reward_multiplier * 10))
+            
+            from app.services import log_balance_change
+            await log_balance_change(
+                session,
+                user,
+                reward,
+                "freebie_reward",
+                details=f"word={current_word}; week={current_week}"
+            )
+            user.balance += reward
+            user.last_freebie_week = current_week
+            user.last_freebie_year = current_year
+            await session.commit()
+            
+        await message.answer(
+            f"🎉 <b>Секретное слово угадано!</b>\n\n"
+            f"Вам начислено <b>{reward:.0f}</b> монет на баланс!\n"
+            f"Приходите в следующий понедельник за новой Халявой! 🎁",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+
     if not ENABLE_PROMOCODES:
         await message.answer("⛔ Промокоды временно отключены.")
         await state.clear()
@@ -3654,5 +3712,148 @@ async def report_comment(message: Message, state: FSMContext):
 @router.callback_query(ReportState.picking_reason, F.data == "report_cancel")
 async def report_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.answer("Жалоба отменена.")
+    await callback.message.answer("❌ Жалоба отменена.")
+    await callback.answer()
+
+
+# ====================================================
+# ЕЖЕДНЕВНЫЙ БОНУС, ЛОТЕРЕЯ, ПРОМОКОДЫ ТЕМПЛЕЙТЫ И ХАЛЯВА
+# ====================================================
+@router.message(F.text == BTN_FAQ)
+async def btn_faq(message: Message, state: FSMContext):
+    await state.clear()
+    
+    faq_text = (
+        "ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>1. Как зарабатывать монеты?</b>\n"
+        "Загружайте видео (+30 монет) или фото (+15 монет), а также выполняйте Офферы от партнеров.\n\n"
+        "<b>2. Как смотреть контент других авторов?</b>\n"
+        "Нажмите кнопку 🎬 Смотреть и выберите интересующий формат.\n\n"
+        "<b>3. Что дает подписка VIP?</b>\n"
+        "Удвоенные награды за просмотры, скидки в магазине и бесплатное создание промокодов.\n\n"
+        "<b>4. Что такое лотерея-лото?</b>\n"
+        "Беспроигрышная игра! Покупайте билеты и выигрывайте джекпот в прямом эфире по воскресеньям.\n\n"
+        "<b>5. Как общаться с ИИ-подругой Катей?</b>\n"
+        "Нажмите кнопку 💋 Катя. Катя — это умная ИИ-подруга. Одно сообщение стоит 5 монет.\n\n"
+        "<b>6. Как работают промокоды?</b>\n"
+        "Вы можете создавать промокоды за Stars и дарить друзьям, либо активировать чужие.\n\n"
+        "<b>7. Как работает реферальная система?</b>\n"
+        "Скопируйте вашу ссылку в 👥 Рефералы. Пригласивший получает +50 монет, а новый юзер +20 монет.\n\n"
+        "<b>8. Зачем нужен ежедневный бонус?</b>\n"
+        "Каждый день сумма бонуса увеличивается! Посещайте бота ежедневно, чтобы не сбить серию.\n\n"
+        "<b>9. Зачем нужны квесты?</b>\n"
+        "Выполняйте ежедневные задания (просмотры, комментарии) и забирайте дополнительные монеты.\n\n"
+        "<b>10. Где посмотреть топы игроков?</b>\n"
+        "В меню 🏆 Топы собраны лучшие авторы контента и самые богатые игроки.\n\n"
+        "<b>11. Что находится внутри лутбоксов?</b>\n"
+        "Случайный выигрыш монет разной степени редкости (обычные, редкие, эпические, джекпоты!).\n\n"
+        "<b>12. Как сменить никнейм?</b>\n"
+        "В вашем Профиле. Первая смена полностью бесплатна, последующие — за монеты.\n\n"
+        "<b>13. Что такое Уровень и XP?</b>\n"
+        "За любую активность вы получаете XP. Повышение уровня дает новые элитные стили ников!\n\n"
+        "<b>14. Безопасны ли мои данные?</b>\n"
+        "Абсолютно. Бот не запрашивает и не хранит личные данные, только ваш системный Telegram ID.\n\n"
+        "<b>15. Как связаться с техподдержкой?</b>\n"
+        "Нажмите кнопку 💬 Жалобы и предложения и отправьте тикет нашей команде."
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Версия бота и Изменения", callback_data="bot_version_info")]
+    ])
+    
+    await message.answer(faq_text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "bot_version_info")
+async def cb_bot_version_info(callback: CallbackQuery):
+    from app.services import is_admin_or_super
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        admin_flag = is_admin_or_super(callback.from_user.id, user)
+        
+    version_text = (
+        "🤖 <b>ИНФОРМАЦИЯ О ВЕРСИИ И ИЗМЕНЕНИЯХ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "• <b>Текущая версия:</b> <code>v3.2.0-stable</code>\n"
+        "• <b>Статус:</b> Полная готовность (100% стабильно)\n\n"
+        "📢 <b>Последние изменения для пользователей:</b>\n"
+        "✅ <b>Элитные стили ников:</b> Полная переработка кастомных ников (168 премиум-стилей в 8 красивейших категориях на базе древних рун, иероглифов и алхимии вместо дешевых смайликов).\n"
+        "✅ <b>Глобальный сброс:</b> Полная защита от застревания в меню и зависания ввода — в любой момент напишите <code>/cancel</code> или <code>/start</code> для сброса.\n"
+        "✅ <b>Вечная база данных:</b> Переезд на стабильное и вечное облачное хранилище Neon.tech, данные больше никогда не удалятся.\n"
+        "✅ <b>Катя на OpenAI-стандарте:</b> Общение с ИИ-подругой переведено на сверхбыстрый и стабильный мировой стандарт, без задержек.\n"
+        "✅ <b>Раздел FAQ и Помощь:</b> Быстрый справочник прямо внутри бота для ответа на любые вопросы.\n"
+        "✅ <b>Секретная Халява:</b> Новая система еженедельных кодовых слов с призами до 200 монет!\n"
+    )
+    
+    if admin_flag:
+        version_text += (
+            "\n👑 <b>Административный список изменений (Changelog):</b>\n"
+            "⚙️ <b>Фоновое одобрение:</b> Кнопка «Одобрить все» переведена на асинхронный фоновый пакетный режим (по 50 штук за раз с задержкой 0.5с). Это полностью исключило таймауты и зависания БД при очередях в сотни видео.\n"
+            "⚙️ <b>CRM Пользователи:</b> Постраничная пагинация списка пользователей с персональными карточками (бан/разбан, смена ника, выдача/списание монет с логированием в баланс).\n"
+            "⚙️ <b>Следственное досье:</b> Генерация отчетов по 16 ключевым метрикам активности и финансов, включая 5 последних логов действий и баланса.\n"
+            "⚙️ <b>Маркетинговый рассыльщик:</b> Добавлены готовые пуш-шаблоны уведомлений (бонус, лотерея, Катя), а также автоматическая интервальная рассылка сообщений в фоне."
+        )
+        
+    await callback.message.answer(version_text, parse_mode="HTML")
+    await callback.answer()
+
+
+# ====================================================
+# ХАЛЯВА (ЕЖЕНЕДЕЛЬНЫЕ СЕКРЕТНЫЕ СЛОВА)
+# ====================================================
+FREEBIE_WORDS = [
+    "алмаз", "корона", "призма", "монета", "руна", "катана", "сакура", "дракон", "один", "тор",
+    "локи", "анубис", "сфинкс", "пирамида", "фараон", "клеопатра", "цезарь", "сенат", "гладиатор", "колизей",
+    "спарта", "леонид", "афины", "олимп", "зевс", "гермес", "аид", "посейдон", "феникс", "пегас",
+    "грифон", "кентавр", "спрут", "кракен", "комет", "астероид", "галактика", "небула", "квазар", "пульсар",
+    "орбита", "спутник", "телескоп", "космонавт", "шаттл", "ракета", "марс", "юпитер", "сатурн", "уран",
+    "нептун", "плутон", "халява"
+]
+
+def get_current_freebie_word() -> str:
+    from app.models import utc_now
+    week = utc_now().isocalendar()[1]
+    idx = (week - 1) % 53
+    return FREEBIE_WORDS[idx]
+
+
+@router.callback_query(F.data == "promo_freebie_start")
+async def cb_promo_freebie_start(callback: CallbackQuery, state: FSMContext):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+            
+    from app.models import utc_now
+    current_week = utc_now().isocalendar()[1]
+    current_year = utc_now().isocalendar()[0]
+    
+    if user.last_freebie_week == current_week and user.last_freebie_year == current_year:
+        await callback.message.answer("❌ <b>Вы уже забрали Халяву на этой неделе!</b>\n\nПриходите в следующий понедельник за новым секретным словом!", parse_mode="HTML")
+        await callback.answer()
+        return
+        
+    await state.set_state(PromoActivateState.waiting_code)
+    await state.update_data(freebie_mode=True)
+    await callback.message.answer(
+        "🎁 <b>Еженедельная Халява!</b>\n\n"
+        "Каждую неделю в наших соцсетях или чате публикуется одно секретное слово.\n"
+        "Введите текущее секретное слово, чтобы получить случайный бонус от <b>10 до 200 монет</b> (кратный 10):\n\n"
+        "👉 Введите секретное слово:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="btn_promo_back")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "btn_promo_back")
+async def cb_btn_promo_back(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    # Call main promo menu
+    from aiogram.types import Message as TGMessage
+    await btn_promo(callback.message, state)
     await callback.answer()

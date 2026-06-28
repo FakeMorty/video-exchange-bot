@@ -25,6 +25,7 @@ BTN_FEEDBACK   = "💬 Жалобы и предложения"
 BTN_LOTTERY    = "🎰 Лотерея-лото"
 BTN_LOOTBOXES  = "🎁 Лутбоксы"
 BTN_AI         = "💋 Катя"
+BTN_FAQ        = "ℹ️ FAQ / Помощь"
 
 
 # =========================
@@ -39,7 +40,7 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_BONUS)],
         [KeyboardButton(text=BTN_QUESTS), KeyboardButton(text=BTN_TOPS)],
         [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
-        [KeyboardButton(text=BTN_FEEDBACK)],
+        [KeyboardButton(text=BTN_FEEDBACK), KeyboardButton(text=BTN_FAQ)],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=BTN_ADMIN)])
