@@ -2191,7 +2191,7 @@ async def approve_all_pending(session: AsyncSession, admin_id: int, limit: int =
         uploader = uploader_map.get(v.uploader_user_id)
         if uploader:
             reward = to_decimal(UPLOAD_REWARD if v.content_type == "video" else PHOTO_UPLOAD_REWARD)
-            await log_balance_change(session, uploader, reward, "upload_reward", source_id=v.id, auto_commit=False)
+            await log_balance_change(session, uploader, reward, "upload_reward", source_id=v.id)
             uploader.balance += reward
         count += 1
     await session.commit()
