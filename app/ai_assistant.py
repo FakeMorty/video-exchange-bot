@@ -1243,7 +1243,11 @@ async def katya_close_chat(callback: CallbackQuery, state: FSMContext):
     # Отправляем стикер-прощание
     goodbye_stickers = ["01_greet"]  # приветственный стикер как прощальный
     sticker_name = random.choice(goodbye_stickers)
-    sticker_file_id = _STICKER_KEYWORDS.get(sticker_name)
+    
+    data = await state.get_data()
+    character = data.get("selected_char", "katya")
+    char_pack = _CHAR_STICKERS.get(character, _CHAR_STICKERS["katya"])
+    sticker_file_id = char_pack.get(sticker_name)
     if sticker_file_id:
         try:
             await callback.bot.send_sticker(callback.from_user.id, sticker_file_id)
