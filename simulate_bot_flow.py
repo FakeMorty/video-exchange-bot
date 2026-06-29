@@ -165,8 +165,8 @@ async def run_comprehensive_tests():
         ("🎰 Лотерея-лото", btn_lottery, [state]),
         ("🎟 Промокоды", btn_promo, [state]),
         ("💬 Жалобы и предложения", feedback_start, [state]),
-        ("💋 Катя (ИИ-Подруга)", btn_katya, [state]),
         ("ℹ️ FAQ / Помощь", btn_faq, [state]),
+        ("💋 ИИ-Общение", btn_katya, [state]),
     ]
 
     passed_buttons = 0

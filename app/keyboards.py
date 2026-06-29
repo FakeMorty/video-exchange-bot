@@ -24,7 +24,7 @@ BTN_PROMO      = "🎟 Промокоды"
 BTN_FEEDBACK   = "💬 Жалобы и предложения"
 BTN_LOTTERY    = "🎰 Лотерея-лото"
 BTN_LOOTBOXES  = "🎁 Лутбоксы"
-BTN_AI         = "💋 Катя"
+BTN_AI         = "💋 ИИ-Общение"
 BTN_FAQ        = "ℹ️ FAQ / Помощь"
 
 
