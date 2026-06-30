@@ -290,11 +290,14 @@ async def log_balance_change(
     admin_id: int = None,
     details: str = None,
 ):
+    from decimal import Decimal
+    before = user.balance if user.balance is not None else Decimal("0")
+    after = before + amount
     log = BalanceLog(
         user_id=user.id,
         amount=amount,
-        balance_before=user.balance,
-        balance_after=user.balance + amount,
+        balance_before=before,
+        balance_after=after,
         source=source,
         source_id=source_id,
         admin_id=admin_id,
@@ -1677,6 +1680,50 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
                 source_id=round_obj.id,
                 details=f"ticket_id={t.id}; matched={t.matched_count}",
             )
+
+    # Рассчитываем ставки на первый/последний бочонок Секслото
+    try:
+        first_str = await get_setting(session, f"lottery_first_drawn_{round_obj.id}", "")
+        last_str = await get_setting(session, f"lottery_last_drawn_{round_obj.id}", "")
+        if first_str and last_str:
+            first_num = int(first_str)
+            last_num = int(last_str)
+            
+            from app.models import LotteryBet
+            bets_result = await session.execute(
+                select(LotteryBet).where(LotteryBet.round_id == round_obj.id, LotteryBet.is_settled == False)
+            )
+            bets = bets_result.scalars().all()
+            
+            for bet in bets:
+                is_won = False
+                if bet.bet_type == "first_even" and first_num % 2 == 0:
+                    is_won = True
+                elif bet.bet_type == "first_odd" and first_num % 2 != 0:
+                    is_won = True
+                elif bet.bet_type == "last_even" and last_num % 2 == 0:
+                    is_won = True
+                elif bet.bet_type == "last_odd" and last_num % 2 != 0:
+                    is_won = True
+                    
+                bet.is_settled = True
+                bet.is_won = is_won
+                
+                if is_won:
+                    win_amount = bet.amount * to_decimal(2.0)
+                    user = await get_user_by_id(session, bet.user_id)
+                    if user:
+                        user.balance += win_amount
+                        await log_balance_change(
+                            session,
+                            user,
+                            win_amount,
+                            "lottery_bet_win",
+                            source_id=round_obj.id,
+                            details=f"bet_id={bet.id}; type={bet.bet_type}; win={win_amount}",
+                        )
+    except Exception as e:
+        logger.warning(f"Error settling lottery bets: {e}")
 
     round_obj.status = "completed"
     await session.commit()

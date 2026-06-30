@@ -597,3 +597,14 @@ class BotSetting(Base):
 
     key: Mapped[str] = mapped_column(String(50), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=True)
+
+class LotteryBet(Base):
+    __tablename__ = "lottery_bets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    round_id: Mapped[int] = mapped_column(ForeignKey("lottery_rounds.id"), nullable=False, index=True)
+    bet_type: Mapped[str] = mapped_column(String(50))  # "first_even", "first_odd", "last_even", "last_odd"
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=10.0)
+    is_settled: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_won: Mapped[bool] = mapped_column(Boolean, default=False)

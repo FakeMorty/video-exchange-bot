@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from aiogram import Bot
 from aiogram.types import FSInputFile, InputSticker
 
-# Список смайликов для 10 эмоций Софы
+# Список смайликов для 20 эмоций Софы
 EMOJIS_MAP = [
     "😉",  # sofa_01_wink
     "💋",  # sofa_02_kiss
@@ -19,7 +19,17 @@ EMOJIS_MAP = [
     "🤔",  # sofa_07_thinking
     "😨",  # sofa_08_shock
     "😊",  # sofa_09_smile
-    "😢"   # sofa_10_sad
+    "😢",  # sofa_10_sad
+    "😏",  # sofa_11_smirk
+    "😊",  # sofa_12_blush
+    "😚",  # sofa_13_flirt
+    "🥵",  # sofa_14_hot
+    "🤑",  # sofa_15_rich
+    "🎮",  # sofa_16_gamer
+    "💪",  # sofa_17_strong
+    "❓",  # sofa_18_confused
+    "🏆",  # sofa_19_victory
+    "🤫"   # sofa_20_muted
 ]
 
 async def update_sofa_sticker_pack(bot_token: str, user_id: int, pack_link_name: str, pack_title: str):
@@ -51,11 +61,11 @@ async def update_sofa_sticker_pack(bot_token: str, user_id: int, pack_link_name:
         print("❌ Ошибка: В папке sofa/ нет картинок!")
         return
         
-    print(f"🖼 Подготовка {len(files[:10])} прозрачных картинок Софы...")
+    print(f"🖼 Подготовка {len(files[:20])} прозрачных картинок Софы...")
     
     stickers = []
     # Загружаем новые прозрачные файлы в Telegram
-    for i, file in enumerate(files[:10]):
+    for i, file in enumerate(files[:20]):
         path = os.path.join(folder, file)
         emoji = EMOJIS_MAP[i] if i < len(EMOJIS_MAP) else "🖤"
         print(f"  [+] Подготовка и загрузка без фона: {file} ({emoji})...")

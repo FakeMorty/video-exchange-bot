@@ -880,41 +880,47 @@ async def cb_admin_user_give_coins_start(callback: CallbackQuery, state: FSMCont
     user_id = int(callback.data.split(":", 1)[1])
     await state.update_data(target_user_id=user_id)
     await state.set_state(AdminUserState.waiting_coins_amount)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="+10 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:10"),
+            InlineKeyboardButton(text="+50 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:50"),
+            InlineKeyboardButton(text="+100 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:100"),
+            InlineKeyboardButton(text="+500 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:500"),
+        ],
+        [
+            InlineKeyboardButton(text="-10 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:-10"),
+            InlineKeyboardButton(text="-50 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:-50"),
+            InlineKeyboardButton(text="-100 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:-100"),
+            InlineKeyboardButton(text="-500 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:-500"),
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_select_user:{user_id}")]
+    ])
+    
     await _safe_edit(
         callback,
         "💰 <b>Начисление или списание монет</b>\n\n"
-        "Отправьте мне количество монет, которое хотите выдать или списать:\n"
-        "• Например, <code>150</code> — чтобы добавить 150 монет.\n"
-        "• Например, <code>-50</code> — чтобы списать 50 монет.",
+        "Используйте быстрые кнопки ниже для начисления/списания монет в один клик,\n"
+        "либо отправьте число сообщением (например, <code>150</code> или <code>-50</code>).\n\n"
+        "⚠️ <b>ВАЖНО:</b> Если вы находитесь в группе, обязательно отвечайте (REPLY) на это сообщение числом, "
+        "иначе бот из-за Privacy Mode его не увидит!",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_select_user:{user_id}")]
-        ])
+        reply_markup=kb
     )
     await callback.answer()
 
 
-@router.message(AdminUserState.waiting_coins_amount)
-async def process_admin_user_give_coins(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id): return
-    val = (message.text or "").strip().replace(",", ".")
-    try:
-        amount = Decimal(val)
-    except Exception:
-        await message.answer("❌ Некорректное число монет. Отправьте число (например, 100 или -50):")
-        return
-        
-    data = await state.get_data()
-    user_id = data.get("target_user_id")
-    if not user_id:
-        await state.clear()
-        return
-        
+@router.callback_query(F.data.startswith("admin_user_give_coins_exec:"))
+async def cb_admin_user_give_coins_exec(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    parts = callback.data.split(":")
+    user_id = int(parts[1])
+    amount = Decimal(parts[2])
+    
     async with async_session() as session:
         user = await get_user(session, user_id)
         if not user:
-            await message.answer("Пользователь не найден.")
-            await state.clear()
+            await callback.answer("Пользователь не найден.", show_alert=True)
             return
             
         from app.services import log_balance_change
@@ -923,23 +929,72 @@ async def process_admin_user_give_coins(message: Message, state: FSMContext):
             user,
             amount,
             "admin_balance",
-            admin_id=message.from_user.id,
-            details=f"Изменено администратором"
+            admin_id=callback.from_user.id,
+            details="Быстрые кнопки баланса"
         )
+        if user.balance is None:
+            user.balance = Decimal("0")
         user.balance += amount
         await session.commit()
         
-    status_msg = "начислено" if amount >= 0 else "списано"
-    abs_amount = abs(amount)
-    await message.answer(
-        f"✅ Пользователю успешно {status_msg} <b>{abs_amount}</b> монет!\n\n"
-        f"• Новый баланс: <b>{user.balance}</b> монет.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад к пользователю", callback_data=f"admin_select_user:{user_id}")]
-        ])
-    )
+    await callback.answer(f"✅ Успешно { 'начислено' if amount > 0 else 'списано' } {abs(amount)} монет!", show_alert=True)
     await state.clear()
+    callback.data = f"admin_select_user:{user_id}"
+    await admin_select_user(callback)
+
+
+@router.message(AdminUserState.waiting_coins_amount)
+async def process_admin_user_give_coins(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    try:
+        val = (message.text or "").strip().replace(",", ".")
+        try:
+            amount = Decimal(val)
+        except Exception:
+            await message.answer("❌ Некорректное число монет. Отправьте число (например, 100 или -50):")
+            return
+            
+        data = await state.get_data()
+        user_id = data.get("target_user_id")
+        if not user_id:
+            await state.clear()
+            return
+            
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+            if not user:
+                await message.answer("Пользователь не найден.")
+                await state.clear()
+                return
+                
+            from app.services import log_balance_change
+            await log_balance_change(
+                session,
+                user,
+                amount,
+                "admin_balance",
+                admin_id=message.from_user.id,
+                details=f"Изменено администратором"
+            )
+            if user.balance is None:
+                user.balance = Decimal("0")
+            user.balance += amount
+            await session.commit()
+            
+        status_msg = "начислено" if amount >= 0 else "списано"
+        abs_amount = abs(amount)
+        await message.answer(
+            f"✅ Пользователю успешно {status_msg} <b>{abs_amount}</b> монет!\n\n"
+            f"• Новый баланс: <b>{user.balance}</b> монет.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад к пользователю", callback_data=f"admin_select_user:{user_id}")]
+            ])
+        )
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Произошла системная ошибка при начислении монет: <code>{e}</code>", parse_mode="HTML")
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("admin_user_toggle_ban:"))
