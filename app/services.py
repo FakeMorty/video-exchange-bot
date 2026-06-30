@@ -88,16 +88,14 @@ async def open_lootbox_for_coins(session: AsyncSession, user_id: int) -> tuple[D
 
     reward, rarity = _roll_lootbox_reward_coins()
 
-    await log_balance_change(session, user, -price, "lootbox_buy", details="currency=coins")
-    user.balance -= price
-    await log_balance_change(
+    await change_balance_atomic(session, user.id, -price, "lootbox_buy", details="currency=coins")
+    await change_balance_atomic(
         session,
-        user,
+        user.id,
         reward,
         "lootbox_reward",
         details=f"rarity={rarity}",
     )
-    user.balance += reward
     session.add(LootboxOpen(
         user_id=user.id,
         payment_payload=None,
@@ -136,14 +134,13 @@ async def open_lootbox_for_stars(
     reward, rarity = _roll_lootbox_reward_coins()
     stars_price = int(LOOTBOX_STAR_PRICE)
 
-    await log_balance_change(
+    await change_balance_atomic(
         session,
-        user,
+        user.id,
         reward,
         "lootbox_reward",
         details=f"currency=stars;rarity={rarity};stars={stars_price}",
     )
-    user.balance += reward
     session.add(LootboxOpen(
         user_id=user.id,
         payment_payload=payment_payload,
@@ -281,29 +278,63 @@ async def is_admin_free_eligible(session: AsyncSession, telegram_id: int, user: 
 # ============================
 # ЛОГИРОВАНИЕ БАЛАНСА И ДЕЙСТВИЙ
 # ============================
-async def log_balance_change(
+
+def is_vip(user: "User") -> bool:
+    """Проверка, является ли пользователь VIP (активен ли статус на текущий момент)."""
+    return bool(user.vip_until and user.vip_until > utc_now())
+async def change_balance_atomic(
     session: AsyncSession,
-    user: "User",
+    user_id: int,
     amount: Decimal,
     source: str,
     source_id: int = None,
     admin_id: int = None,
     details: str = None,
-):
-    from decimal import Decimal
-    before = user.balance if user.balance is not None else Decimal("0")
-    after = before + amount
+) -> "User | None":
+    """
+    Atomically updates user balance and logs the change.
+    Returns the updated user object.
+    """
+    from sqlalchemy import update
+    
+    # 1. Atomic update in DB
+    stmt = (
+        update(User)
+        .where(User.id == user_id)
+        .values(balance=User.balance + amount)
+        .returning(User)
+    )
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        return None
+    
+    # 2. Log the change
+    # Note: we use the updated balance from the returning clause
+    # To get the balance BEFORE, we'd need to fetch it first or use a more complex query.
+    # For the log, we can approximate or fetch the old balance.
+    # Since we already have 'user' (updated), let's just record it.
+    # To be precise about balance_before, we can fetch the user before updating,
+    # but that introduces a race condition unless we use SELECT FOR UPDATE.
+    
+    # Better approach for logging: Use the balance from the returning User object
+    # and calculate 'before' as 'after - amount'.
+    balance_after = user.balance
+    balance_before = balance_after - amount
+    
     log = BalanceLog(
-        user_id=user.id,
+        user_id=user_id,
         amount=amount,
-        balance_before=before,
-        balance_after=after,
+        balance_before=balance_before,
+        balance_after=balance_after,
         source=source,
         source_id=source_id,
         admin_id=admin_id,
         details=details,
     )
     session.add(log)
+    return user
 
 
 async def log_user_action(
@@ -378,23 +409,32 @@ async def get_or_create_user(
         if inviter and inviter.telegram_id != telegram_id:
             referred_by = inviter.id
 
-    user = User(
-        telegram_id=telegram_id,
-        username=username,
-        first_name=first_name,
-        last_name=last_name,
-        balance=starting_bonus,
-        referral_code=uuid.uuid4().hex[:8],
-        referred_by_user_id=referred_by,
-    )
-    session.add(user)
-    await session.flush()
-    await log_balance_change(session, user, starting_bonus, "registration",
-                             details=f"Starting balance. Referred by: {referred_by}")
-    await session.commit()
+    created = False
+    try:
+        user = User(
+            telegram_id=telegram_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            balance=starting_bonus,
+            referral_code=uuid.uuid4().hex[:8],
+            referred_by_user_id=referred_by,
+        )
+        session.add(user)
+        await session.flush()
+        await change_balance_atomic(session, user.id, starting_bonus, "registration",
+                                    details=f"Starting balance. Referred by: {referred_by}")
+        await session.commit()
+        created = True
+    except Exception:
+        await session.rollback()
+        user = await get_user(session, telegram_id)
+        if not user:
+            raise
+    
     await log_user_action(session, user.id, "registration",
                           f"tg_id={telegram_id}, referred_by={referred_by}")
-    return user, True
+    return user, created
 
 
 # ============================
@@ -419,9 +459,8 @@ async def set_display_name(session: AsyncSession, user: "User", name: str,
         cost = to_decimal(NICKNAME_CHANGE_COST)
         if user.balance < cost:
             return False, f"Недостаточно монет. Нужно: {cost}, у вас: {user.balance}"
-        await log_balance_change(session, user, -cost, "nickname_change",
-                                 details=f"{user.display_name} -> {name}")
-        user.balance -= cost
+        await change_balance_atomic(session, user.id, -cost, "nickname_change",
+                                    details=f"{user.display_name} -> {name}")
 
     old_name = user.display_name
     user.display_name = name
@@ -481,8 +520,7 @@ async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
         multiplier = await get_coin_multiplier(session, uploader.id)
         reward = round_coin(to_decimal(reward_val) * to_decimal(multiplier))
         
-        await log_balance_change(session, uploader, reward, "upload_approved", source_id=v.id)
-        uploader.balance += reward
+        await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
         await log_user_action(session, uploader.id, "video_approved",
                               f"id={v.id}, type={v.content_type}, reward={reward}")
     await session.commit()
@@ -635,8 +673,7 @@ async def record_view_and_charge_with_cost(
     cost = to_decimal(cost)
     if user.balance < cost:
         return False
-    await log_balance_change(session, user, -cost, "watch", source_id=video_id)
-    user.balance -= cost
+    await change_balance_atomic(session, user.id, -cost, "watch", source_id=video_id)
     from sqlalchemy.exc import IntegrityError
     try:
         session.add(VideoView(user_id=user_id, video_id=video_id, watched_at=utc_now()))
@@ -738,9 +775,8 @@ async def update_user_balance(session: AsyncSession, user_id: int, amount: Decim
     user = await get_user_by_id(session, user_id)
     if not user:
         return False
-    await log_balance_change(session, user, amount, "admin_balance", admin_id=admin_id,
-                             details=f"Manual by admin {admin_id}")
-    user.balance += amount
+    await change_balance_atomic(session, user_id, amount, "admin_balance", admin_id=admin_id,
+                                    details=f"Manual by admin {admin_id}")
     await log_user_action(session, user_id, "balance_update",
                           f"admin={admin_id}, amount={amount}")
     await session.commit()
@@ -773,8 +809,7 @@ async def claim_daily_bonus(session: AsyncSession, user_id: int) -> tuple[bool, 
     if user.last_bonus_at and (now.date() - user.last_bonus_at.date()).days == 1:
         streak = min(user.bonus_streak + 1, MAX_BONUS_STREAK)
     reward = DAILY_BONUS_STREAK_BASE + DAILY_BONUS_STREAK_INCREASE * (streak - 1)
-    await log_balance_change(session, user, to_decimal(reward), "daily_bonus")
-    user.balance += to_decimal(reward)
+    await change_balance_atomic(session, user.id, to_decimal(reward), "daily_bonus")
     user.last_bonus_at = now
     user.bonus_streak = streak
     await session.commit()
@@ -811,9 +846,8 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
                 )).scalar_one_or_none()
                 if not already:
                     reward = to_decimal(REFERRAL_REWARD_INVITER)
-                    await log_balance_change(session, inviter, reward, "referral_reward",
-                                             details=f"ref_user_id={ref.id}")
-                    inviter.balance += reward
+                    await change_balance_atomic(session, inviter.id, reward, "referral_reward",
+                                                 details=f"ref_user_id={ref.id}")
                     inviter.referral_earnings += reward
                     await session.commit()
 
@@ -936,9 +970,8 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> Payme
         total_coins = payment.coins_amount * to_decimal(bonus_multiplier)
         if first_today:
             total_coins += to_decimal(FIRST_PURCHASE_DAILY_BONUS)
-        await log_balance_change(session, user, total_coins, "purchase",
-                                 details=f"payload={payload}, bonus_mult={bonus_multiplier}, first_today={first_today}")
-        user.balance += total_coins
+        await change_balance_atomic(session, user.id, total_coins, "purchase",
+                                    details=f"payload={payload}, bonus_mult={bonus_multiplier}, first_today={first_today}")
         await session.commit()
     return payment
 
@@ -1006,14 +1039,14 @@ async def start_offer_participation(session: AsyncSession, user_id: int,
         reward_given=preview_reward,
     )
     if preview_reward > 0:
-        await log_balance_change(
+        await change_balance_atomic(
             session,
-            user,
+            user.id,
             preview_reward,
             "offer_preview",
             source_id=offer_id,
         )
-        user.balance += preview_reward
+        # user.balance += preview_reward  # Handled by change_balance_atomic
     session.add(part)
     await session.commit()
     return part, True
@@ -1057,14 +1090,14 @@ async def verify_offer_subscription(
         cap_remaining,
     )
     if additional > 0:
-        await log_balance_change(
+        await change_balance_atomic(
             session,
-            user,
+            user.id,
             additional,
             "offer_complete",
             source_id=offer_id,
         )
-        user.balance += additional
+        # user.balance += additional  # Handled by change_balance_atomic
         part.reward_given = already_paid + additional
 
     await session.commit()
@@ -1093,15 +1126,15 @@ async def apply_offer_unsubscribe_penalty(
     if total_charge <= 0:
         return rewarded_total, extra_penalty, total_charge
 
-    await log_balance_change(
+    await change_balance_atomic(
         session,
-        user,
+        user.id,
         -total_charge,
         "offer_unsubscribe_penalty",
         source_id=offer.id,
         details=f"reward_revoke={rewarded_total}; extra_penalty={extra_penalty}",
     )
-    user.balance -= total_charge
+    # user.balance -= total_charge # Handled by change_balance_atomic
     part.status = "unsubscribed"
     part.unsubscribed_penalized_at = utc_now()
     await session.commit()
@@ -1183,8 +1216,7 @@ async def pay_for_game_session(session: AsyncSession, user_id: int) -> bool:
     cost = to_decimal(GAME_SESSION_COST)
     if user.balance < cost:
         return False
-    await log_balance_change(session, user, -cost, "game_session_paid")
-    user.balance -= cost
+    await change_balance_atomic(session, user.id, -cost, "game_session_paid")
     gs = await get_or_create_game_session(session, user_id)
     gs.games_played = 0
     gs.window_start = utc_now()
@@ -1439,9 +1471,8 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         return "Вы уже активировали этот промокод."
     # Начисление
     amount = promo.coin_amount
-    await log_balance_change(session, user, amount, "promocode_activation",
-                             details=f"code={promo.code}")
-    user.balance += amount
+    await change_balance_atomic(session, user.id, amount, "promocode_activation",
+                                 details=f"code={promo.code}")
     promo.used_count += 1
     if promo.used_count >= promo.max_uses:
         promo.is_active = False
@@ -1453,9 +1484,8 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         creator = await get_user_by_id(session, promo.creator_user_id)
         if creator and creator.id != user_id:
             bonus = amount * to_decimal(PROMOCODE_CREATOR_BONUS_PERCENT / 100)
-            await log_balance_change(session, creator, bonus, "promocode_creator_bonus",
-                                     details=f"code={promo.code}, activator={user_id}")
-            creator.balance += bonus
+            await change_balance_atomic(session, creator.id, bonus, "promocode_creator_bonus",
+                                         details=f"code={promo.code}, activator={user_id}")
     await session.commit()
     return f"✅ Промокод активирован! Начислено {amount} монет."
 
@@ -1665,21 +1695,20 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
             continue
         group_total = round_coin(pool * share)
         per_ticket = round_coin(group_total / len(winner_group))
-        for t in winner_group:
-            user = await get_user_by_id(session, t.user_id)
-            if not user or t.reward_paid:
-                continue
-            user.balance += per_ticket
-            t.reward_paid = True
-            paid_total += per_ticket
-            await log_balance_change(
-                session,
-                user,
-                per_ticket,
-                source,
-                source_id=round_obj.id,
-                details=f"ticket_id={t.id}; matched={t.matched_count}",
-            )
+    for t in winner_group:
+        user = await get_user_by_id(session, t.user_id)
+        if not user or t.reward_paid:
+            continue
+        await change_balance_atomic(
+            session,
+            user.id,
+            per_ticket,
+            source,
+            source_id=round_obj.id,
+            details=f"ticket_id={t.id}; matched={t.matched_count}",
+        )
+        t.reward_paid = True
+        paid_total += per_ticket
 
     # Рассчитываем ставки на первый/последний бочонок Секслото
     try:
@@ -1713,10 +1742,9 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
                     win_amount = bet.amount * to_decimal(2.0)
                     user = await get_user_by_id(session, bet.user_id)
                     if user:
-                        user.balance += win_amount
-                        await log_balance_change(
+                        await change_balance_atomic(
                             session,
-                            user,
+                            user.id,
                             win_amount,
                             "lottery_bet_win",
                             source_id=round_obj.id,
@@ -2238,8 +2266,7 @@ async def approve_all_pending(session: AsyncSession, admin_id: int, limit: int =
         uploader = uploader_map.get(v.uploader_user_id)
         if uploader:
             reward = to_decimal(UPLOAD_REWARD if v.content_type == "video" else PHOTO_UPLOAD_REWARD)
-            await log_balance_change(session, uploader, reward, "upload_reward", source_id=v.id)
-            uploader.balance += reward
+            await change_balance_atomic(session, uploader.id, reward, "upload_reward", source_id=v.id)
         count += 1
     await session.commit()
     await log_user_action(session, admin_id, "approve_all", f"count={count}")

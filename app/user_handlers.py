@@ -82,6 +82,7 @@ from app.services import (
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
+    is_vip,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -196,6 +197,13 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                     text="✏️ Установить ник",
                     callback_data="set_nickname_start"
                 )]
+def is_any_admin(telegram_id: int, user_obj=None) -> bool:
+    if telegram_id in ADMINS:
+        return True
+    if user_obj and user_obj.is_admin:
+        return True
+    return False
+
             ])
             from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
             await message.answer(
@@ -333,12 +341,6 @@ class FeedbackState(StatesGroup):
 # =========================
 # HELPERS
 # =========================
-def is_any_admin(telegram_id: int, user_obj=None) -> bool:
-    if telegram_id in ADMINS:
-        return True
-    if user_obj and user_obj.is_admin:
-        return True
-    return False
 
 
 def calc_level_xp_required(level: int) -> int:
