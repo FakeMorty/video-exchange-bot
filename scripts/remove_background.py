@@ -48,8 +48,8 @@ def remove_white_background(input_path: str, output_path: str):
     except Exception as e:
         print(f"❌ Ошибка при обработке {input_path}: {e}")
 
-# Пройдемся по всем сгенерированным стикерам в папках sanya/ и sofa/
-for folder in ["video-exchange-bot/sanya", "video-exchange-bot/sofa"]:
+# Пройдемся по всем сгенерированным стикерам в папках sanya/, sofa/ и katya/
+for folder in ["video-exchange-bot/sanya", "video-exchange-bot/sofa", "video-exchange-bot/katya"]:
     if not os.path.exists(folder):
         folder = folder.replace("video-exchange-bot/", "")
         
