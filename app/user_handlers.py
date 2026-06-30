@@ -783,9 +783,26 @@ async def watch_video_content(callback: CallbackQuery):
             if not user:
                 return
 
-            cost = to_decimal(WATCH_COST)
+            # Получаем цену просмотра динамически из настроек БД
+            db_cost = await get_setting(session, "watch_cost", "")
+            if db_cost:
+                try:
+                    cost = to_decimal(db_cost)
+                except Exception:
+                    cost = to_decimal(WATCH_COST)
+            else:
+                cost = to_decimal(WATCH_COST)
+
             if is_vip(user):
-                cost = round(cost * to_decimal(0.5), 2)
+                db_discount = await get_setting(session, "vip_watch_discount", "")
+                if db_discount:
+                    try:
+                        discount = to_decimal(db_discount)
+                    except Exception:
+                        discount = to_decimal(0.5)
+                else:
+                    discount = to_decimal(0.5)
+                cost = round(cost * discount, 2)
 
             if user.balance < cost:
                 if await should_show_low_balance_hint(session, user):
