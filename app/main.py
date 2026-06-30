@@ -1335,7 +1335,10 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
 </body>
 </html>
 """
-    return web.Response(text=html, content_type="text/html")\n\n\nasync def api_videofeed_feed(request: web.Request) -> web.Response:
+    return web.Response(text=html, content_type="text/html")
+
+
+async def api_videofeed_feed(request: web.Request) -> web.Response:
     try:
         async with async_session() as session:
             videos = (await session.execute(
