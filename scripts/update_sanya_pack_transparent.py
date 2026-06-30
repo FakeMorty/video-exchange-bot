@@ -27,9 +27,8 @@ async def update_sanya_sticker_pack(bot_token: str, user_id: int, pack_link_name
     # Шаг 1: Проверяем, существует ли пак
     try:
         old_set = await bot.get_sticker_set(full_pack_name)
-        print(f"  [+] Пак найден! В нем сейчас {len(sticker_set.stickers if 'sticker_set' in locals() else old_sticker_set.stickers if 'old_sticker_set' in locals() else [])} старых стикеров.")
-        # Сохраняем старые стикеры для последующего удаления
-        old_stickers = [s.file_id for s in sticker_set.stickers]
+        print(f"  [+] Пак найден! В нем сейчас {len(old_set.stickers)} старых стикеров.")
+        old_stickers = [s.file_id for s in old_set.stickers]
     except Exception as e:
         # Если пак не найден — мы создадим его с нуля!
         old_set = None
@@ -46,7 +45,7 @@ async def update_sanya_sticker_pack(bot_token: str, user_id: int, pack_link_name
         
     print(f"🖼 Подготовка {len(files[:20])} прозрачных картинок Сани...")
     
-    new_stickers = []
+    stickers = []
     # Загружаем новые прозрачные файлы в Telegram
     for i, file in enumerate(files[:20]):
         path = os.path.join(folder, file)
@@ -89,10 +88,6 @@ async def update_sanya_sticker_pack(bot_token: str, user_id: int, pack_link_name
             print(f"  ❌ Ошибка загрузки {file}: {e}")
             return
 
-    # Шаг 3: Обновляем пак
-    async with async_session() if 'async_session' in globals() else asyncio.sleep(0) as _: # placeholder
-        pass
-        
     try:
         # Если пака нет — создаем с нуля
         success = await bot.create_new_sticker_set(
