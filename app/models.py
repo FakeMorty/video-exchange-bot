@@ -576,6 +576,20 @@ class KatyaChat(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="katya_chats")
+    messages: Mapped[List["KatyaMessage"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
+
+
+class KatyaMessage(Base):
+    """Сообщения в чате со спутниками ИИ."""
+    __tablename__ = "katya_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("katya_chats.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)  # "user" | "assistant"
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    chat: Mapped["KatyaChat"] = relationship(back_populates="messages")
 
 
 class BotSetting(Base):

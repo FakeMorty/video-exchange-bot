@@ -51,7 +51,7 @@ from app.services import (
     is_admin_free_eligible,
 )
 from app.logger import get_logger
-from app.models import KatyaChat, utc_now
+from app.models import KatyaChat, KatyaMessage, utc_now
 if TYPE_CHECKING:
     from app.models import User
 
@@ -768,14 +768,15 @@ async def katya_open_chat(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(KatyaChatState.chatting)
     await state.update_data(
-        katya_history=[],  # история в памяти, не из БД
         katya_chat_id=chat_id,
+        selected_char=chat.character or "katya",
     )
+
+    greeting = _get_chat_greeting(chat.title, chat.character or "katya")
 
     await callback.message.edit_text(
         f"💋 <b>Чат «{chat.title}»</b>\n\n"
-        f"*потягивается и улыбается* Ну привет снова... Скучал? 😏\n\n"
-        "Напиши мне что-нибудь!",
+        f"{greeting}",
         parse_mode="HTML",
         reply_markup=_katya_chat_kb(chat_id),
     )
@@ -1121,8 +1122,12 @@ async def katya_ask_prompt(callback: CallbackQuery):
 @router.callback_query(KatyaChatState.chatting, F.data.startswith("katya_clear:"))
 async def katya_clear_history(callback: CallbackQuery, state: FSMContext):
     """Очищает историю — новая тема в текущем чате."""
-    await state.update_data(katya_history=[])
     chat_id = int(callback.data.split(":")[1]) if ":" in callback.data else 0
+    if chat_id:
+        from sqlalchemy import delete
+        async with async_session() as session:
+            await session.execute(delete(KatyaMessage).where(KatyaMessage.chat_id == chat_id))
+            await session.commit()
 
     await callback.message.answer(
         "💋 *откидывается на подушку*\n\n"

@@ -138,4 +138,36 @@ async def fix_database():
         except Exception:
             await conn.rollback()
 
+        # Ensure katya_messages table exists
+        if is_sqlite:
+            try:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS katya_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id INTEGER NOT NULL REFERENCES katya_chats(id) ON DELETE CASCADE,
+                        role VARCHAR(20) NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                await conn.commit()
+                log_info(logger, "Created katya_messages table")
+            except Exception:
+                await conn.rollback()
+        else:
+            try:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS katya_messages (
+                        id SERIAL PRIMARY KEY,
+                        chat_id INTEGER NOT NULL REFERENCES katya_chats(id) ON DELETE CASCADE,
+                        role VARCHAR(20) NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+                    )
+                """))
+                await conn.commit()
+                log_info(logger, "Created katya_messages table")
+            except Exception:
+                await conn.rollback()
+
     log_info(logger, "DB fix complete!")
