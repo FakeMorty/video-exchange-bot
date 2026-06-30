@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.db import async_session
 from app.models import Offer, utc_now
 from app.services import (
-    get_user, log_balance_change, 
+    get_user, change_balance_atomic, 
     ensure_payment_pending
 )
 from app.config import ADMINS, STARS_TO_COINS_RATE
@@ -215,42 +215,41 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
         
         cost = data["placement_cost"]
         
-        if method == "coins":
-            if user.balance < cost:
-                await callback.message.answer(f"❌ Недостаточно монет. Нужно: {cost:.0f}, у вас: {user.balance:.0f}")
-                await state.clear()
-                return
-            
-            # Списываем монеты сразу
-            await log_balance_change(session, user, -cost, "user_offer_placement", details=f"Оффер: {data['title']}")
-            user.balance -= cost
-            
-            # Создаём оффер в статусе pending (для модерации)
-            from app.models import Offer
-            start = utc_now()
-            end = start + timedelta(days=data["duration_days"])
-            offer = Offer(
-                creator_user_id=user.id,
-                title=data["title"],
-                description=data["description"],
-                channel_url=data["url"],
-                reward_preview=data["reward_preview"],
-                reward_final=data["reward_final"],
-                penalty_unsubscribe=data["penalty_unsubscribe"],
-                duration_days=data["duration_days"],
-                placement_cost=cost,
-                status="pending",
-                is_active=False
-            )
-            session.add(offer)
-            await session.commit()
-            
-            # Агрегированное уведомление админам (вместо прямого пуша)
-            from app.services import schedule_mod_notification
-            await schedule_mod_notification(session, "offer")
-
-            await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
+    if method == "coins":
+        if user.balance < cost:
+            await callback.message.answer(f"❌ Недостаточно монет. Нужно: {cost:.0f}, у вас: {user.balance:.0f}")
             await state.clear()
+            return
+        
+        # Списываем монеты атомарно
+        await change_balance_atomic(session, user.id, -cost, "user_offer_placement", details=f"Оффер: {data['title']}")
+        
+        # Создаём оффер в статусе pending (для модерации)
+        from app.models import Offer
+        start = utc_now()
+        end = start + timedelta(days=data["duration_days"])
+        offer = Offer(
+            creator_user_id=user.id,
+            title=data["title"],
+            description=data["description"],
+            channel_url=data["url"],
+            reward_preview=data["reward_preview"],
+            reward_final=data["reward_final"],
+            penalty_unsubscribe=data["penalty_unsubscribe"],
+            duration_days=data["duration_days"],
+            placement_cost=cost,
+            status="pending",
+            is_active=False
+        )
+        session.add(offer)
+        await session.commit()
+        
+        # Агрегированное уведомление админам
+        from app.services import schedule_mod_notification
+        await schedule_mod_notification(session, "offer")
+
+        await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
+        await state.clear()
             
         elif method == "stars":
             # Сначала создаём оффер в статусе payment_pending

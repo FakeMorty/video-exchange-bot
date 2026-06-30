@@ -264,12 +264,12 @@ async def donate_confirm(callback: CallbackQuery, state: FSMContext):
             return
 
         if admin_free:
-            await log_balance_change(session, user, Decimal("0"), "donation_purchase_admin_free",
-                                     details=f"{item['name']} (ADMIN_FREE)")
+            await change_balance_atomic(session, user.id, Decimal("0"), "donation_purchase_admin_free",
+                                         details=f"{item['name']} (ADMIN_FREE)")
         else:
-            await log_balance_change(session, user, -item["price"], "donation_purchase",
-                                     details=item["name"])
-            user.balance -= item["price"]
+            await change_balance_atomic(session, user.id, -item["price"], "donation_purchase",
+                                         details=item["name"])
+            # user.balance -= item["price"] # Handled by change_balance_atomic
 
         perk = await activate_perk(session, user.id, item["id"], item["duration_days"])
         expires = perk.active_until
@@ -444,16 +444,14 @@ async def _confirm_custom_nick(callback: CallbackQuery, state: FSMContext):
 
         # Списываем монеты
         if admin_free:
-            await log_balance_change(
-                session, user, Decimal("0"), "donation_purchase_admin_free",
-                details=f"custom_nick style={style_id} (ADMIN_FREE)",
+            await log_balance_change(session, user, Decimal("0"), "donation_purchase_admin_free",
+                                     details=f"custom_nick style={style_id} (ADMIN_FREE)",
             )
         else:
-            await log_balance_change(
-                session, user, -PRICE, "donation_purchase",
+            await change_balance_atomic(
+                session, user.id, -PRICE, "donation_purchase",
                 details=f"custom_nick style={style_id}",
             )
-            user.balance -= PRICE
 
         # Активируем перк со style_id
         perk = await activate_perk(

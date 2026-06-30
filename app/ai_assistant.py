@@ -1005,36 +1005,35 @@ async def katya_chat_message(message: Message, state: FSMContext):
             if chat:
                 chat_character = chat.character or "katya"
 
-        if not admin_free:
-            if user.balance < _KATYA_PRICE:
-                await message.answer(
-                    f"💸 *вздыхает*\n\n"
-                    f"Малыш, у тебя всего {user.balance} монет, а нужно {_KATYA_PRICE}... "
-                    f"Заливай видео, заработай и возвращайся! Я никуда не денусь 💋",
-                    parse_mode="HTML",
-                )
-                return
-
-            await log_balance_change(
-                session, user, -_KATYA_PRICE, "katya_chat",
-                details=f"chat={chat_id};msg={user_text[:60]}",
+    if not admin_free:
+        if user.balance < _KATYA_PRICE:
+            await message.answer(
+                f"💸 *вздыхает*\n\n"
+                f"Малыш, у тебя всего {user.balance} монет, а нужно {_KATYA_PRICE}... "
+                f"Заливай видео, заработай и возвращайся! Я никуда не денусь 💋",
+                parse_mode="HTML",
             )
-            user.balance -= _KATYA_PRICE
-            # Увеличиваем счётчик сообщений в чате
-            if chat_id:
-                chat = await _get_chat(session, chat_id)
-                if chat:
-                    chat.message_count = (chat.message_count or 0) + 1
-            await session.commit()
-            balance_after = user.balance
-        else:
-            balance_after = user.balance
-            # Счётчик сообщений даже для админов
-            if chat_id:
-                chat = await _get_chat(session, chat_id)
-                if chat:
-                    chat.message_count = (chat.message_count or 0) + 1
-                    await session.commit()
+            return
+
+        user = await change_balance_atomic(
+            session, user.id, -_KATYA_PRICE, "katya_chat",
+            details=f"chat={chat_id};msg={user_text[:60]}",
+        )
+        # Увеличиваем счётчик сообщений в чате
+        if chat_id:
+            chat = await _get_chat(session, chat_id)
+            if chat:
+                chat.message_count = (chat.message_count or 0) + 1
+        await session.commit()
+        balance_after = user.balance if user else 0
+    else:
+        balance_after = user.balance
+        # Счётчик сообщений даже для админов
+        if chat_id:
+            chat = await _get_chat(session, chat_id)
+            if chat:
+                chat.message_count = (chat.message_count or 0) + 1
+                await session.commit()
 
     # Показываем «печатает»
     await message.bot.send_chat_action(user_id, "typing")
