@@ -763,7 +763,48 @@ async def admin_manage_users(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("admin_select_user:"))
+async def show_user_profile(callback: CallbackQuery, user_id: int):
+    async with async_session() as session:
+        user = await get_user(session, user_id)
+        if not user:
+            return False
+            
+    from app.user_handlers import is_vip
+    status_text = "🚫 Забанен" if user.status == "banned" else "✅ Активен"
+    vip_text = "👑 Да" if is_vip(user) else "❌ Нет"
+    
+    text = (
+        f"👤 <b>Управление пользователем:</b> {user.display_name or user.username or user_id}\n\n"
+        f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
+        f"• <b>Никнейм в БД:</b> {user.username or 'отсутствует'}\n"
+        f"• <b>Баланс:</b> <b>{user.balance}</b> монет\n"
+        f"• <b>Серия бонусов:</b> {user.bonus_streak} дней\n"
+        f"• <b>Уровень/XP:</b> Lvl {user.level} ({user.xp} XP)\n"
+        f"• <b>Статус:</b> {status_text}\n"
+        f"• <b>VIP статус:</b> {vip_text}\n"
+    )
+    
+    ban_label = "✅ Разбанить" if user.status == "banned" else "🚫 Забанить"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✏️ Поменять ник", callback_data=f"admin_user_edit_nick_start:{user_id}"),
+            InlineKeyboardButton(text="💰 Выдать монеты", callback_data=f"admin_user_give_coins_start:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=ban_label, callback_data=f"admin_user_toggle_ban:{user_id}"),
+            InlineKeyboardButton(text="✉️ Личное сообщение", callback_data=f"admin_user_send_msg_start:{user_id}"),
+        ],
+        [InlineKeyboardButton(text="🔎 Всеобъемлющее досье", callback_data=f"admin_user_dossier_detailed:{user_id}")],
+        [InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_manage_users:0")]
+    ])
+    
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    return True
+
+
 async def admin_select_user(callback: CallbackQuery):
+
     if not await check_admin(callback.from_user.id): return
     
     user_id = int(callback.data.split(":", 1)[1])
@@ -901,9 +942,7 @@ async def cb_admin_user_give_coins_start(callback: CallbackQuery, state: FSMCont
         callback,
         "💰 <b>Начисление или списание монет</b>\n\n"
         "Используйте быстрые кнопки ниже для начисления/списания монет в один клик,\n"
-        "либо отправьте число сообщением (например, <code>150</code> или <code>-50</code>).\n\n"
-        "⚠️ <b>ВАЖНО:</b> Если вы находитесь в группе, обязательно отвечайте (REPLY) на это сообщение числом, "
-        "иначе бот из-за Privacy Mode его не увидит!",
+        "либо отправьте число сообщением (например, <code>150</code> или <code>-50</code>).",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -939,8 +978,7 @@ async def cb_admin_user_give_coins_exec(callback: CallbackQuery, state: FSMConte
         
     await callback.answer(f"✅ Успешно { 'начислено' if amount > 0 else 'списано' } {abs(amount)} монет!", show_alert=True)
     await state.clear()
-    callback.data = f"admin_select_user:{user_id}"
-    await admin_select_user(callback)
+    await show_user_profile(callback, user_id)
 
 
 @router.message(AdminUserState.waiting_coins_amount)
@@ -1020,7 +1058,7 @@ async def cb_admin_user_toggle_ban(callback: CallbackQuery):
         await session.commit()
         await callback.answer(msg, show_alert=True)
         
-    await admin_select_user(callback)
+    await show_user_profile(callback, user_id)
 
 
 @router.callback_query(F.data.startswith("admin_user_send_msg_start:"))
