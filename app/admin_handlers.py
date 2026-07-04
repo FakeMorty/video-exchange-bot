@@ -743,7 +743,7 @@ async def admin_manage_users(callback: CallbackQuery):
         status_icon = "🚫" if u.status == "banned" else "👤"
         kb_rows.append([InlineKeyboardButton(
             text=f"{status_icon} {name[:18]} (ID: {u.telegram_id})",
-            callback_data=f"admin_select_user:{u.telegram_id}"
+            callback_data=f"admin_select_user:{u.id}"
         )])
         
     # Navigation row
