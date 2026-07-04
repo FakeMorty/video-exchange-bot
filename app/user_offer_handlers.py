@@ -251,7 +251,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
         await state.clear()
             
-        elif method == "stars":
+    elif method == "stars":
             # Сначала создаём оффер в статусе payment_pending
             from app.models import Offer
             start = utc_now()
