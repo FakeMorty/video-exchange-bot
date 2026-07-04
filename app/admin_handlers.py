@@ -764,7 +764,7 @@ async def admin_manage_users(callback: CallbackQuery):
 
 async def show_user_profile(callback: CallbackQuery, user_id: int):
     async with async_session() as session:
-        user = await get_user(session, user_id)
+        user = await get_user_by_id(session, user_id)
         if not user:
             return False
             
@@ -820,7 +820,7 @@ async def admin_select_user(callback: CallbackQuery):
     
     user_id = int(callback.data.split(":", 1)[1])
     async with async_session() as session:
-        user = await get_user(session, user_id)
+        user = await get_user_by_id(session, user_id)
         if not user:
             await callback.answer("Пользователь не найден в базе.", show_alert=True)
             return
@@ -914,7 +914,7 @@ async def process_admin_user_edit_nick(message: Message, state: FSMContext):
             await message.answer("❌ Этот ник уже занят другим пользователем. Введите другой ник:")
             return
             
-        user = await get_user(session, user_id)
+        user = await get_user_by_id(session, user_id)
         if not user:
             await message.answer("Пользователь не найден.")
             await state.clear()
@@ -979,7 +979,7 @@ async def cb_admin_user_give_coins_exec(callback: CallbackQuery, state: FSMConte
     amount = Decimal(parts[2])
     
     async with async_session() as session:
-        user = await get_user(session, user_id)
+        user = await get_user_by_id(session, user_id)
         if not user:
             await callback.answer("Пользователь не найден.", show_alert=True)
             return
@@ -1021,7 +1021,7 @@ async def process_admin_user_give_coins(message: Message, state: FSMContext):
             return
             
         async with async_session() as session:
-            user = await get_user(session, user_id)
+            user = await get_user_by_id(session, user_id)
             if not user:
                 await message.answer("Пользователь не найден.")
                 await state.clear()
@@ -1063,7 +1063,7 @@ async def cb_admin_user_toggle_ban(callback: CallbackQuery):
     
     user_id = int(callback.data.split(":", 1)[1])
     async with async_session() as session:
-        user = await get_user(session, user_id)
+        user = await get_user_by_id(session, user_id)
         if not user:
             await callback.answer("Пользователь не найден.")
             return
@@ -1214,7 +1214,7 @@ async def cb_admin_view_user_videos(callback: CallbackQuery):
     offset = int(parts[2])
     
     async with async_session() as session:
-        user = await get_user(session, user_id)
+        user = await get_user_by_id(session, user_id)
         if not user:
             await callback.answer("Пользователь не найден", show_alert=True)
             return
