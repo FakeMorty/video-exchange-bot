@@ -762,7 +762,6 @@ async def admin_manage_users(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_select_user:"))
 async def show_user_profile(callback: CallbackQuery, user_id: int):
     async with async_session() as session:
         user = await get_user(session, user_id)
@@ -774,14 +773,25 @@ async def show_user_profile(callback: CallbackQuery, user_id: int):
     vip_text = "👑 Да" if is_vip(user) else "❌ Нет"
     
     text = (
-        f"👤 <b>Управление пользователем:</b> {user.display_name or user.username or user_id}\n\n"
+
+        f"👤 <b>Управление пользователем:</b> <a href='tg://user?id={user.telegram_id}'>{user.display_name or user.username or user_id}</a>\n\n"
+
         f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
-        f"• <b>Никнейм в БД:</b> {user.username or 'отсутствует'}\n"
+
+        f"• <b>Username:</b> {('@' + user.username) if user.username else 'отсутствует'}\n"
+
+        f"• <b>Никнейм в БД:</b> {user.display_name or 'отсутствует'}\n"
+
         f"• <b>Баланс:</b> <b>{user.balance}</b> монет\n"
+
         f"• <b>Серия бонусов:</b> {user.bonus_streak} дней\n"
+
         f"• <b>Уровень/XP:</b> Lvl {user.level} ({user.xp} XP)\n"
+
         f"• <b>Статус:</b> {status_text}\n"
+
         f"• <b>VIP статус:</b> {vip_text}\n"
+
     )
     
     ban_label = "✅ Разбанить" if user.status == "banned" else "🚫 Забанить"
@@ -803,6 +813,7 @@ async def show_user_profile(callback: CallbackQuery, user_id: int):
     return True
 
 
+@router.callback_query(F.data.startswith("admin_select_user:"))
 async def admin_select_user(callback: CallbackQuery):
 
     if not await check_admin(callback.from_user.id): return
@@ -819,14 +830,25 @@ async def admin_select_user(callback: CallbackQuery):
     vip_text = "👑 Да" if is_vip(user) else "❌ Нет"
     
     text = (
-        f"👤 <b>Управление пользователем:</b> {user.display_name or user.username or user_id}\n\n"
+
+        f"👤 <b>Управление пользователем:</b> <a href='tg://user?id={user.telegram_id}'>{user.display_name or user.username or user_id}</a>\n\n"
+
         f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
-        f"• <b>Никнейм в БД:</b> {user.username or 'отсутствует'}\n"
+
+        f"• <b>Username:</b> {('@' + user.username) if user.username else 'отсутствует'}\n"
+
+        f"• <b>Никнейм в БД:</b> {user.display_name or 'отсутствует'}\n"
+
         f"• <b>Баланс:</b> <b>{user.balance}</b> монет\n"
+
         f"• <b>Серия бонусов:</b> {user.bonus_streak} дней\n"
+
         f"• <b>Уровень/XP:</b> Lvl {user.level} ({user.xp} XP)\n"
+
         f"• <b>Статус:</b> {status_text}\n"
+
         f"• <b>VIP статус:</b> {vip_text}\n"
+
     )
     
     ban_label = "✅ Разбанить" if user.status == "banned" else "🚫 Забанить"
@@ -1170,14 +1192,78 @@ async def cb_admin_user_dossier_detailed(callback: CallbackQuery):
             sign = "+" if log.amount >= 0 else ""
             text += f" • <code>{log.created_at.strftime('%d.%m %H:%M')}</code> | <b>{sign}{log.amount}</b> ({log.source})\n"
             
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Назад к управлению", callback_data=f"admin_select_user:{user_id}")]
-    ])
+    buttons = []
+    if d['videos_uploaded'] > 0:
+        buttons.append([InlineKeyboardButton(text="🎬 Загруженные видео", callback_data=f"admin_view_user_videos:{user_id}:0")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад к управлению", callback_data=f"admin_select_user:{user_id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     if len(text) > 4000:
         text = text[:4000] + "\n..."
         
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_view_user_videos:"))
+async def cb_admin_view_user_videos(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    
+    parts = callback.data.split(":")
+    user_id = int(parts[1])
+    offset = int(parts[2])
+    
+    async with async_session() as session:
+        user = await get_user(session, user_id)
+        if not user:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+            
+        total = (await session.execute(
+            select(func.count(Video.id)).where(Video.uploader_user_id == user.id)
+        )).scalar_one()
+        
+        if total == 0:
+            await callback.answer("Нет загруженных видео", show_alert=True)
+            return
+            
+        video = (await session.execute(
+            select(Video).where(Video.uploader_user_id == user.id).order_by(Video.id.desc()).offset(offset).limit(1)
+        )).scalar_one_or_none()
+        
+        if not video:
+            await callback.answer("Видео не найдено", show_alert=True)
+            return
+
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️ Пред.", callback_data=f"admin_view_user_videos:{user_id}:{offset-1}"))
+    if offset < total - 1:
+        nav_row.append(InlineKeyboardButton(text="След. ▶️", callback_data=f"admin_view_user_videos:{user_id}:{offset+1}"))
+        
+    kb_rows = []
+    if nav_row:
+        kb_rows.append(nav_row)
+    kb_rows.append([InlineKeyboardButton(text="🔎 Назад к досье", callback_data=f"admin_user_dossier_detailed:{user_id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    
+    caption = f"🎬 <b>Загруженное видео пользователя</b> ({offset+1}/{total})\nID: {video.id} | Статус: {video.status}\nОпубликовано: {video.created_at.strftime('%d.%m.%Y %H:%M')}"
+    
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    try:
+        await callback.message.answer_video(
+            video.telegram_file_id,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    except Exception as e:
+        await callback.message.answer(f"⚠️ Ошибка при отправке видео: {e}")
+
     await callback.answer()
 
 

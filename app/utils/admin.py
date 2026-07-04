@@ -11,6 +11,10 @@ async def _safe_edit(callback: CallbackQuery, text: str, **kwargs):
     try:
         await callback.message.edit_text(text, **kwargs)
     except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         await callback.message.answer(text, **kwargs)
 
 async def check_admin(tid: int) -> bool:
