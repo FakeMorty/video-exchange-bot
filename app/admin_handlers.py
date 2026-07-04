@@ -1157,9 +1157,9 @@ async def cb_admin_user_dossier_detailed(callback: CallbackQuery):
     text = (
         f"🔍 <b>ПОЛНОЕ СЛЕДСТВЕННОЕ ДОСЬЕ ПОЛЬЗОВАТЕЛЯ</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Профиль:</b> {styled_name}\n"
+        f"👤 <b>Профиль:</b> <a href='tg://user?id={user.telegram_id}'>{styled_name}</a>\n"
         f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
-        f"• <b>Username:</b> @{user.username or 'нет'}\n"
+        f"• <b>Username:</b> {('@' + user.username) if user.username else 'нет'}\n"
         f"• <b>Никнейм в БД:</b> {user.display_name or 'не установлен'}\n"
         f"• <b>Баланс:</b> <b>{user.balance}</b> монет\n"
         f"• <b>VIP статус:</b> {'👑 Активен до ' + user.vip_until.strftime('%d.%m.%Y') if is_vip(user) else '❌ Нет'}\n"
