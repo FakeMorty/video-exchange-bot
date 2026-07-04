@@ -1255,12 +1255,35 @@ async def cb_admin_view_user_videos(callback: CallbackQuery):
         pass
 
     try:
-        await callback.message.answer_video(
-            video.telegram_file_id,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=kb
-        )
+
+        if video.content_type == "photo":
+
+            await callback.message.answer_photo(
+
+                video.telegram_file_id,
+
+                caption=caption,
+
+                parse_mode="HTML",
+
+                reply_markup=kb
+
+            )
+
+        else:
+
+            await callback.message.answer_video(
+
+                video.telegram_file_id,
+
+                caption=caption,
+
+                parse_mode="HTML",
+
+                reply_markup=kb
+
+            )
+
     except Exception as e:
         await callback.message.answer(f"⚠️ Ошибка при отправке видео: {e}")
 

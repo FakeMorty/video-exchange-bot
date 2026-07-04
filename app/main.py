@@ -135,21 +135,18 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
 
 
 async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_at: datetime):
-    """Напоминает владельцам билетов за 1 час до розыгрыша."""
+    from sqlalchemy import select
+    from app.models import LotteryTicket, User
+    from datetime import timedelta
+    from app.utils.messaging import format_time_for_user
+    
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
     user_ids = list(set(t.user_id for t in tickets))
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
     
-    # Время в МСК для удобства
-    draw_msk = draw_starts_at + timedelta(hours=3)
-    time_str = draw_msk.strftime("%H:%M")
-    
-    msg = (
-        f"⏰ <b>Лотерея-лото — скоро розыгрыш!</b>\n\n"
-        f"Розыгрыш начнётся через час ({time_str} МСК).\n"
-        f"Не забудьте зайти в Live и посмотреть на колесо удачи! 🎰"
-    )
     for u in users:
+        time_str = format_time_for_user(draw_starts_at, u.timezone)
+        msg = "⏰ <b>Секслото — скоро розыгрыш!</b>\n\nРозыгрыш начнётся ровно " + time_str + ".\nНе забудьте зайти в Live и посмотреть на свои бочонки! 🎰"
         try:
             await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
         except Exception:
@@ -1071,6 +1068,22 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     animatePhysics();
 
     // Загрузка Баланса Пользователя
+        async function sendTimezone() {
+        try {
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            if (tz) {
+                await fetch('/api/user/timezone', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: userId, timezone: tz})
+                });
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    
+    sendTimezone();
     async function loadUserBalance() {
         try {
             const res = await fetch('/api/user/balance?user_id=' + userId);
@@ -1656,6 +1669,145 @@ async def auto_broadcast_worker(bot):
             await asyncio.sleep(60)
 
 
+
+# =========================
+# WEB APP API HANDLERS
+# =========================
+async def api_user_balance(request: web.Request) -> web.Response:
+    user_id = request.query.get("user_id")
+    if not user_id:
+        return web.json_response({"ok": False, "error": "user_id is required"})
+    try:
+        user_id = int(user_id)
+        from app.services import get_user
+        from app.db import async_session
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+            if not user:
+                return web.json_response({"ok": False, "error": "User not found"})
+            return web.json_response({"ok": True, "balance": float(user.balance)})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)})
+
+async def api_lottery_buy(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id", 0))
+        from app.services import get_user, buy_lottery_ticket
+        from app.db import async_session
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+            if not user:
+                return web.json_response({"ok": False, "error": "User not found"})
+            ok, msg = await buy_lottery_ticket(session, user.id, is_admin_free=False)
+            if ok:
+                await session.refresh(user)
+                return web.json_response({"ok": True, "balance": float(user.balance)})
+            else:
+                return web.json_response({"ok": False, "error": msg})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)})
+
+async def api_lottery_buy_coins(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id", 0))
+        pack_key = data.get("package_id", "")
+        from app.services import get_user, create_payment
+        from app.db import async_session
+        from app.config import STARS_PACKAGES
+        pack = STARS_PACKAGES.get(pack_key)
+        if not pack:
+            return web.json_response({"ok": False, "error": "Unknown package"})
+        
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+            if not user:
+                return web.json_response({"ok": False, "error": "User not found"})
+            
+            payment = await create_payment(session, user.id, pack_key)
+            
+            from aiogram.types import LabeledPrice
+            bot = request.app['bot']
+            link = await bot.create_invoice_link(
+                title=f"Покупка {pack['title']}",
+                description=f"{pack['coins']} монет за {pack['stars']} Stars",
+                payload=payment.payload,
+                currency="XTR",
+                prices=[LabeledPrice(label=pack['title'], amount=pack['stars'])]
+            )
+            return web.json_response({"ok": True, "invoice_link": link})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)})
+
+async def api_lottery_offers(request: web.Request) -> web.Response:
+    try:
+        from app.services import get_active_offers
+        from app.db import async_session
+        async with async_session() as session:
+            offers = await get_active_offers(session)
+            res_offers = [{"id": o.id, "title": o.title, "reward": float(o.reward_preview), "url": o.channel_url} for o in offers[:5]]
+            return web.json_response({"ok": True, "offers": res_offers})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)})
+
+async def api_lottery_place_bet(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id", 0))
+        target_number = int(data.get("target_number", 0))
+        bet_amount = float(data.get("bet_amount", 0))
+        bet_type = data.get("bet_type", "first")
+        
+        from app.services import get_user, ensure_current_lottery_round, change_balance_atomic, to_decimal
+        from app.db import async_session
+        from app.models import LotteryBet
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+            if not user:
+                return web.json_response({"ok": False, "error": "User not found"})
+            if user.balance < bet_amount:
+                return web.json_response({"ok": False, "error": "Недостаточно монет"})
+            
+            round_obj = await ensure_current_lottery_round(session)
+            if round_obj.status != "open":
+                return web.json_response({"ok": False, "error": "Прием ставок закрыт"})
+                
+            await change_balance_atomic(session, user.id, -to_decimal(bet_amount), "lottery_bet")
+            bet = LotteryBet(
+                user_id=user.id,
+                round_id=round_obj.id,
+                bet_type=bet_type,
+                target_number=target_number,
+                amount=to_decimal(bet_amount)
+            )
+            session.add(bet)
+            await session.commit()
+            await session.refresh(user)
+            return web.json_response({"ok": True, "balance": float(user.balance)})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)})
+
+async def api_user_timezone(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id", 0))
+        timezone = data.get("timezone", "")
+        if not user_id or not timezone:
+            return web.json_response({"ok": False})
+        
+        from app.services import get_user
+        from app.db import async_session
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+            if user:
+                user.timezone = timezone
+                await session.commit()
+                return web.json_response({"ok": True})
+        return web.json_response({"ok": False})
+    except Exception:
+        return web.json_response({"ok": False})
+
 async def on_startup(app):
     bot = app['bot']
     await init_db()
@@ -1698,6 +1850,220 @@ async def on_startup(app):
     log_info(logger, "Service initialized")
 
 
+# =========================
+# WEB APP API HANDLERS
+# =========================
+    app.router.add_post("/api/user/timezone", api_user_timezone)
+    app.router.add_post("/api/lottery/buy", api_lottery_buy)
+    app.router.add_post("/api/lottery/buy-coins", api_lottery_buy_coins)
+    app.router.add_get("/api/lottery/offers", api_lottery_offers)
+    app.router.add_post("/api/lottery/place-bet", api_lottery_place_bet)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
+    await site.start()
+
+    try:
+        log_info(logger, "Polling started")
+        stop_event = asyncio.Event()
+        audit_task = None
+        lottery_task = None
+        if ENABLE_SUBSCRIPTION_AUDIT:
+            audit_task = asyncio.create_task(subscription_audit_worker(bot, stop_event))
+
+            log_info(logger, "Subscription audit worker enabled")
+
+        else:
+            log_info(logger, "Subscription audit worker disabled by config")
+        if ENABLE_LOTTERY:
+            lottery_task = asyncio.create_task(lottery_worker(bot, stop_event))
+            log_info(logger, "Lottery worker enabled")
+        
+        cache_task = asyncio.create_task(video_cache_cleanup_worker(stop_event))
+        retention_task = asyncio.create_task(retention_worker(bot, stop_event))
+        promo_task = asyncio.create_task(weekly_promo_worker(bot, stop_event))
+
+        log_info(logger, "Video cache cleanup worker enabled")
+        
+        await dp.start_polling(bot)
+    finally:
+        stop_event.set()
+        if audit_task is not None:
+            audit_task.cancel()
+            try:
+                await audit_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        if lottery_task is not None:
+            lottery_task.cancel()
+            try:
+                await lottery_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        if cache_task is not None:
+            cache_task.cancel()
+            try:
+                await cache_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        await runner.cleanup()
+        await bot.session.close()
+        await engine.dispose()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+async def retention_worker(bot: Bot, stop_event: asyncio.Event):
+    """
+    Рассылка: отправляем бонус пользователям с низким балансом,
+    которые смотрели видео 1-2 часа назад и еще не получали такой пуш.
+    """
+    from sqlalchemy import select
+    from datetime import timedelta
+    from app.models import User, VideoView, UserActionLog
+    from app.services import change_balance_atomic, to_decimal
+    
+    while not stop_event.is_set():
+        try:
+            async with async_session() as session:
+                from app.models import utc_now
+                now = utc_now()
+                one_hour_ago = now - timedelta(hours=1)
+                two_hours_ago = now - timedelta(hours=2)
+                
+                # Ищем юзеров с балансом < 10 (мало для просмотра)
+                low_balance_users = (await session.execute(
+                    select(User).where(User.balance < to_decimal(10.0), User.status == "active")
+                )).scalars().all()
+                
+                for u in low_balance_users:
+                    # Проверяем, отправляли ли уже пуш
+                    got_push = (await session.execute(
+                        select(UserActionLog).where(
+                            UserActionLog.user_id == u.id, 
+                            UserActionLog.action == "retention_push"
+                        )
+                    )).scalars().first()
+                    
+                    if got_push:
+                        continue
+                        
+                    # Проверяем последний просмотр видео
+                    last_view = (await session.execute(
+                        select(VideoView).where(VideoView.user_id == u.id)
+                        .order_by(VideoView.watched_at.desc())
+                        .limit(1)
+                    )).scalars().first()
+                    
+                    if last_view and two_hours_ago <= last_view.watched_at <= one_hour_ago:
+                        # Начисляем бонус
+                        bonus = 30.0
+                        await change_balance_atomic(session, u.id, to_decimal(bonus), "retention_bonus")
+                        log = UserActionLog(user_id=u.id, action="retention_push", details=f"Sent {bonus} coins")
+                        session.add(log)
+                        await session.commit()
+                        
+                        try:
+                            bot_info = await bot.get_me()
+                            ref_link = f"https://t.me/{bot_info.username}?start={u.referral_code}"
+                            await bot.send_message(
+                                u.telegram_id,
+                                "😭 <b>Мы заметили, что у тебя кончились монетки!</b>\n\n"
+                                f"Не уходи просто так! Мы начислили тебе <b>+{bonus} бонусных монет</b>, чтобы ты мог посмотреть еще пару сливчиков. 🔥\n\n"
+                                "👉 <b>Хочешь смотреть бесконечно?</b>\n"
+                                f"Скинь эту ссылку друзьям:\n<code>{ref_link}</code>\n\n"
+                                "За каждого, кто посмотрит 5 видео, мы начислим тебе огромный бонус! Ждем тебя в ленте 🎬",
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.error(f"Retention worker error: {e}")
+            
+        # Проверяем каждые 15 минут
+        for _ in range(15 * 60):
+            if stop_event.is_set():
+                break
+            await asyncio.sleep(1)
+
+async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
+    import string, random
+    from sqlalchemy import select
+    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR, WEEKLY_PROMO_AMOUNT, WEEKLY_PROMO_USES
+    from app.models import Promocode, User
+    from app.services import to_decimal
+    from datetime import datetime, timezone, timedelta
+    
+    last_run_week = None
+    
+    while not stop_event.is_set():
+        try:
+            now_utc = datetime.now(timezone.utc)
+            now_msk = now_utc + timedelta(hours=3)
+            
+            async with async_session() as session:
+                from app.services import get_setting
+                
+                db_day = await get_setting(session, "weekly_promo_day", "")
+                db_hour = await get_setting(session, "weekly_promo_hour", "")
+                db_amount = await get_setting(session, "weekly_promo_amount", "")
+                db_uses = await get_setting(session, "weekly_promo_uses", "")
+                
+                p_day = int(db_day) if db_day.isdigit() else WEEKLY_PROMO_DAY
+                p_hour = int(db_hour) if db_hour.isdigit() else WEEKLY_PROMO_HOUR
+                p_amount = float(db_amount) if db_amount else WEEKLY_PROMO_AMOUNT
+                p_uses = int(db_uses) if db_uses.isdigit() else 999999
+                
+                if now_msk.weekday() == p_day and now_msk.hour == p_hour:
+                    current_week = now_msk.isocalendar()[1]
+                    if last_run_week != current_week:
+                        last_run_week = current_week
+                        
+                        code = "FREEBIE_" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                        
+                        super_admin_id = ADMINS[0] if ADMINS else 1
+                        admin_user = (await session.execute(select(User).where(User.telegram_id == super_admin_id))).scalars().first()
+                        creator_id = admin_user.id if admin_user else 1
+                        
+                        promo = Promocode(
+                            creator_user_id=creator_id,
+                            code=code,
+                            coin_amount=to_decimal(p_amount),
+                            max_uses=p_uses,
+                            used_count=0,
+                            is_active=True,
+                            expires_at=now_utc + timedelta(days=2)
+                        )
+                        session.add(promo)
+                        await session.commit()
+                        
+                        users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
+                        
+                        uses_text = "НЕ ОГРАНИЧЕНО" if p_uses >= 999999 else str(p_uses)
+                        msg = "🎁 <b>ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА!</b>\n\nЛови секретный промокод на <b>" + str(p_amount) + " монет</b>!\nАктивировать: <code>/start promo_" + code + "</code>\n\n<i>Успей забрать, количество активаций ограничено: " + uses_text + " шт!</i>"
+                        
+                        sent = 0
+                        for uid in users:
+                            try:
+                                await bot.send_message(uid, msg, parse_mode="HTML")
+                                sent += 1
+                                if sent % 30 == 0:
+                                    await asyncio.sleep(0.5)
+                            except Exception:
+                                pass
+        except Exception as e:
+            logger.error(f"Weekly promo worker error: {e}")
+            
+        await asyncio.sleep(60)
+
+
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is empty")
@@ -1735,6 +2101,14 @@ async def main():
     app.router.add_get("/lottery/state", lottery_state_handler)
     app.router.add_post("/lottery/draw-next", lottery_draw_next_handler)
     app.router.add_get("/lottery/live", lottery_live_page_handler)
+    
+    app.router.add_get("/api/user/balance", api_user_balance)
+    app.router.add_post("/api/user/timezone", api_user_timezone)
+    app.router.add_post("/api/lottery/buy", api_lottery_buy)
+    app.router.add_post("/api/lottery/buy-coins", api_lottery_buy_coins)
+    app.router.add_get("/api/lottery/offers", api_lottery_offers)
+    app.router.add_post("/api/lottery/place-bet", api_lottery_place_bet)
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
@@ -1748,8 +2122,10 @@ async def main():
         if ENABLE_SUBSCRIPTION_AUDIT:
             audit_task = asyncio.create_task(subscription_audit_worker(bot, stop_event))
             log_info(logger, "Subscription audit worker enabled")
-        else:
-            log_info(logger, "Subscription audit worker disabled by config")
+        
+        retention_task = asyncio.create_task(retention_worker(bot, stop_event))
+        promo_task = asyncio.create_task(weekly_promo_worker(bot, stop_event))
+        
         if ENABLE_LOTTERY:
             lottery_task = asyncio.create_task(lottery_worker(bot, stop_event))
             log_info(logger, "Lottery worker enabled")
@@ -1757,34 +2133,9 @@ async def main():
         cache_task = asyncio.create_task(video_cache_cleanup_worker(stop_event))
         log_info(logger, "Video cache cleanup worker enabled")
         
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         stop_event.set()
-        if audit_task is not None:
-            audit_task.cancel()
-            try:
-                await audit_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        if lottery_task is not None:
-            lottery_task.cancel()
-            try:
-                await lottery_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        if cache_task is not None:
-            cache_task.cancel()
-            try:
-                await cache_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        await runner.cleanup()
         await bot.session.close()
         await engine.dispose()
 
