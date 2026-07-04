@@ -18,6 +18,20 @@ from aiogram.types import (
 )
 from sqlalchemy import select, func, desc
 
+
+def is_any_admin(telegram_id: int, user_obj=None) -> bool:
+
+    if telegram_id in ADMINS:
+
+        return True
+
+    if user_obj and getattr(user_obj, "is_admin", False):
+
+        return True
+
+    return False
+
+
 from app.config import (
     ADMINS, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD, STARS_PACKAGES, STARS_TO_COINS_RATE,
     ENABLE_ADMIN_FREE,
@@ -197,13 +211,6 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                     text="✏️ Установить ник",
                     callback_data="set_nickname_start"
                 )]
-def is_any_admin(telegram_id: int, user_obj=None) -> bool:
-    if telegram_id in ADMINS:
-        return True
-    if user_obj and user_obj.is_admin:
-        return True
-    return False
-
             ])
             from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
             await message.answer(
