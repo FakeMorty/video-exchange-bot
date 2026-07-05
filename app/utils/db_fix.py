@@ -129,6 +129,13 @@ async def fix_database():
                 log_info(logger, f"Added users.{col}")
             except Exception:
                 await conn.rollback()
+                
+        try:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN timezone VARCHAR(50)"))
+            await conn.commit()
+            log_info(logger, "Added users.timezone")
+        except Exception:
+            await conn.rollback()
 
         # Ensure character exists in katya_chats table
         try:

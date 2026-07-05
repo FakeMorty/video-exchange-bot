@@ -48,6 +48,7 @@ class User(Base):
     promo_month: Mapped[int] = mapped_column(Integer, default=0)
     last_freebie_week: Mapped[int] = mapped_column(Integer, default=0)
     last_freebie_year: Mapped[int] = mapped_column(Integer, default=0)
+    timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Отношения

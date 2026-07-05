@@ -1568,16 +1568,28 @@ async def get_recent_feedback(session: AsyncSession, limit: int = 20) -> list[Fe
 # ============================
 # ЛОТЕРЕЯ-ЛОТО
 # ============================
-def _get_lottery_window(dt: datetime) -> tuple[str, datetime, datetime, datetime]:
-    # Сдвигаем на 20:00 (UTC), чтобы дни переключались вечером.
+async def _get_lottery_window(session, dt: datetime) -> tuple[str, datetime, datetime, datetime]:
+    from app.config import LOTTERY_INTERVAL_HOURS, LOTTERY_DRAW_DURATION_HOURS
+    
+    db_interval = await get_setting(session, "lottery_interval_hours", "")
+    db_duration = await get_setting(session, "lottery_draw_duration_hours", "")
+    
+    interval = int(db_interval) if db_interval.isdigit() else LOTTERY_INTERVAL_HOURS
+    draw_dur = int(db_duration) if db_duration.isdigit() else LOTTERY_DRAW_DURATION_HOURS
+    
     epoch = datetime(1970, 1, 1, 20, 0, 0)
     delta = dt - epoch
-    cycle_idx = int(delta.total_seconds() // (48 * 3600))
     
-    start = epoch + timedelta(hours=cycle_idx * 48)
-    draw_start = start + timedelta(hours=46)
-    draw_end = start + timedelta(hours=48)
-    key = f"c48_{cycle_idx}"
+    if interval < 1: interval = 48
+    if draw_dur < 1: draw_dur = 2
+    
+    cycle_idx = int(delta.total_seconds() // (interval * 3600))
+    
+    start = epoch + timedelta(hours=cycle_idx * interval)
+    draw_start = start + timedelta(hours=max(1, interval - draw_dur))
+    draw_end = start + timedelta(hours=interval)
+    
+    key = f"lottery_{interval}h_{cycle_idx}"
     return key, start, draw_start, draw_end
 
 def _serialize_numbers(nums: list[int]) -> str:
@@ -1593,7 +1605,7 @@ def _deserialize_numbers(raw: str | None) -> list[int]:
 
 async def ensure_current_lottery_round(session: AsyncSession) -> LotteryRound:
     now = utc_now()
-    key, start, draw_start, draw_end = _get_lottery_window(now)
+    key, start, draw_start, draw_end = await _get_lottery_window(session, now)
     
     existing = (await session.execute(
         select(LotteryRound).where(LotteryRound.week_key == key)

@@ -1,54 +1,42 @@
-"""
-Безопасные утилиты для работы с сообщениями Telegram.
-Предотвращают зависания при невозможности редактирования сообщений.
-"""
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
-from aiogram.exceptions import TelegramBadRequest
+from datetime import datetime, timezone
+import zoneinfo
 
-
-async def safe_edit(
-    event: CallbackQuery | Message,
-    text: str = None,
-    caption: str = None,
-    reply_markup: InlineKeyboardMarkup = None,
-    parse_mode: str = "HTML"
-) -> bool:
+def format_time_for_user(dt: datetime, user_timezone: str = None) -> str:
     """
-    Безопасное редактирование сообщения.
-    Возвращает True, если редактирование удалось, иначе False.
+    Форматирует время. Если у юзера есть часовой пояс (например Asia/Sakhalin),
+    показывает его локальное время. Иначе пишет "через X часов/минут" + МСК.
     """
-    try:
-        if isinstance(event, CallbackQuery):
-            msg = event.message
-        else:
-            msg = event
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+        
+    now = datetime.now(timezone.utc)
+    
+    if user_timezone:
+        try:
+            tz = zoneinfo.ZoneInfo(user_timezone)
+            local_dt = dt.astimezone(tz)
+            return f"в {local_dt.strftime('%H:%M')} (по вашему времени)"
+        except Exception:
+            pass
 
-        if caption is not None:
-            await msg.edit_caption(caption=caption, reply_markup=reply_markup, parse_mode=parse_mode)
-        elif text is not None:
-            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
-        elif reply_markup is not None:
-            await msg.edit_reply_markup(reply_markup=reply_markup)
-        return True
-
-    except TelegramBadRequest:
-        # Не удалось отредактировать — отправляем новое сообщение
-        if isinstance(event, CallbackQuery):
-            if caption:
-                await event.message.answer(caption, parse_mode=parse_mode, reply_markup=reply_markup)
-            elif text:
-                await event.message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-        else:
-            if caption:
-                await event.answer(caption, parse_mode=parse_mode, reply_markup=reply_markup)
-            elif text:
-                await event.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-        return False
-
-
-async def safe_answer(callback: CallbackQuery, text: str = "", show_alert: bool = False):
-    """Безопасный ответ на callback."""
-    try:
-        await callback.answer(text, show_alert=show_alert)
-    except Exception:
-        pass
+    # Fallback: relative time + MSK
+    diff = dt - now
+    total_seconds = int(diff.total_seconds())
+    
+    if total_seconds <= 0:
+        return "прямо сейчас"
+        
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    
+    time_parts = []
+    if hours > 0:
+        time_parts.append(f"{hours} ч")
+    if minutes > 0:
+        time_parts.append(f"{minutes} мин")
+        
+    rel_str = " ".join(time_parts) if time_parts else "меньше минуты"
+    
+    from datetime import timedelta
+    msk_dt = dt + timedelta(hours=3)
+    return f"через {rel_str} (в {msk_dt.strftime('%H:%M')} МСК)"

@@ -70,8 +70,8 @@ UPLOAD_REWARD = _get_float("UPLOAD_REWARD", 30.0)
 PHOTO_UPLOAD_REWARD = _get_float("PHOTO_UPLOAD_REWARD", 15.0)
 
 # Рефералы
-REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 50.0)
-REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 20.0)
+REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 150.0)
+REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 50.0)
 
 # Курс Stars → монеты
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 10.0)
@@ -102,7 +102,7 @@ OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.
 REFERRAL_MILESTONES = {
     3: {"type": "coins", "amount": 20.0, "desc": "20 монет"},
     5: {"type": "lootbox", "amount": 1, "desc": "1 Лутбокс"},
-    10: {"type": "coins", "amount": 60.0, "desc": "60 монет"},
+    10: {"type": "vip", "amount": 1, "desc": "VIP на 1 день"},
     15: {"type": "lootbox", "amount": 3, "desc": "3 Лутбокса"},
     20: {"type": "vip", "amount": 7, "desc": "VIP на 7 дней"},
 }
@@ -259,6 +259,8 @@ LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
 LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
 LOTTERY_DRAW_START_HOUR_UTC = _get_int("LOTTERY_DRAW_START_HOUR_UTC", 18)
 LOTTERY_DRAW_END_HOUR_UTC = _get_int("LOTTERY_DRAW_END_HOUR_UTC", 20)
+LOTTERY_INTERVAL_HOURS = _get_int("LOTTERY_INTERVAL_HOURS", 48)
+LOTTERY_DRAW_DURATION_HOURS = _get_int("LOTTERY_DRAW_DURATION_HOURS", 2)
 LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "")
 
 # ============================
@@ -297,3 +299,12 @@ SANYA_STICKER_PACK = _get_str("SANYA_STICKER_PACK", "sanya_by_Wseksbot")
 # Лимиты чатов с Катей
 KATYA_MAX_CHATS = _get_int("KATYA_MAX_CHATS", 5)
 KATYA_MAX_CHATS_VIP = _get_int("KATYA_MAX_CHATS_VIP", 10)
+
+# ============================
+# ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА (СЕКРЕТНОЕ СЛОВО)
+# ============================
+# День недели (0 - Понедельник, 1 - Вторник ... 6 - Воскресенье)
+WEEKLY_PROMO_DAY = _get_int("WEEKLY_PROMO_DAY", 4) # Пятница
+WEEKLY_PROMO_HOUR = _get_int("WEEKLY_PROMO_HOUR", 18)
+WEEKLY_PROMO_AMOUNT = _get_float("WEEKLY_PROMO_AMOUNT", 100.0)
+WEEKLY_PROMO_USES = _get_int("WEEKLY_PROMO_USES", 50)

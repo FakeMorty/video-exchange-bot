@@ -3883,3 +3883,32 @@ async def cb_btn_promo_back(callback: CallbackQuery, state: FSMContext):
     from aiogram.types import Message as TGMessage
     await btn_promo(callback.message, state)
     await callback.answer()
+
+
+@router.callback_query(F.data == "welcome_lootbox_claim")
+async def welcome_lootbox_claim(callback: CallbackQuery):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            return
+        from app.models import UserActionLog
+        from sqlalchemy import select
+        already_claimed = (await session.execute(select(UserActionLog).where(UserActionLog.user_id == user.id, UserActionLog.action == "welcome_lootbox"))).scalars().first()
+        if already_claimed:
+            await callback.answer("Вы уже открыли свой стартовый лутбокс!", show_alert=True)
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            return
+        from app.services import change_balance_atomic
+        import random
+        reward = random.choice(range(50, 410, 10))
+        await change_balance_atomic(session, user.id, Decimal(reward), "welcome_lootbox")
+        log = UserActionLog(user_id=user.id, action="welcome_lootbox", details=f"Reward: {reward}")
+        session.add(log)
+        await session.commit()
+        await session.refresh(user)
+        msg_cap = "🎁 <b>СТАРТОВЫЙ ЛУТБОКС ОТКРЫТ!</b>\n\nТебе выпало <b>+" + str(reward) + " монет</b>! 🤑\nТеперь твой баланс: <b>" + str(user.balance) + "</b>.\n\nЭтого хватит, чтобы насладиться контентом, скорее жми '🎬 Смотреть'!"
+        await callback.message.edit_caption(caption=msg_cap, parse_mode="HTML")
+        await callback.answer(f"+{reward} монет!", show_alert=True)

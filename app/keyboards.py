@@ -37,10 +37,10 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_UPLOAD), KeyboardButton(text=BTN_PROFILE)],
         [KeyboardButton(text=BTN_BUY), KeyboardButton(text=BTN_PROMO)],
         [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
-        [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_BONUS)],
-        [KeyboardButton(text=BTN_QUESTS), KeyboardButton(text=BTN_TOPS)],
+        [KeyboardButton(text=BTN_GAMES)],
+        [KeyboardButton(text=BTN_FEEDBACK), KeyboardButton(text=BTN_TOPS)],
         [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
-        [KeyboardButton(text=BTN_FEEDBACK), KeyboardButton(text=BTN_FAQ)],
+        [KeyboardButton(text=BTN_FAQ)],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=BTN_ADMIN)])
@@ -204,10 +204,7 @@ def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
 # =========================
 def games_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎲 Кости", callback_data="dice_menu")],
-        [InlineKeyboardButton(text="🪙 Орёл/Решка", callback_data="game_coinflip")],
-        [InlineKeyboardButton(text="🎯 Угадай число", callback_data="guess_menu")],
-        [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
+                                [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
 

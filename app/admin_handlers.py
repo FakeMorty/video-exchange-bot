@@ -1330,6 +1330,8 @@ async def admin_bot_settings(callback: CallbackQuery):
         [InlineKeyboardButton(text="💰 Экономика", callback_data="settings_economy")],
         [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
         [InlineKeyboardButton(text="🎮 Игры и лотерея", callback_data="settings_games")],
+        [InlineKeyboardButton(text="🎰 Настройки Секслото", callback_data="settings_lottery")],
+        [InlineKeyboardButton(text="🎁 Еженедельный Промокод", callback_data="settings_weekly_promo")],
         [InlineKeyboardButton(text="📺 Реклама", callback_data="settings_ads")],
         [InlineKeyboardButton(text="✏️ Никнеймы", callback_data="settings_nicks")],
         [InlineKeyboardButton(text="🎟 Промокоды", callback_data="settings_promos")],
@@ -1626,6 +1628,68 @@ async def settings_promos(callback: CallbackQuery):
     await callback.answer()
 
 
+# ---------- ЛОТЕРЕЯ (СЕКРЕТНЫЕ НАСТРОЙКИ СЕКЛОТО) ----------
+@router.callback_query(F.data == "settings_lottery")
+async def settings_lottery(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        li = await get_setting(session, "lottery_interval_hours", "")
+        ld = await get_setting(session, "lottery_draw_duration_hours", "")
+    from app.config import LOTTERY_INTERVAL_HOURS, LOTTERY_DRAW_DURATION_HOURS
+    def v(db_val, default):
+        return f"{db_val or default}"
+
+    text = (
+        "🎰 <b>Настройки Секслото</b>\n\n"
+        f"<b>Интервал розыгрышей (часов):</b> {v(li, LOTTERY_INTERVAL_HOURS)}\n"
+        f"<b>Длительность розыгрыша (часов):</b> {v(ld, LOTTERY_DRAW_DURATION_HOURS)}\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Интервал розыгрышей", callback_data="settings_edit:lottery_interval_hours")],
+        [InlineKeyboardButton(text="✏️ Длительность розыгрыша", callback_data="settings_edit:lottery_draw_duration_hours")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- ЕЖЕНЕДЕЛЬНЫЙ ПРОМОКОД ----------
+@router.callback_query(F.data == "settings_weekly_promo")
+async def settings_weekly_promo(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import get_setting
+        wd = await get_setting(session, "weekly_promo_day", "")
+        wh = await get_setting(session, "weekly_promo_hour", "")
+        wa = await get_setting(session, "weekly_promo_amount", "")
+        wu = await get_setting(session, "weekly_promo_uses", "")
+    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR, WEEKLY_PROMO_AMOUNT, WEEKLY_PROMO_USES
+    def v(db_val, default):
+        return f"{db_val or default}"
+
+    text = (
+        "🎁 <b>Настройки Еженедельного Промокода</b>\n\n"
+        f"<b>День недели (0-Пн ... 6-Вс):</b> {v(wd, WEEKLY_PROMO_DAY)}\n"
+        f"<b>Час по UTC (0-23):</b> {v(wh, WEEKLY_PROMO_HOUR)}\n"
+        f"<b>Сумма монет:</b> {v(wa, WEEKLY_PROMO_AMOUNT)}\n"
+        f"<b>Кол-во активаций:</b> {v(wu, WEEKLY_PROMO_USES)}\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ День недели (0-6)", callback_data="settings_edit:weekly_promo_day")],
+        [InlineKeyboardButton(text="✏️ Час по UTC", callback_data="settings_edit:weekly_promo_hour")],
+        [InlineKeyboardButton(text="✏️ Сумма", callback_data="settings_edit:weekly_promo_amount")],
+        [InlineKeyboardButton(text="✏️ Кол-во активаций", callback_data="settings_edit:weekly_promo_uses")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
 # ---------- ПРИВЕТСТВИЕ И БАННЕР ----------
 @router.callback_query(F.data == "settings_welcome")
 async def settings_welcome(callback: CallbackQuery):
@@ -1729,6 +1793,17 @@ async def settings_edit_start(callback: CallbackQuery, state: FSMContext):
         return
     key = callback.data.split(":", 1)[1]
     await state.update_data(settings_key=key)
+    
+    if key == "weekly_promo_day":
+        days = ["0 - ПН", "1 - ВТ", "2 - СР", "3 - ЧТ", "4 - ПТ", "5 - СБ", "6 - ВС"]
+        kb_rows = []
+        for i, day in enumerate(days):
+            kb_rows.append([InlineKeyboardButton(text=day, callback_data=f"settings_set_day:{i}")])
+        kb_rows.append([InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")])
+        await callback.message.answer("📅 <b>Выберите день недели для рассылки промокода:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+        await callback.answer()
+        return
+
     await state.set_state(BotSettingsState.waiting_value)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")]])
     await callback.message.answer(
@@ -1738,6 +1813,23 @@ async def settings_edit_start(callback: CallbackQuery, state: FSMContext):
         reply_markup=kb,
     )
     await callback.answer()
+
+@router.callback_query(F.data.startswith("settings_set_day:"))
+async def settings_set_day(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    day_val = callback.data.split(":")[1]
+    
+    data = await state.get_data()
+    key = data.get("settings_key", "weekly_promo_day")
+    
+    async with async_session() as session:
+        from app.services import set_setting
+        await set_setting(session, key, day_val)
+        await session.commit()
+        
+    await callback.message.answer(f"✅ Настройка {key} успешно изменена на {day_val}!")
+    await callback.answer()
+
 
 
 @router.message(BotSettingsState.waiting_value)
