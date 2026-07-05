@@ -1917,8 +1917,6 @@ async def on_startup(app):
         await engine.dispose()
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
 
 async def retention_worker(bot: Bot, stop_event: asyncio.Event):
     """
