@@ -38,4 +38,11 @@ async def test_apply_successful_payment_returns_real_credited_amount():
         assert user.balance == credited_total
         assert applied_payment.status == "paid"
 
+        second_payment, second_credit = await apply_successful_payment(session, "pack_test_1")
+        await session.refresh(user)
+
+        assert second_payment is None
+        assert second_credit == Decimal("0")
+        assert user.balance == credited_total
+
     await engine.dispose()

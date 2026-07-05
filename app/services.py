@@ -9,7 +9,7 @@ import uuid
 import random
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
@@ -971,17 +971,16 @@ async def ensure_payment_pending(
 
 async def mark_payment_paid_once(session: AsyncSession, payload: str) -> bool:
     """
-    Mark payment as paid exactly once.
+    Atomically mark payment as paid exactly once.
     Returns True only for the first successful transition pending -> paid.
     """
-    payment = (await session.execute(
-        select(Payment).where(Payment.payload == payload)
-    )).scalar_one_or_none()
-    if not payment or payment.status != "pending":
-        return False
-    payment.status = "paid"
+    result = await session.execute(
+        update(Payment)
+        .where(Payment.payload == payload, Payment.status == "pending")
+        .values(status="paid")
+    )
     await session.flush()
-    return True
+    return bool(result.rowcount)
 
 
 async def get_payment_by_payload(session: AsyncSession, payload: str) -> Payment | None:
@@ -994,9 +993,11 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> tuple
     payment = (await session.execute(
         select(Payment).where(Payment.payload == payload)
     )).scalar_one_or_none()
-    if not payment or payment.status != "pending":
+    if not payment:
         return None, Decimal("0")
-    payment.status = "paid"
+    if not await mark_payment_paid_once(session, payload):
+        return None, Decimal("0")
+    await session.refresh(payment)
     credited_total = Decimal("0")
     user = await get_user_by_id(session, payment.user_id)
     if user:
