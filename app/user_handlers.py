@@ -394,6 +394,13 @@ async def require_nickname(message: Message, user) -> bool:
     return False
 
 
+def _fmt_coins(value) -> str:
+    amount = to_decimal(value)
+    if amount == amount.to_integral_value():
+        return f"{amount:,.0f}".replace(',', ' ')
+    return f"{amount:,.2f}".replace(',', ' ')
+
+
 def _best_event_badge(events: list, target: str) -> str:
     """Выбирает лучший бейдж акции только для релевантного типа покупки."""
     if target == "vip":
@@ -1320,7 +1327,7 @@ async def handle_video_upload(message: Message):
             await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
             await message.answer(
-                f"✅ Видео #{saved.id} автоматически одобрено! (доверенный автор)\n+{reward:.0f} монет"
+                f"✅ Видео #{saved.id} автоматически одобрено! (доверенный автор)\n+{_fmt_coins(reward)} монет"
             )
             return
 
@@ -1380,7 +1387,7 @@ async def handle_photo_upload(message: Message):
             await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
             await message.answer(
-                f"✅ Фото #{saved.id} автоматически одобрено! (доверенный автор)\n+{reward:.0f} монет"
+                f"✅ Фото #{saved.id} автоматически одобрено! (доверенный автор)\n+{_fmt_coins(reward)} монет"
             )
             return
 
@@ -1534,7 +1541,7 @@ async def cb_buy_pack(callback: CallbackQuery):
                 f"🆓 <b>ADMIN FREE</b> — бесплатно!\n\n"
                 f"Получено: <b>{coins} монет</b>\n"
                 f"Бонус первой покупки: +<b>{int(bonus)} монет</b>\n\n"
-                f"Ваш баланс: <b>{user.balance:.0f}</b> монет",
+                f"Ваш баланс: <b>{_fmt_coins(user.balance)}</b> монет",
                 parse_mode="HTML",
             )
             await callback.answer("🆓 Пополнено бесплатно!", show_alert=True)
@@ -1602,7 +1609,7 @@ async def process_custom_stars(message: Message, state: FSMContext):
                 f"🆓 <b>ADMIN FREE</b> — бесплатно!\n\n"
                 f"Получено: <b>{coins} монет</b>\n"
                 f"Бонус первой покупки: +<b>{int(bonus)} монет</b>\n\n"
-                f"Ваш баланс: <b>{user.balance:.0f}</b> монет",
+                f"Ваш баланс: <b>{_fmt_coins(user.balance)}</b> монет",
                 parse_mode="HTML",
             )
             await state.clear()
@@ -1881,7 +1888,7 @@ async def successful_payment(message: Message):
         if payment:
             await message.answer(
                 f"✅ Оплата успешна!\n"
-                f"💰 Начислено: <b>{credited_total:,.0f}</b> монет".replace(',', ' '),
+                f"💰 Начислено: <b>{_fmt_coins(credited_total)}</b> монет",
                 parse_mode="HTML"
             )
         else:
