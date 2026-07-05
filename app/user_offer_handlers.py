@@ -17,20 +17,24 @@ from sqlalchemy import select
 from app.db import async_session
 from app.models import Offer, utc_now
 from app.services import (
-    get_user, change_balance_atomic, 
-    ensure_payment_pending
+    get_user, change_balance_atomic,
+    ensure_payment_pending, get_stars_discount,
 )
 from app.config import STARS_TO_COINS_RATE
 
 router = Router()
 
 
-def _calc_offer_stars_price(cost: Decimal) -> int:
+def _calc_offer_stars_price(cost: Decimal, discount: float = 0.0) -> int:
     """Конвертация цены размещения из монет в Stars без занижения стоимости."""
     if STARS_TO_COINS_RATE <= 0:
         return 1
     stars = (Decimal(cost) / Decimal(str(STARS_TO_COINS_RATE))).quantize(Decimal("1"), rounding=ROUND_CEILING)
-    return max(1, int(stars))
+    base = max(1, int(stars))
+    if discount > 0:
+        discounted = (Decimal(str(base)) * Decimal(str(1 - discount))).quantize(Decimal("1"), rounding=ROUND_CEILING)
+        return max(1, int(discounted))
+    return base
 
 
 class UserOfferState(StatesGroup):
@@ -280,7 +284,8 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             await session.flush()
 
             payload = f"user_offer_{offer.id}"
-            stars_price = _calc_offer_stars_price(cost)
+            discount = await get_stars_discount(session, user.id)
+            stars_price = _calc_offer_stars_price(cost, discount)
             await ensure_payment_pending(
                 session,
                 user_id=user.id,

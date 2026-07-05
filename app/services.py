@@ -895,7 +895,13 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
 # ============================
 # ПЛАТЕЖИ
 # ============================
-async def create_payment(session: AsyncSession, user_id: int, pack_key: str) -> Payment:
+async def create_payment(
+    session: AsyncSession,
+    user_id: int,
+    pack_key: str,
+    *,
+    stars_amount_override: int | None = None,
+) -> Payment:
     pack = STARS_PACKAGES.get(pack_key)
     if not pack:
         raise ValueError("Unknown pack")
@@ -904,7 +910,7 @@ async def create_payment(session: AsyncSession, user_id: int, pack_key: str) -> 
     payment = Payment(
         user_id=user_id,
         payload=payload,
-        stars_amount=pack["stars"],
+        stars_amount=int(stars_amount_override if stars_amount_override is not None else pack["stars"]),
         coins_amount=coins,
         status="pending",
     )
@@ -913,13 +919,19 @@ async def create_payment(session: AsyncSession, user_id: int, pack_key: str) -> 
     return payment
 
 
-async def create_custom_payment(session: AsyncSession, user_id: int, stars: int) -> Payment:
+async def create_custom_payment(
+    session: AsyncSession,
+    user_id: int,
+    stars: int,
+    *,
+    billed_stars_amount: int | None = None,
+) -> Payment:
     coins = to_decimal(stars * STARS_TO_COINS_RATE)
     payload = f"custom_{user_id}_{uuid.uuid4().hex[:6]}"
     payment = Payment(
         user_id=user_id,
         payload=payload,
-        stars_amount=stars,
+        stars_amount=int(billed_stars_amount if billed_stars_amount is not None else stars),
         coins_amount=coins,
         status="pending",
     )
@@ -1913,42 +1925,52 @@ async def get_active_sale(session: AsyncSession):
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
-async def get_current_prices(session: AsyncSession):
+def _discount_stars_amount(base_stars: int, discount: float) -> int:
+    return max(1, math.ceil(base_stars * (1.0 - discount)))
+
+
+async def get_current_prices(session: AsyncSession, user_id: int | None = None):
     try:
         from app.config import VIP_PRICE_STARS, STARS_PACKAGES
         sale = await get_active_sale(session)
         active_events = await get_active_events(session)
-        
+
         vip_price = int(VIP_PRICE_STARS)
         packs = {}
         for k, v in STARS_PACKAGES.items():
             packs[k] = {"stars": v["stars"], "coins": v["coins"], "title": v["title"]}
-        
+
         # Применяем скидки от событий
         total_discount = 0
         if active_events:
             for ev in active_events:
                 total_discount = max(total_discount, ev.discount_percent)
-        
+
         if total_discount > 0:
             discount = total_discount / 100.0
-            # Применяем на VIP если есть событие с applies_vip
             if any(e.applies_vip for e in active_events):
-                vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
-            # Применяем на монеты если есть событие с applies_coins
+                vip_price = _discount_stars_amount(vip_price, discount)
             if any(e.applies_coins for e in active_events):
                 for k in packs:
-                    packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
-        
+                    packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], discount)
+
         # Также применяем старую систему ActiveSale
         if sale:
             discount = sale.discount_percent / 100.0
             if sale.applies_to in ("all", "vip"):
-                vip_price = max(1, math.ceil(vip_price * (1.0 - discount)))
+                vip_price = _discount_stars_amount(vip_price, discount)
             if sale.applies_to in ("all", "coins"):
                 for k in packs:
-                    packs[k]["stars"] = max(1, math.ceil(packs[k]["stars"] * (1.0 - discount)))
-                    
+                    packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], discount)
+
+        # Персональная скидка за перк действует поверх акций/сейлов.
+        if user_id is not None:
+            stars_discount = await get_stars_discount(session, user_id)
+            if stars_discount > 0:
+                vip_price = _discount_stars_amount(vip_price, stars_discount)
+                for k in packs:
+                    packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], stars_discount)
+
         return vip_price, packs, sale
     except Exception as e:
         log_error(logger, f"Error in get_current_prices: {e}")

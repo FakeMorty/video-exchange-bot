@@ -1783,7 +1783,7 @@ async def api_lottery_buy_coins(request: web.Request) -> web.Response:
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
 
         pack_key = data.get("package_id", "")
-        from app.services import get_user, create_payment
+        from app.services import get_user, create_payment, get_current_prices
         from app.db import async_session
         from app.config import STARS_PACKAGES
         pack = STARS_PACKAGES.get(pack_key)
@@ -1795,16 +1795,26 @@ async def api_lottery_buy_coins(request: web.Request) -> web.Response:
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
 
-            payment = await create_payment(session, user.id, pack_key)
+            _, current_packs, _ = await get_current_prices(session, user.id)
+            current_pack = current_packs.get(pack_key)
+            if not current_pack:
+                return web.json_response({"ok": False, "error": "Unknown package"})
+
+            payment = await create_payment(
+                session,
+                user.id,
+                pack_key,
+                stars_amount_override=current_pack["stars"],
+            )
 
             from aiogram.types import LabeledPrice
             bot = request.app['bot']
             link = await bot.create_invoice_link(
                 title=f"Покупка {pack['title']}",
-                description=f"{pack['coins']} монет за {pack['stars']} Stars",
+                description=f"{pack['coins']} монет за {current_pack['stars']} Stars",
                 payload=payment.payload,
                 currency="XTR",
-                prices=[LabeledPrice(label=pack['title'], amount=pack['stars'])]
+                prices=[LabeledPrice(label=pack['title'], amount=current_pack['stars'])]
             )
             return web.json_response({"ok": True, "invoice_link": link})
     except Exception as e:

@@ -1,6 +1,7 @@
 from html import escape
 import uuid
 import random
+import math
 import asyncio
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -692,7 +693,7 @@ async def show_vip(message: Message, state: FSMContext):
                     parse_mode="HTML"
                 )
             else:
-                vip_price, packs, sale = await get_current_prices(session)
+                vip_price, packs, sale = await get_current_prices(session, user.id)
                 events = await get_active_events(session)
                 
                 # Admin free badge
@@ -738,9 +739,7 @@ async def buy_vip(callback: CallbackQuery):
 
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
         if not admin_free:
-            # Обычная оплата — выставляем инвойс, применяем stars_discount perk
-            discount = await get_stars_discount(session, user.id)
-            vip_price_final = max(1, int(VIP_PRICE_STARS * (1 - discount)))
+            vip_price_final, _, _ = await get_current_prices(session, user.id)
             await ensure_payment_pending(
                 session,
                 user_id=user.id,
@@ -1439,7 +1438,7 @@ async def btn_buy(message: Message, state: FSMContext):
             if not await require_nickname(message, user):
                 return
 
-            vip_price, packs, sale = await get_current_prices(session)
+            vip_price, packs, sale = await get_current_prices(session, user.id)
             events = await get_active_events(session)
 
             # Admin free badge
@@ -1495,6 +1494,12 @@ async def cb_buy_pack(callback: CallbackQuery):
             await callback.answer()
             return
 
+        _, current_packs, _ = await get_current_prices(session, user.id)
+        current_pack = current_packs.get(pack_key)
+        if not current_pack:
+            await callback.answer("Пакет не найден.", show_alert=True)
+            return
+
         # Admin free — выдаём монеты без оплаты
         if await is_admin_free_eligible(session, callback.from_user.id, user):
             coins = pack["coins"]
@@ -1523,14 +1528,19 @@ async def cb_buy_pack(callback: CallbackQuery):
             await callback.answer("🆓 Пополнено бесплатно!", show_alert=True)
             return
 
-        payment = await create_payment(session, user.id, pack_key)
+        payment = await create_payment(
+            session,
+            user.id,
+            pack_key,
+            stars_amount_override=current_pack["stars"],
+        )
 
     await callback.message.answer_invoice(
         title=f"Покупка {pack['title']}",
-        description=f"{pack['coins']} монет за {pack['stars']} Stars",
+        description=f"{pack['coins']} монет за {current_pack['stars']} Stars",
         payload=payment.payload,
         currency="XTR",
-        prices=[LabeledPrice(label=pack['title'], amount=pack['stars'])]
+        prices=[LabeledPrice(label=pack['title'], amount=current_pack['stars'])]
     )
     await callback.answer()
 
@@ -1586,15 +1596,17 @@ async def process_custom_stars(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        payment = await create_custom_payment(session, user.id, stars)
+        discount = await get_stars_discount(session, user.id)
+        billed_stars = max(1, int(math.ceil(stars * (1 - discount)))) if discount > 0 else stars
+        payment = await create_custom_payment(session, user.id, stars, billed_stars_amount=billed_stars)
         coins = int(stars * STARS_TO_COINS_RATE)
 
     await message.answer_invoice(
         title=f"Покупка {coins} монет",
-        description=f"{coins} монет за {stars} Stars",
+        description=f"{coins} монет за {billed_stars} Stars",
         payload=payment.payload,
         currency="XTR",
-        prices=[LabeledPrice(label=f"{coins} монет", amount=stars)]
+        prices=[LabeledPrice(label=f"{coins} монет", amount=billed_stars)]
     )
     await state.clear()
 
@@ -1841,9 +1853,9 @@ async def successful_payment(message: Message):
             await message.answer("✅ Оплата получена!")
 
 
-def _lootbox_kb() -> InlineKeyboardMarkup:
-    coin_price = to_decimal(LOOTBOX_COIN_PRICE)
-    star_price = int(LOOTBOX_STAR_PRICE)
+def _lootbox_kb(coin_price: Decimal | None = None, star_price: int | None = None) -> InlineKeyboardMarkup:
+    coin_price = to_decimal(coin_price if coin_price is not None else LOOTBOX_COIN_PRICE)
+    star_price = int(star_price if star_price is not None else LOOTBOX_STAR_PRICE)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"🪙 Купить за {coin_price:,.0f} монет".replace(',', ' '),
@@ -1862,15 +1874,21 @@ async def lootbox_menu(callback: CallbackQuery):
         await callback.message.answer("⛔ Лутбоксы временно отключены.")
         await callback.answer()
         return
+
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        discount = await get_stars_discount(session, user.id) if user else 0.0
+
     coin_price = to_decimal(LOOTBOX_COIN_PRICE)
-    star_price = int(LOOTBOX_STAR_PRICE)
+    base_star_price = int(LOOTBOX_STAR_PRICE)
+    star_price = max(1, int(math.ceil(base_star_price * (1 - discount)))) if discount > 0 else base_star_price
     await callback.message.answer(
         ("🎁 <b>Лутбоксы</b>\n\n"
          f"Цена: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n".replace(',', ' ') +
          "Внутри — случайный выигрыш монет.\n"
          "Редкие крупные выигрыши возможны, но не гарантированы."),
         parse_mode="HTML",
-        reply_markup=_lootbox_kb(),
+        reply_markup=_lootbox_kb(coin_price, star_price),
     )
     await callback.answer()
 
@@ -1940,7 +1958,7 @@ async def lootbox_buy(callback: CallbackQuery):
         return
 
     if kind == "stars":
-        star_price = int(LOOTBOX_STAR_PRICE)
+        base_star_price = int(LOOTBOX_STAR_PRICE)
         payload = f"lootbox_{callback.from_user.id}_{uuid.uuid4().hex[:8]}"
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
@@ -1961,7 +1979,7 @@ async def lootbox_buy(callback: CallbackQuery):
                 ) or user
                 session.add(LootboxOpen(
                     user_id=user.id, payment_payload=payload, pay_currency="stars",
-                    price_coins=Decimal("0"), price_stars=star_price, reward_coins=reward, rarity=rarity,
+                    price_coins=Decimal("0"), price_stars=base_star_price, reward_coins=reward, rarity=rarity,
                 ))
                 await log_user_action(session, user.id, "lootbox_open_admin_free",
                                       f"payload={payload}, rarity={rarity}, reward={reward}")
@@ -1976,6 +1994,8 @@ async def lootbox_buy(callback: CallbackQuery):
                 await callback.answer("🆓 Лутбокс открыт бесплатно!")
                 return
 
+            discount = await get_stars_discount(session, user.id)
+            star_price = max(1, int(math.ceil(base_star_price * (1 - discount)))) if discount > 0 else base_star_price
             await ensure_payment_pending(
                 session,
                 user_id=user.id,
@@ -3139,12 +3159,14 @@ async def promo_hours(message: Message, state: FSMContext):
             return
 
         # Платный – выставляем инвойс
+        discount = await get_stars_discount(session, user.id)
+        billed_star_cost = max(1, int(math.ceil(star_cost * (1 - discount)))) if discount > 0 else star_cost
         payload = f"promo_{message.from_user.id}_{amount}_{uses}_{hours}_{uuid.uuid4().hex[:4]}"
         await ensure_payment_pending(
             session,
             user_id=user.id,
             payload=payload,
-            stars_amount=star_cost,
+            stars_amount=billed_star_cost,
         )
         await session.commit()
         await message.answer_invoice(
@@ -3152,7 +3174,7 @@ async def promo_hours(message: Message, state: FSMContext):
             description=f"{amount} монет × {uses} исп. на {hours}ч",
             payload=payload,
             currency="XTR",
-            prices=[LabeledPrice(label="Промокод", amount=star_cost)]
+            prices=[LabeledPrice(label="Промокод", amount=billed_star_cost)]
         )
     await state.clear()
 
