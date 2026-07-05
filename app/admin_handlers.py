@@ -559,12 +559,12 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Напоминание о бонусе", callback_data="admin_broadcast_tpl:bonus")],
-        [InlineKeyboardButton(text="🎰 Реклама лотереи-лото", callback_data="admin_broadcast_tpl:lottery")],
+        [InlineKeyboardButton(text="🎁 Еженедельная халява", callback_data="admin_broadcast_tpl:bonus")],
+        [InlineKeyboardButton(text="🎰 Реклама Секслото", callback_data="admin_broadcast_tpl:lottery")],
         [InlineKeyboardButton(text="💋 Призыв поболтать с Катей", callback_data="admin_broadcast_tpl:katya")],
         [InlineKeyboardButton(text="🎟 Создание промокодов", callback_data="admin_broadcast_tpl:promo")],
-        [InlineKeyboardButton(text="🎮 Реклама мини-игр", callback_data="admin_broadcast_tpl:games")],
-        [InlineKeyboardButton(text="📋 Ежедневные квесты", callback_data="admin_broadcast_tpl:quests")],
+        [InlineKeyboardButton(text="🎁 Лутбоксы", callback_data="admin_broadcast_tpl:games")],
+        [InlineKeyboardButton(text="👥 Рефералка", callback_data="admin_broadcast_tpl:quests")],
         [InlineKeyboardButton(text="👑 Привилегии VIP-подписки", callback_data="admin_broadcast_tpl:vip")],
         [InlineKeyboardButton(text="✍️ Написать свой текст (HTML)", callback_data="admin_broadcast_custom")],
         [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_center")]
@@ -587,34 +587,34 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
     
     templates = {
         "bonus": (
-            "🎁 <b>Не забудьте забрать свой ежедневный бонус!</b>\n\n"
-            "Каждый день сумма бонуса увеличивается! Серия посещений дает огромные преимущества и кучу монет для игр и развлечений. 💰\n\n"
-            "👉 Зайдите в меню <b>🎁 Бонус</b>"
+            "🎁 <b>Еженедельная халява уже близко!</b>\n\n"
+            "Раз в неделю мы рассылаем секретный промокод на бесплатные монеты. Следите за сообщениями бота и не пропустите раздачу! 💰\n\n"
+            "👉 Перейдите в меню <b>🎟 Промокоды</b>"
         ),
         "lottery": (
-            "🎰 <b>Лотерея-лото — разыгрываем миллионы!</b>\n\n"
-            "Новый раунд лотереи уже запущен! Купите счастливый билет за монеты и выиграйте джекпот в прямом эфире! 🎡\n\n"
+            "🎰 <b>Секслото — разыгрываем миллионы!</b>\n\n"
+            "Новый раунд уже открыт! Купите счастливый билет за монеты и следите за розыгрышем прямо в Mini App. 🎡\n\n"
             "👉 Зайдите в меню <b>🎮 Игры ➔ 🎰 Лотерея-лото</b>"
         ),
         "katya": (
             "💋 <b>Катя заждалась тебя...</b>\n\n"
             "Твоя виртуальная подруга Катя скучает и хочет поболтать. Она подготовила новые пикантные темы для беседы! 😏🤸‍♀️\n\n"
-            "👉 Нажмите кнопку <b>💋 Катя</b> в главном меню!"
+            "👉 Нажмите кнопку <b>💋 ИИ-Общение</b> в главном меню!"
         ),
         "promo": (
             "🎟 <b>Создавайте свои промокоды за Stars!</b>\n\n"
             "Хотите порадовать подписчиков своего канала или друзей? Создайте свой уникальный промокод на любую сумму монет и подарите его им! 🎁\n\n"
-            "👉 Перейдите в меню <b>🎟 Промокоды ➔ 🎟 Создать промокод</b>"
+            "👉 Перейдите в меню <b>🎟 Промокоды</b>"
         ),
         "games": (
-            "🎮 <b>Испытайте удачу в наших мини-играх!</b>\n\n"
-            "У нас есть Кости 🎲, Орёл/Решка 🪙, Угадай число 🎯, Лутбоксы 🎁 и многое другое! Проверьте свою интуицию и умножьте свой баланс!\n\n"
-            "👉 Перейдите в меню <b>🎮 Игры</b>!"
+            "🎁 <b>Откройте лутбокс!</b>\n\n"
+            "Иногда один лутбокс — это быстрый способ вернуться в игру и сорвать красивый дроп монет. Проверьте удачу!\n\n"
+            "👉 Перейдите в меню <b>🎮 Игры</b>"
         ),
         "quests": (
-            "📋 <b>Выполняйте ежедневные квесты!</b>\n\n"
-            "Каждый день вам доступны простые и веселые квесты: посмотреть видео, написать комментарии, поставить реакции. Выполняйте их и забирайте гарантированные монеты! 💰\n\n"
-            "👉 Перейдите в меню <b>📋 Квесты</b>!"
+            "👥 <b>Монеты закончились? Позовите друзей!</b>\n\n"
+            "Разошлите свою реферальную ссылку друзьям и получайте крупные награды за новых активных пользователей. Это самый быстрый способ снова пополнить баланс.\n\n"
+            "👉 Перейдите в меню <b>👥 Рефералы</b>"
         ),
         "vip": (
             "👑 <b>Получите статус VIP-пользователя!</b>\n\n"
@@ -1329,7 +1329,7 @@ async def admin_bot_settings(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Экономика", callback_data="settings_economy")],
         [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
-        [InlineKeyboardButton(text="🎮 Игры и лотерея", callback_data="settings_games")],
+        [InlineKeyboardButton(text="🎰 Секслото и лутбоксы", callback_data="settings_games")],
         [InlineKeyboardButton(text="🎰 Настройки Секслото", callback_data="settings_lottery")],
         [InlineKeyboardButton(text="🎁 Еженедельный Промокод", callback_data="settings_weekly_promo")],
         [InlineKeyboardButton(text="📺 Реклама", callback_data="settings_ads")],
@@ -1360,14 +1360,10 @@ async def settings_economy(callback: CallbackQuery):
         str_c = await get_setting(session, "stars_to_coins_rate", "")
         ri = await get_setting(session, "referral_reward_inviter", "")
         rn = await get_setting(session, "referral_reward_new_user", "")
-        db = await get_setting(session, "daily_bonus_base", "")
-        di = await get_setting(session, "daily_bonus_increase", "")
-        ds = await get_setting(session, "daily_bonus_streak_max", "")
         fp = await get_setting(session, "first_purchase_daily_bonus", "")
     from app.config import (
         STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD,
         STARS_TO_COINS_RATE, REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
-        DAILY_BONUS_STREAK_BASE, DAILY_BONUS_STREAK_INCREASE, MAX_BONUS_STREAK,
         FIRST_PURCHASE_DAILY_BONUS,
     )
     def v(db_val, default):
@@ -1381,9 +1377,6 @@ async def settings_economy(callback: CallbackQuery):
         f"Курс Stars→Coins: {v(str_c, STARS_TO_COINS_RATE)}\n"
         f"Реферал (пригласивший): {v(ri, REFERRAL_REWARD_INVITER)}\n"
         f"Реферал (новый): {v(rn, REFERRAL_REWARD_NEW_USER)}\n"
-        f"Бонус база: {v(db, DAILY_BONUS_STREAK_BASE)}\n"
-        f"Бонус увеличение: {v(di, DAILY_BONUS_STREAK_INCREASE)}\n"
-        f"Макс. дней бонуса: {v(ds, MAX_BONUS_STREAK)}\n"
         f"Бонус 1-й покупки: {v(fp, FIRST_PURCHASE_DAILY_BONUS)}\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1394,9 +1387,6 @@ async def settings_economy(callback: CallbackQuery):
         [InlineKeyboardButton(text="✏️ Курс Stars→Coins", callback_data="settings_edit:stars_to_coins_rate")],
         [InlineKeyboardButton(text="✏️ Реферал (пригл.)", callback_data="settings_edit:referral_reward_inviter")],
         [InlineKeyboardButton(text="✏️ Реферал (новый)", callback_data="settings_edit:referral_reward_new_user")],
-        [InlineKeyboardButton(text="✏️ Бонус база", callback_data="settings_edit:daily_bonus_base")],
-        [InlineKeyboardButton(text="✏️ Бонус увеличение", callback_data="settings_edit:daily_bonus_increase")],
-        [InlineKeyboardButton(text="✏️ Макс. дней бонуса", callback_data="settings_edit:daily_bonus_streak_max")],
         [InlineKeyboardButton(text="✏️ Бонус 1-й покупки", callback_data="settings_edit:first_purchase_daily_bonus")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
@@ -1437,7 +1427,7 @@ async def settings_vip(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- ИГРЫ И ЛОТЕРЕЯ ----------
+# ---------- ЛОТЕРЕЯ И ЛУТБОКСЫ ----------
 @router.callback_query(F.data == "settings_games")
 async def settings_games(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id):
@@ -1445,52 +1435,36 @@ async def settings_games(callback: CallbackQuery):
         return
     async with async_session() as session:
         from app.services import get_setting
-        dm = await get_setting(session, "dice_min_bet", "")
-        dx = await get_setting(session, "dice_max_bet", "")
         lt = await get_setting(session, "lottery_ticket_price", "")
         lp = await get_setting(session, "lottery_numbers_pool", "")
         ln = await get_setting(session, "lottery_numbers_per_ticket", "")
         lc = await get_setting(session, "lootbox_coin_price", "")
         ls = await get_setting(session, "lootbox_star_price", "")
-        fg = await get_setting(session, "free_games_per_session", "")
-        gs = await get_setting(session, "game_session_hours", "")
-        gc = await get_setting(session, "game_session_cost", "")
         el = await get_setting(session, "enable_lottery", "")
         eb = await get_setting(session, "enable_lootboxes", "")
     from app.config import (
-        DICE_MIN_BET, DICE_MAX_BET, LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL,
+        LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL,
         LOTTERY_NUMBERS_PER_TICKET, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
-        FREE_GAMES_PER_SESSION, GAME_SESSION_HOURS, GAME_SESSION_COST,
         ENABLE_LOTTERY, ENABLE_LOOTBOXES,
     )
     def v(db_val, default):
         return f"{db_val or default}"
     text = (
-        f"🎮 <b>Игры и лотерея</b>\n\n"
-        f"Мин. ставка (кости): {v(dm, DICE_MIN_BET)}\n"
-        f"Макс. ставка (кости): {v(dx, DICE_MAX_BET)}\n"
+        f"🎰 <b>Секслото и лутбоксы</b>\n\n"
         f"Цена билета лотереи: {v(lt, LOTTERY_TICKET_PRICE)}\n"
         f"Чисел в пуле: {v(lp, LOTTERY_NUMBERS_POOL)}\n"
         f"Чисел в билете: {v(ln, LOTTERY_NUMBERS_PER_TICKET)}\n"
         f"Цена лутбокса (монеты): {v(lc, LOOTBOX_COIN_PRICE)}\n"
         f"Цена лутбокса (Stars): {v(ls, LOOTBOX_STAR_PRICE)}\n"
-        f"Бесплатных игр: {v(fg, FREE_GAMES_PER_SESSION)}\n"
-        f"Часов сессии: {v(gs, GAME_SESSION_HOURS)}\n"
-        f"Цена продления сессии: {v(gc, GAME_SESSION_COST)}\n"
         f"Лотерея: {v(el, 'on' if ENABLE_LOTTERY else 'off')}\n"
         f"Лутбоксы: {v(eb, 'on' if ENABLE_LOOTBOXES else 'off')}\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Мин. ставка (кости)", callback_data="settings_edit:dice_min_bet")],
-        [InlineKeyboardButton(text="✏️ Макс. ставка (кости)", callback_data="settings_edit:dice_max_bet")],
         [InlineKeyboardButton(text="✏️ Цена билета лотереи", callback_data="settings_edit:lottery_ticket_price")],
         [InlineKeyboardButton(text="✏️ Чисел в пуле", callback_data="settings_edit:lottery_numbers_pool")],
         [InlineKeyboardButton(text="✏️ Чисел в билете", callback_data="settings_edit:lottery_numbers_per_ticket")],
         [InlineKeyboardButton(text="✏️ Цена лутбокса (монеты)", callback_data="settings_edit:lootbox_coin_price")],
         [InlineKeyboardButton(text="✏️ Цена лутбокса (Stars)", callback_data="settings_edit:lootbox_star_price")],
-        [InlineKeyboardButton(text="✏️ Бесплатных игр", callback_data="settings_edit:free_games_per_session")],
-        [InlineKeyboardButton(text="✏️ Часов сессии", callback_data="settings_edit:game_session_hours")],
-        [InlineKeyboardButton(text="✏️ Цена продления", callback_data="settings_edit:game_session_cost")],
         [InlineKeyboardButton(text="🔘 Лотерея " + ("выкл" if el == "off" else "вкл"), callback_data="settings_toggle:enable_lottery")],
         [InlineKeyboardButton(text="🔘 Лутбоксы " + ("выкл" if eb == "off" else "вкл"), callback_data="settings_toggle:enable_lootboxes")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
@@ -1667,23 +1641,23 @@ async def settings_weekly_promo(callback: CallbackQuery):
         wd = await get_setting(session, "weekly_promo_day", "")
         wh = await get_setting(session, "weekly_promo_hour", "")
         wa = await get_setting(session, "weekly_promo_amount", "")
-        wu = await get_setting(session, "weekly_promo_uses", "")
-    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR, WEEKLY_PROMO_AMOUNT, WEEKLY_PROMO_USES
+    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR, WEEKLY_PROMO_AMOUNT
     def v(db_val, default):
         return f"{db_val or default}"
+    day_names = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
+    current_day = int(wd) if str(wd).isdigit() else WEEKLY_PROMO_DAY
 
     text = (
         "🎁 <b>Настройки Еженедельного Промокода</b>\n\n"
-        f"<b>День недели (0-Пн ... 6-Вс):</b> {v(wd, WEEKLY_PROMO_DAY)}\n"
+        f"<b>День недели:</b> {day_names[current_day] if 0 <= current_day < 7 else current_day}\n"
         f"<b>Час по UTC (0-23):</b> {v(wh, WEEKLY_PROMO_HOUR)}\n"
         f"<b>Сумма монет:</b> {v(wa, WEEKLY_PROMO_AMOUNT)}\n"
-        f"<b>Кол-во активаций:</b> {v(wu, WEEKLY_PROMO_USES)}\n"
+        f"<b>Кол-во активаций:</b> ∞\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ День недели (0-6)", callback_data="settings_edit:weekly_promo_day")],
+        [InlineKeyboardButton(text="📅 Выбрать день недели", callback_data="settings_edit:weekly_promo_day")],
         [InlineKeyboardButton(text="✏️ Час по UTC", callback_data="settings_edit:weekly_promo_hour")],
         [InlineKeyboardButton(text="✏️ Сумма", callback_data="settings_edit:weekly_promo_amount")],
-        [InlineKeyboardButton(text="✏️ Кол-во активаций", callback_data="settings_edit:weekly_promo_uses")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
@@ -1795,11 +1769,21 @@ async def settings_edit_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(settings_key=key)
     
     if key == "weekly_promo_day":
-        days = ["0 - ПН", "1 - ВТ", "2 - СР", "3 - ЧТ", "4 - ПТ", "5 - СБ", "6 - ВС"]
-        kb_rows = []
-        for i, day in enumerate(days):
-            kb_rows.append([InlineKeyboardButton(text=day, callback_data=f"settings_set_day:{i}")])
-        kb_rows.append([InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")])
+        days = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
+        kb_rows = [
+            [
+                InlineKeyboardButton(text=days[0], callback_data="settings_set_day:0"),
+                InlineKeyboardButton(text=days[1], callback_data="settings_set_day:1"),
+                InlineKeyboardButton(text=days[2], callback_data="settings_set_day:2"),
+                InlineKeyboardButton(text=days[3], callback_data="settings_set_day:3"),
+            ],
+            [
+                InlineKeyboardButton(text=days[4], callback_data="settings_set_day:4"),
+                InlineKeyboardButton(text=days[5], callback_data="settings_set_day:5"),
+                InlineKeyboardButton(text=days[6], callback_data="settings_set_day:6"),
+            ],
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")],
+        ]
         await callback.message.answer("📅 <b>Выберите день недели для рассылки промокода:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
         await callback.answer()
         return
@@ -1818,16 +1802,18 @@ async def settings_edit_start(callback: CallbackQuery, state: FSMContext):
 async def settings_set_day(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     day_val = callback.data.split(":")[1]
-    
+    day_names = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
+
     data = await state.get_data()
     key = data.get("settings_key", "weekly_promo_day")
-    
+
     async with async_session() as session:
         from app.services import set_setting
         await set_setting(session, key, day_val)
         await session.commit()
-        
-    await callback.message.answer(f"✅ Настройка {key} успешно изменена на {day_val}!")
+
+    label = day_names[int(day_val)] if day_val.isdigit() and 0 <= int(day_val) < 7 else day_val
+    await callback.message.answer(f"✅ Настройка {key} успешно изменена: {label}!")
     await callback.answer()
 
 

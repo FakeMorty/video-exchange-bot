@@ -27,7 +27,7 @@
 
 <p align="center">
   <b>Telegram-бот на aiogram 3</b> для обмена видео и фото, с социальной экономикой,  
-  модерацией, виртуальной подругой Катей, лотереями, квестами и монетизацией через Telegram Stars.
+  модерацией, виртуальной подругой Катей, Секслото, лутбоксами и монетизацией через Telegram Stars.
 </p>
 
 <br/>
@@ -47,8 +47,8 @@
 ### 💰 Социальная экономика
 Виртуальные монеты, VIP через Telegram Stars, **донатный магазин** со 100 стилями никнейма (5 категорий), бустерами XP, эксклюзивными реакциями, промокодами и лутбоксами.
 
-### 🎯 Лотереи и квесты
-Регулярные розыгрыши с WebApp-трансляцией, ежедневные задания, напоминания о розыгрыше за 1 час.
+### 🎯 Секслото и Mini App
+Регулярные розыгрыши с WebApp-трансляцией, live-интерфейсом, покупкой билетов внутри Mini App и напоминаниями о розыгрыше.
 
 </td>
 <td width="50%">
@@ -220,7 +220,7 @@ video-exchange-bot/
 
 <p align="center">
   <b>A Telegram bot built with aiogram 3</b> for video & photo exchange, featuring social economy,  
-  moderation, virtual girlfriend Katya, lotteries, quests, and monetization via Telegram Stars.
+  moderation, virtual girlfriend Katya, Sexlotto, lootboxes, and monetization via Telegram Stars.
 </p>
 
 <br/>
@@ -240,8 +240,8 @@ AI companion powered by **DeepSeek V4 Flash** via OpenModel. Roleplay dialogue w
 ### 💰 Social Economy
 Virtual coins, VIP via Telegram Stars, **donation shop** with 100 nickname styles (5 categories), XP boosters, exclusive reactions, promo codes, and lootboxes.
 
-### 🎯 Lotteries & Quests
-Regular draws with WebApp live viewer, daily tasks for bonus rewards, 1-hour draw reminders.
+### 🎯 Sexlotto & Mini App
+Regular draws with a WebApp live viewer, in-app ticket purchases, and 1-hour draw reminders.
 
 </td>
 <td width="50%">

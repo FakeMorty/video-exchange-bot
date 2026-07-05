@@ -63,8 +63,8 @@ from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
     DailyQuestProgress, GameHistory, Offer, Promocode,
-    LootboxOpen, LotteryTicket
-, utc_now
+    LootboxOpen, LotteryTicket, UserActionLog,
+    utc_now,
 )
 from app.services import (
     get_or_create_user, get_user, get_user_by_id, get_setting, save_video, save_photo,
@@ -112,6 +112,7 @@ from app.keyboards import (
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_FAQ, BTN_AI,
 )
 from app.logger import get_logger
+from app.utils.messaging import format_time_for_user
 
 logger = get_logger(__name__)
 router = Router()
@@ -461,6 +462,7 @@ async def send_welcome_banner(message_or_callback, session, user):
     vip_str = " 👑" if is_vip(user) else ""
     import os
     from aiogram.types import FSInputFile
+
     styled_name = await get_styled_display_name(session, user)
     msg_text = (
         f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
@@ -469,9 +471,9 @@ async def send_welcome_banner(message_or_callback, session, user):
     custom_welcome = await get_setting(session, "welcome_text", "")
     if custom_welcome:
         msg_text += f"\n\n{custom_welcome}"
-    
+
     banner_file_id = await get_setting(session, "welcome_banner_id", "")
-    
+
     if banner_file_id:
         try:
             await target.answer_photo(
@@ -505,6 +507,27 @@ async def send_welcome_banner(message_or_callback, session, user):
             msg_text,
             parse_mode="HTML",
             reply_markup=main_menu(is_admin=admin_flag)
+        )
+
+    # Стартовый лутбокс показываем только новым пользователям (до 24 часов с регистрации)
+    # и только один раз.
+    is_recent_user = (utc_now() - user.created_at) <= timedelta(days=1)
+    already_claimed = (await session.execute(
+        select(UserActionLog).where(
+            UserActionLog.user_id == user.id,
+            UserActionLog.action == "welcome_lootbox",
+        )
+    )).scalars().first()
+    if is_recent_user and not already_claimed:
+        lootbox_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎁 Открыть стартовый лутбокс", callback_data="welcome_lootbox_claim")]
+        ])
+        await target.answer(
+            "🎁 <b>Подарок новичку!</b>\n\n"
+            "Заберите бесплатный стартовый лутбокс. Внутри — красивое круглое число от 50 до 400 монет.\n"
+            "Это ваш приветственный бонус на старт!",
+            parse_mode="HTML",
+            reply_markup=lootbox_kb,
         )
 
 
@@ -666,7 +689,7 @@ async def show_vip(message: Message, state: FSMContext):
                     f"Привилегии:\n"
                     f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
                     f"• Скидка 50% на просмотр\n"
-                    f"• VIP квесты",
+                    f"• Приоритет и бонусы в экономике",
                     parse_mode="HTML"
                 )
             else:
@@ -694,7 +717,7 @@ async def show_vip(message: Message, state: FSMContext):
                     f"Привилегии:\n"
                     f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
                     f"• Скидка 50% на просмотр\n"
-                    f"• VIP квесты",
+                    f"• Приоритет и бонусы в экономике",
                     parse_mode="HTML",
                     reply_markup=vip_buy_keyboard(vip_price)
                 )
@@ -756,7 +779,7 @@ async def buy_vip(callback: CallbackQuery):
             f"Привилегии:\n"
             f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
             f"• Скидка 50% на просмотр\n"
-            f"• VIP квесты",
+            f"• Приоритет и бонусы в экономике",
             parse_mode="HTML",
         )
         await callback.answer("🆓 VIP активирован бесплатно!")
@@ -814,23 +837,28 @@ async def watch_video_content(callback: CallbackQuery):
                 cost = round(cost * discount, 2)
 
             if user.balance < cost:
+                bot_info = await callback.bot.get_me()
+                ref_link = f"https://t.me/{bot_info.username}?start={user.referral_code}"
                 if await should_show_low_balance_hint(session, user):
                     await mark_low_balance_hint_shown(session, user.id)
                     await callback.message.answer(
                         f"💸 <b>Монеток маловато!</b>\n\n"
                         f"На счету: <b>{user.balance}</b> монет, "
                         f"а нужно <b>{cost}</b> для просмотра.\n\n"
-                        f"💡 <i>Знаешь ли ты, что можно бесплатно заработать монеты, "
-                        f"подписываясь на каналы в разделе «Офферы»? "
-                        f"Это быстро и просто!</i>",
+                        f"🔥 Быстрые варианты вернуть баланс:\n"
+                        f"• <b>Офферы</b> — подписки за монеты\n"
+                        f"• <b>Рефералка</b> — разошли друзьям свою ссылку и получи <b>+{REFERRAL_REWARD_INVITER}</b> монет\n\n"
+                        f"Твоя ссылка:\n<code>{ref_link}</code>",
                         parse_mode="HTML",
                         reply_markup=low_balance_offer_keyboard()
                     )
                 else:
                     await callback.message.answer(
-                        f"❌ Недостаточно монет!\n"
-                        f"Нужно: {cost}, у вас: {user.balance}\n"
-                        f"Пополните баланс или заработайте через офферы"
+                        f"❌ <b>Недостаточно монет.</b>\n\n"
+                        f"Нужно: <b>{cost}</b>, у вас: <b>{user.balance}</b>.\n\n"
+                        f"Разошли друзьям свою ссылку и получи <b>+{REFERRAL_REWARD_INVITER}</b> монет:\n"
+                        f"<code>{ref_link}</code>",
+                        parse_mode="HTML",
                     )
                 return
 
@@ -1357,20 +1385,12 @@ async def handle_photo_upload(message: Message):
 @router.message(F.text == BTN_BONUS)
 async def btn_bonus(message: Message, state: FSMContext):
     await state.clear()
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        if not user:
-            return
-        if not await require_nickname(message, user):
-            return
-        ok, result = await claim_daily_bonus(session, user.id)
-    if ok:
-        await message.answer(
-            f"🎁 Бонус получен: <b>+{result} монет</b>!",
-            parse_mode="HTML"
-        )
-    else:
-        await message.answer(str(result))
+    await message.answer(
+        "🎁 <b>Ежедневный бонус отключён.</b>\n\n"
+        "Теперь вместо него работает еженедельная халява: секретный промокод, который бот рассылает автоматически.\n"
+        "Откройте раздел <b>🎟 Промокоды</b> и следите за рассылкой.",
+        parse_mode="HTML",
+    )
 
 
 # =========================
@@ -2481,282 +2501,39 @@ async def game_pay_session(callback: CallbackQuery):
 
 @router.callback_query(F.data == "dice_menu")
 async def game_dice(callback: CallbackQuery):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1 монета",  callback_data="dice_bet:1"),
-            InlineKeyboardButton(text="5 монет",   callback_data="dice_bet:5"),
-        ],
-        [
-            InlineKeyboardButton(text="10 монет",  callback_data="dice_bet:10"),
-            InlineKeyboardButton(text="25 монет",  callback_data="dice_bet:25"),
-        ],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="games_back")],
-    ])
-    await callback.message.answer(
-        "🎲 <b>Кости</b>\n\n4, 5, 6 — выигрыш x2!\n\nСтавка:",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-    await callback.answer()
+    await callback.answer("Кости отключены. Сейчас основной фокус — Секслото.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("dice_bet:"))
 async def dice_bet(callback: CallbackQuery):
-    bet = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-        if user.balance < to_decimal(bet):
-            await callback.answer("❌ Недостаточно монет!", show_alert=True)
-            return
-        if not is_admin_or_super(callback.from_user.id, user):
-            can_play = await can_play_free_game(session, user.id)
-            if not can_play:
-                await callback.answer("Бесплатные игры закончились.", show_alert=True)
-                return
-
-        dice_msg = await callback.message.answer_dice(emoji="🎲")
-        dice_value = dice_msg.dice.value
-
-        user.balance -= to_decimal(bet)
-        if not is_admin_or_super(callback.from_user.id, user):
-            await increment_game_played(session, user.id)
-
-        if dice_value >= 4:
-            win = to_decimal(bet) * 2
-            user.balance += win
-            net = win - to_decimal(bet)
-            result_text = f"🎲 Выпало: {dice_value}\n🎉 Выиграли! +{win} монет"
-        else:
-            net = -to_decimal(bet)
-            result_text = f"🎲 Выпало: {dice_value}\n😔 Проиграли -{bet} монет"
-
-        xp_mult = await get_xp_multiplier(session, user.id)
-
-
-        user.xp += int(XP_PER_GAME * xp_mult)
-        await _level_up_check(session, user, callback)
-
-        session.add(GameHistory(
-            user_id=user.id,
-            game_type="dice",
-            bet=to_decimal(bet),
-            result=net,
-            details=f"dice={dice_value}"
-        ))
-        await log_balance_change(
-            session, user, net, "game_dice",
-            details=f"bet={bet}, dice={dice_value}"
-        )
-        await session.commit()
-
-    await callback.message.answer(
-        f"{result_text}\n💰 Баланс: {user.balance}"
-    )
-    await callback.answer()
+    await callback.answer("Кости отключены. Сейчас основной фокус — Секслото.", show_alert=True)
 
 
 @router.callback_query(F.data == "game_coinflip")
 async def game_coinflip(callback: CallbackQuery):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1 монета",  callback_data="coinflip_bet:1"),
-            InlineKeyboardButton(text="5 монет",   callback_data="coinflip_bet:5"),
-        ],
-        [
-            InlineKeyboardButton(text="10 монет",  callback_data="coinflip_bet:10"),
-            InlineKeyboardButton(text="25 монет",  callback_data="coinflip_bet:25"),
-        ],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="games_back")],
-    ])
-    await callback.message.answer(
-        "🪙 <b>Орёл/Решка</b>\n\n50/50 шанс x2!\n\nСтавка:",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-    await callback.answer()
+    await callback.answer("Орёл/решка отключены. Сейчас основной фокус — Секслото.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("coinflip_bet:"))
 async def coinflip_bet(callback: CallbackQuery):
-    bet = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-        if user.balance < to_decimal(bet):
-            await callback.answer("❌ Недостаточно монет!", show_alert=True)
-            return
-        if not is_admin_or_super(callback.from_user.id, user):
-            can_play = await can_play_free_game(session, user.id)
-            if not can_play:
-                await callback.answer("Бесплатные игры закончились.", show_alert=True)
-                return
-
-        # Use standard dice for honest 50/50: 🎲 gives 1-6
-        dice_msg = await callback.message.answer_dice(emoji="🎲")
-        won = dice_msg.dice.value >= 4
-
-        user.balance -= to_decimal(bet)
-        if not is_admin_or_super(callback.from_user.id, user):
-            await increment_game_played(session, user.id)
-        xp_mult = await get_xp_multiplier(session, user.id)
-
-        user.xp += int(XP_PER_GAME * xp_mult)
-
-        if won:
-            win = to_decimal(bet) * 2
-            user.balance += win
-            net = win - to_decimal(bet)
-            result_text = f"🪙 Орёл! 🎉 +{win} монет"
-        else:
-            net = -to_decimal(bet)
-            result_text = f"🪙 Решка! 😔 -{bet} монет"
-
-        await _level_up_check(session, user, callback)
-        session.add(GameHistory(
-            user_id=user.id,
-            game_type="coinflip",
-            bet=to_decimal(bet),
-            result=net,
-            details=f"won={won}"
-        ))
-        await log_balance_change(
-            session, user, net, "game_coinflip",
-            details=f"bet={bet}, won={won}"
-        )
-        await session.commit()
-
-    await callback.message.answer(
-        f"{result_text}\n💰 Баланс: {user.balance}"
-    )
-    await callback.answer()
+    await callback.answer("Орёл/решка отключены. Сейчас основной фокус — Секслото.", show_alert=True)
 
 
 @router.callback_query(F.data == "guess_menu")
 async def game_guess(callback: CallbackQuery):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1 монета",  callback_data="guess_bet:1"),
-            InlineKeyboardButton(text="5 монет",   callback_data="guess_bet:5"),
-            InlineKeyboardButton(text="10 монет",  callback_data="guess_bet:10"),
-        ],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="games_back")],
-    ])
-    await callback.message.answer(
-        "🎯 <b>Угадай число</b>\n\nУгадай 1–6 — x5 ставки!\n\nСтавка:",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-    await callback.answer()
+    await callback.answer("Угадай число отключена. Сейчас основной фокус — Секслото.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("guess_bet:"))
 async def guess_bet_start(callback: CallbackQuery, state: FSMContext):
-    bet = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-        if user.balance < to_decimal(bet):
-            await callback.answer("❌ Недостаточно монет!", show_alert=True)
-            return
-        if not is_admin_or_super(callback.from_user.id, user):
-            can_play = await can_play_free_game(session, user.id)
-            if not can_play:
-                await callback.answer("Бесплатные игры закончились.", show_alert=True)
-                return
-
-    await state.update_data(guess_bet=bet)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1", callback_data="guess_num:1"),
-            InlineKeyboardButton(text="2", callback_data="guess_num:2"),
-            InlineKeyboardButton(text="3", callback_data="guess_num:3"),
-        ],
-        [
-            InlineKeyboardButton(text="4", callback_data="guess_num:4"),
-            InlineKeyboardButton(text="5", callback_data="guess_num:5"),
-            InlineKeyboardButton(text="6", callback_data="guess_num:6"),
-        ],
-    ])
-    await callback.message.answer("Выберите число:", reply_markup=kb)
-    await callback.answer()
+    await state.clear()
+    await callback.answer("Угадай число отключена. Сейчас основной фокус — Секслото.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("guess_num:"))
 async def guess_num(callback: CallbackQuery, state: FSMContext):
-    guess = int(callback.data.split(":")[1])
-    data = await state.get_data()
-    bet = data.get("guess_bet", 1)
-
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-        if user.balance < to_decimal(bet):
-            await callback.answer("❌ Недостаточно монет!", show_alert=True)
-            return
-        if not is_admin_or_super(callback.from_user.id, user):
-            can_play = await can_play_free_game(session, user.id)
-            if not can_play:
-                await callback.answer("Бесплатные игры закончились.", show_alert=True)
-                return
-
-        dice_msg = await callback.message.answer_dice(emoji="🎲")
-        actual = dice_msg.dice.value
-
-        user.balance -= to_decimal(bet)
-        if not is_admin_or_super(callback.from_user.id, user):
-            await increment_game_played(session, user.id)
-        xp_mult = await get_xp_multiplier(session, user.id)
-
-        user.xp += int(XP_PER_GAME * xp_mult)
-
-        if guess == actual:
-            multiplier = 5
-            jackpot = False
-            if random.random() < GUESS_JACKPOT_CHANCE:
-                multiplier = max(6, GUESS_JACKPOT_MULTIPLIER)
-                jackpot = True
-            win = to_decimal(bet) * multiplier
-            user.balance += win
-            net = win - to_decimal(bet)
-            if jackpot:
-                result_text = (
-                    f"🎯 Выпало {actual}! Угадали!\n"
-                    f"🌟 ДЖЕКПОТ x{multiplier}! +{win} монет"
-                )
-            else:
-                result_text = f"🎯 Выпало {actual}! Угадали! 🎉 +{win} монет"
-        else:
-            net = -to_decimal(bet)
-            result_text = f"🎯 Выпало {actual}, вы выбрали {guess}. 😔 -{bet} монет"
-
-        await _level_up_check(session, user, callback)
-        session.add(GameHistory(
-            user_id=user.id,
-            game_type="guess",
-            bet=to_decimal(bet),
-            result=net,
-            details=f"guess={guess}, actual={actual}"
-        ))
-        await log_balance_change(
-            session, user, net, "game_guess",
-            details=f"bet={bet}, guess={guess}, actual={actual}"
-        )
-        await session.commit()
-
-    await callback.message.answer(
-        f"{result_text}\n💰 Баланс: {user.balance}"
-    )
     await state.clear()
-    await callback.answer()
+    await callback.answer("Угадай число отключена. Сейчас основной фокус — Секслото.", show_alert=True)
 
 
 @router.callback_query(F.data == "games_back")
@@ -2898,106 +2675,27 @@ async def top_richest(callback: CallbackQuery):
 @router.message(F.text == BTN_QUESTS)
 async def btn_quests(message: Message, state: FSMContext):
     await state.clear()
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        if not user:
-            return
-        if not await require_nickname(message, user):
-            return
-
-        today = utc_now().date()
-        quests = (await session.execute(
-            select(DailyQuestProgress).where(
-                DailyQuestProgress.user_id == user.id,
-                DailyQuestProgress.quest_date == today
-            )
-        )).scalars().all()
-
-        if not quests:
-            quest_list = DAILY_QUESTS.copy()
-            if is_vip(user):
-                quest_list += PREMIUM_DAILY_QUESTS
-            for q in quest_list:
-                session.add(DailyQuestProgress(
-                    user_id=user.id,
-                    quest_type=q["type"],
-                    quest_date=today,
-                    progress=0,
-                    target=q["target"],
-                    reward=to_decimal(q["reward"]),
-                ))
-            await session.commit()
-            quests = (await session.execute(
-                select(DailyQuestProgress).where(
-                    DailyQuestProgress.user_id == user.id,
-                    DailyQuestProgress.quest_date == today
-                )
-            )).scalars().all()
-
-        text = "📋 <b>Ежедневные квесты</b>\n\n"
-        quest_desc_map = {}
-        for q in DAILY_QUESTS:
-            quest_desc_map[q["type"]] = q["desc"]
-        for q in PREMIUM_DAILY_QUESTS:
-            quest_desc_map[q["type"]] = q["desc"]
-
-        for q in quests:
-            status = "✅" if q.completed else "⏳"
-            claimed = " (получено)" if q.reward_claimed else ""
-            desc = quest_desc_map.get(q.quest_type, q.quest_type)
-            text += (
-                f"{status} <b>{desc}</b>\n"
-                f"   Прогресс: {q.progress}/{q.target} | Награда: {q.reward} 🪙{claimed}\n\n"
-            )
-
-        await message.answer(
-            text,
-            parse_mode="HTML",
-            reply_markup=quests_keyboard(quests)
-        )
+    await message.answer(
+        "📋 <b>Квесты отключены.</b>\n\n"
+        "Мы убрали ежедневные задания, чтобы не захламлять меню и не раздавать лишние монеты.\n"
+        "Сейчас основной фокус — Секслото, офферы и рефералка.",
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data.startswith("quest_claim:"))
 async def quest_claim(callback: CallbackQuery):
-    quest_id = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        quest = (await session.execute(
-            select(DailyQuestProgress).where(DailyQuestProgress.id == quest_id)
-        )).scalar_one_or_none()
-        if not quest:
-            await callback.answer("Квест не найден.", show_alert=True)
-            return
-        if not quest.completed:
-            await callback.answer("Квест ещё не выполнен!", show_alert=True)
-            return
-        if quest.reward_claimed:
-            await callback.answer("Награда уже получена!", show_alert=True)
-            return
-
-        user = await get_user_by_id(session, quest.user_id)
-        if not user:
-            await callback.answer()
-            return
-
-        quest.reward_claimed = True
-        await log_balance_change(
-            session, user, quest.reward,
-            "quest_reward", source_id=quest.id
-        )
-        user.balance += quest.reward
-        await session.commit()
-
-    await callback.answer(f"🎁 Получено {quest.reward} монет!", show_alert=True)
+    await callback.answer("Квесты отключены.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("quest_done:"))
 async def quest_done(callback: CallbackQuery):
-    await callback.answer("✅ Квест выполнен, награда уже получена.", show_alert=True)
+    await callback.answer("Квесты отключены.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("quest_info:"))
 async def quest_info(callback: CallbackQuery):
-    await callback.answer("⏳ Квест ещё не выполнен. Продолжайте!", show_alert=True)
+    await callback.answer("Квесты отключены.", show_alert=True)
 
 
 # =========================
@@ -3009,26 +2707,8 @@ async def _update_quest_progress(
     quest_type: str,
     amount: int = 1
 ):
-    today = utc_now().date()
-    quests = (await session.execute(
-        select(DailyQuestProgress).where(
-            DailyQuestProgress.user_id == user_id,
-            DailyQuestProgress.quest_type == quest_type,
-            DailyQuestProgress.quest_date == today,
-            DailyQuestProgress.completed.is_(False)
-        )
-    )).scalars().all()
-
-    for quest in quests:
-        quest.progress = min(quest.progress + amount, quest.target)
-        if quest.progress >= quest.target:
-            quest.completed = True
-
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        session.expunge_all()
+    # Квесты отключены. Оставляем заглушку, чтобы не трогать старые вызовы.
+    return
 
 
 # =========================
@@ -3114,17 +2794,13 @@ async def _send_lottery_menu(message_or_callback_message: Message) -> None:
     async with async_session() as session:
         round_obj = await ensure_current_lottery_round(session)
         state_data = get_lottery_state_dict(round_obj)
+        user = await get_user(session, message_or_callback_message.chat.id)
     base = (WEBHOOK_BASE or "").rstrip("/")
     live_url = f"{base}/lottery/live" if base else ""
-    # UX: show both UTC and MSK (UTC+3) without timezone guessing
     try:
-        start_utc = round_obj.draw_starts_at.strftime("%H:%M")
-        end_utc = round_obj.draw_ends_at.strftime("%H:%M")
-        start_msk = (round_obj.draw_starts_at + timedelta(hours=3)).strftime("%H:%M")
-        end_msk = (round_obj.draw_ends_at + timedelta(hours=3)).strftime("%H:%M")
-        draw_line = f"Розыгрыш: <b>воскресенье</b> {start_utc}–{end_utc} UTC ( {start_msk}–{end_msk} МСК )"
+        draw_line = f"Следующий розыгрыш: <b>{format_time_for_user(round_obj.draw_starts_at, getattr(user, 'timezone', None))}</b>"
     except Exception:
-        draw_line = "Розыгрыш: <b>воскресенье</b> (в live-режиме)"
+        draw_line = "Следующий розыгрыш скоро стартует в live-режиме."
     await message_or_callback_message.answer(
         "🎰 <b>Лотерея-лото</b>\n\n"
         f"Раунд: <b>{state_data.get('week_key')}</b>\n"
@@ -3134,7 +2810,7 @@ async def _send_lottery_menu(message_or_callback_message: Message) -> None:
         f"Уже выпало: {', '.join(map(str, state_data.get('drawn_numbers', []))) or '—'}\n\n"
         + (f"🔴 Live-ссылка: <a href=\"{live_url}\">{live_url}</a>\n" if live_url else "")
         + f"{draw_line}\n\n"
-        "Нажмите «🔴 Открыть Live», чтобы посмотреть колесо/розыгрыш.",
+        "Нажмите «🔴 Открыть Live», чтобы посмотреть колесо и ход розыгрыша.",
         parse_mode="HTML",
         reply_markup=_lottery_menu_kb(),
     )
@@ -3630,21 +3306,17 @@ async def cmd_health(message: Message):
 
 @router.message(Command("version"))
 async def cmd_version(message: Message):
-    async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
-        if not is_admin_or_super(message.from_user.id, user):
-            return
-            
-    version = "1.3.0"
+    version = "3.3.0"
     changes = (
-        "🔥 <b>Версия:</b> " + version + "\n\n"
+        f"🔥 <b>Версия:</b> {version}\n\n"
         "<b>Последние изменения:</b>\n"
-        "• VideoFeed: Absolute URL Fetching & Debug logs\n"
-        "• VideoFeed: CORS headers injected\n"
-        "• Quests: Перевод на русский\n"
-        "• Games: Слоты, Дартс, Баскетбол\n"
-        "• Economy: x10 Scale & Fixes\n"
-        "• Core: AsyncPG 0.30 & Greenlet"
+        "• Секслото переведено на настраиваемый интервал и длительность розыгрыша через админку\n"
+        "• Mini App синхронизируется с настройками розыгрыша и снова умеет покупать билеты/монеты\n"
+        "• Исправлены ставки в Mini App: теперь это реальная ставка на 10 монет, а не бесплатный клик\n"
+        "• Добавлены локальные часовые пояса в уведомлениях о розыгрыше\n"
+        "• Новичкам показывается стартовый лутбокс\n"
+        "• При нехватке монет бот агрессивно подсказывает реферальную ссылку\n"
+        "• Ежедневные квесты и ежедневный бонус окончательно убраны из актуального UX"
     )
     await message.answer(changes, parse_mode="HTML")
 
@@ -3753,35 +3425,35 @@ async def btn_faq(message: Message, state: FSMContext):
         "ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "<b>1. Как зарабатывать монеты?</b>\n"
-        "Загружайте видео (+30 монет) или фото (+15 монет), а также выполняйте Офферы от партнеров.\n\n"
+        "Загружайте видео (+30 монет) или фото (+15 монет), выполняйте офферы и приглашайте друзей по реферальной ссылке.\n\n"
         "<b>2. Как смотреть контент других авторов?</b>\n"
         "Нажмите кнопку 🎬 Смотреть и выберите интересующий формат.\n\n"
         "<b>3. Что дает подписка VIP?</b>\n"
-        "Удвоенные награды за просмотры, скидки в магазине и бесплатное создание промокодов.\n\n"
-        "<b>4. Что такое лотерея-лото?</b>\n"
-        "Беспроигрышная игра! Покупайте билеты и выигрывайте джекпот в прямом эфире по воскресеньям.\n\n"
-        "<b>5. Как общаться с ИИ-подругой Катей?</b>\n"
-        "Нажмите кнопку 💋 Катя. Катя — это умная ИИ-подруга. Одно сообщение стоит 5 монет.\n\n"
+        "Удвоенные награды за просмотры, скидки в магазине и бонусы в экономике.\n\n"
+        "<b>4. Что такое Секслото?</b>\n"
+        "Это главный азартный режим бота: покупайте билеты, следите за live-розыгрышем в Mini App и ловите джекпот.\n\n"
+        "<b>5. Как общаться с ИИ?</b>\n"
+        "Нажмите кнопку 💋 ИИ-Общение. Одно сообщение стоит 5 монет.\n\n"
         "<b>6. Как работают промокоды?</b>\n"
-        "Вы можете создавать промокоды за Stars и дарить друзьям, либо активировать чужие.\n\n"
+        "Вы можете создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n"
         "<b>7. Как работает реферальная система?</b>\n"
-        "Скопируйте вашу ссылку в 👥 Рефералы. Пригласивший получает +50 монет, а новый юзер +20 монет.\n\n"
-        "<b>8. Зачем нужен ежедневный бонус?</b>\n"
-        "Каждый день сумма бонуса увеличивается! Посещайте бота ежедневно, чтобы не сбить серию.\n\n"
-        "<b>9. Зачем нужны квесты?</b>\n"
-        "Выполняйте ежедневные задания (просмотры, комментарии) и забирайте дополнительные монеты.\n\n"
+        f"Откройте раздел 👥 Рефералы, скопируйте свою ссылку и отправьте друзьям. За активного приглашённого вы получаете <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n"
+        "<b>8. Есть ли ежедневный бонус?</b>\n"
+        "Нет. Ежедневная халява отключена — вместо неё теперь работает еженедельный секретный промокод.\n\n"
+        "<b>9. Есть ли квесты?</b>\n"
+        "Нет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n"
         "<b>10. Где посмотреть топы игроков?</b>\n"
         "В меню 🏆 Топы собраны лучшие авторы контента и самые богатые игроки.\n\n"
         "<b>11. Что находится внутри лутбоксов?</b>\n"
-        "Случайный выигрыш монет разной степени редкости (обычные, редкие, эпические, джекпоты!).\n\n"
+        "Случайный выигрыш монет разной степени редкости.\n\n"
         "<b>12. Как сменить никнейм?</b>\n"
-        "В вашем Профиле. Первая смена полностью бесплатна, последующие — за монеты.\n\n"
+        "В вашем Профиле. Первая установка ника бесплатна, последующие изменения — за монеты.\n\n"
         "<b>13. Что такое Уровень и XP?</b>\n"
-        "За любую активность вы получаете XP. Повышение уровня дает новые элитные стили ников!\n\n"
+        "За активность вы получаете XP. Повышение уровня открывает приятную косметику и прогресс профиля.\n\n"
         "<b>14. Безопасны ли мои данные?</b>\n"
-        "Абсолютно. Бот не запрашивает и не хранит личные данные, только ваш системный Telegram ID.\n\n"
+        "Бот не просит лишние персональные данные: используется в основном Telegram ID и сервисная информация профиля.\n\n"
         "<b>15. Как связаться с техподдержкой?</b>\n"
-        "Нажмите кнопку 💬 Жалобы и предложения и отправьте тикет нашей команде."
+        "Нажмите кнопку 💬 Жалобы и предложения и отправьте сообщение команде."
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3801,24 +3473,26 @@ async def cb_bot_version_info(callback: CallbackQuery):
     version_text = (
         "🤖 <b>ИНФОРМАЦИЯ О ВЕРСИИ И ИЗМЕНЕНИЯХ</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "• <b>Текущая версия:</b> <code>v3.2.0-stable</code>\n"
-        "• <b>Статус:</b> Полная готовность (100% стабильно)\n\n"
+        "• <b>Текущая версия:</b> <code>v3.3.0-stable</code>\n"
+        "• <b>Статус:</b> Актуальная боевая сборка\n\n"
         "📢 <b>Последние изменения для пользователей:</b>\n"
-        "✅ <b>Элитные стили ников:</b> Полная переработка кастомных ников (168 премиум-стилей в 8 красивейших категориях на базе древних рун, иероглифов и алхимии вместо дешевых смайликов).\n"
-        "✅ <b>Глобальный сброс:</b> Полная защита от застревания в меню и зависания ввода — в любой момент напишите <code>/cancel</code> или <code>/start</code> для сброса.\n"
-        "✅ <b>Вечная база данных:</b> Переезд на стабильное и вечное облачное хранилище Neon.tech, данные больше никогда не удалятся.\n"
-        "✅ <b>Катя на OpenAI-стандарте:</b> Общение с ИИ-подругой переведено на сверхбыстрый и стабильный мировой стандарт, без задержек.\n"
-        "✅ <b>Раздел FAQ и Помощь:</b> Быстрый справочник прямо внутри бота для ответа на любые вопросы.\n"
-        "✅ <b>Секретная Халява:</b> Новая система еженедельных кодовых слов с призами до 200 монет!\n"
+        "✅ <b>Секслото:</b> теперь время розыгрышей настраивается из админки и корректно показывается в Mini App.\n"
+        "✅ <b>Mini App:</b> внутри live-интерфейса снова работают покупка билетов и покупка монет за Telegram Stars.\n"
+        "✅ <b>Часовые пояса:</b> бот учитывает локальное время пользователя и пишет его в напоминаниях о розыгрыше.\n"
+        "✅ <b>Стартовый лутбокс:</b> новичок получает приветственный лутбокс с круглой наградой от 50 до 400 монет.\n"
+        "✅ <b>Рефералка:</b> при нехватке монет бот теперь сразу подсовывает готовую реферальную ссылку.\n"
+        "✅ <b>Халява:</b> ежедневный бонус убран, вместо него работает еженедельный секретный промокод.\n"
+        "✅ <b>Квесты и старые мини-игры:</b> в актуальном UX больше не продвигаются и не засоряют интерфейс.\n"
     )
     
     if admin_flag:
         version_text += (
-            "\n👑 <b>Административный список изменений (Changelog):</b>\n"
-            "⚙️ <b>Фоновое одобрение:</b> Кнопка «Одобрить все» переведена на асинхронный фоновый пакетный режим (по 50 штук за раз с задержкой 0.5с). Это полностью исключило таймауты и зависания БД при очередях в сотни видео.\n"
-            "⚙️ <b>CRM Пользователи:</b> Постраничная пагинация списка пользователей с персональными карточками (бан/разбан, смена ника, выдача/списание монет с логированием в баланс).\n"
-            "⚙️ <b>Следственное досье:</b> Генерация отчетов по 16 ключевым метрикам активности и финансов, включая 5 последних логов действий и баланса.\n"
-            "⚙️ <b>Маркетинговый рассыльщик:</b> Добавлены готовые пуш-шаблоны уведомлений (бонус, лотерея, Катя), а также автоматическая интервальная рассылка сообщений в фоне."
+            "\n👑 <b>Административный список изменений:</b>\n"
+            "⚙️ <b>Секслото из Telegram:</b> интервал и длительность розыгрыша редактируются в админке без правки кода.\n"
+            "⚙️ <b>День weekly promo:</b> выбор дня недели переведён на удобные кнопки ПН–ВС.\n"
+            "⚙️ <b>Startup cleanup:</b> убран дублирующий startup-flow, который мог ломать запуск приложения.\n"
+            "⚙️ <b>Mini App API:</b> исправлены серверные эндпоинты покупки билетов и ставок.\n"
+            "⚙️ <b>Changelog:</b> системный файл истории изменений в корне проекта поддерживается в актуальном состоянии."
         )
         
     await callback.message.answer(version_text, parse_mode="HTML")
@@ -3846,31 +3520,15 @@ def get_current_freebie_word() -> str:
 
 @router.callback_query(F.data == "promo_freebie_start")
 async def cb_promo_freebie_start(callback: CallbackQuery, state: FSMContext):
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-            
-    from app.models import utc_now
-    current_week = utc_now().isocalendar()[1]
-    current_year = utc_now().isocalendar()[0]
-    
-    if user.last_freebie_week == current_week and user.last_freebie_year == current_year:
-        await callback.message.answer("❌ <b>Вы уже забрали Халяву на этой неделе!</b>\n\nПриходите в следующий понедельник за новым секретным словом!", parse_mode="HTML")
-        await callback.answer()
-        return
-        
-    await state.set_state(PromoActivateState.waiting_code)
-    await state.update_data(freebie_mode=True)
+    await state.clear()
     await callback.message.answer(
-        "🎁 <b>Еженедельная Халява!</b>\n\n"
-        "Каждую неделю в наших соцсетях или чате публикуется одно секретное слово.\n"
-        "Введите текущее секретное слово, чтобы получить случайный бонус от <b>10 до 200 монет</b> (кратный 10):\n\n"
-        "👉 Введите секретное слово:",
+        "🎁 <b>Еженедельная халява</b>\n\n"
+        "Теперь она работает через автоматическую рассылку секретного промокода.\n"
+        "Бот сам пришлёт код в заданный день и час — вам останется только активировать его через <b>/start promo_...</b> или в разделе <b>🔑 Активировать промокод</b>.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="btn_promo_back")]
+            [InlineKeyboardButton(text="🔑 Активировать промокод", callback_data="promo_activate")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="btn_promo_back")],
         ])
     )
     await callback.answer()
@@ -3909,6 +3567,12 @@ async def welcome_lootbox_claim(callback: CallbackQuery):
         session.add(log)
         await session.commit()
         await session.refresh(user)
-        msg_cap = "🎁 <b>СТАРТОВЫЙ ЛУТБОКС ОТКРЫТ!</b>\n\nТебе выпало <b>+" + str(reward) + " монет</b>! 🤑\nТеперь твой баланс: <b>" + str(user.balance) + "</b>.\n\nЭтого хватит, чтобы насладиться контентом, скорее жми '🎬 Смотреть'!"
-        await callback.message.edit_caption(caption=msg_cap, parse_mode="HTML")
+        msg_cap = "🎁 <b>СТАРТОВЫЙ ЛУТБОКС ОТКРЫТ!</b>\n\nТебе выпало <b>+" + str(reward) + " монет</b>! 🤑\nТеперь твой баланс: <b>" + str(user.balance) + "</b>.\n\nЭтого хватит, чтобы насладиться контентом — скорее жми '🎬 Смотреть'!"
+        try:
+            if getattr(callback.message, "caption", None):
+                await callback.message.edit_caption(caption=msg_cap, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(msg_cap, parse_mode="HTML")
+        except Exception:
+            await callback.message.answer(msg_cap, parse_mode="HTML")
         await callback.answer(f"+{reward} монет!", show_alert=True)

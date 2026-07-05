@@ -2557,7 +2557,22 @@ async def log_balance_change(
     details: str = None,
 ):
     """
-    Wrapper for backward compatibility with older code that hasn't been migrated
-    to change_balance_atomic.
+    Записывает изменение баланса в лог, но не меняет сам баланс пользователя.
+
+    Исторически многие места в коде сначала вызывают этот логгер, а потом уже
+    вручную меняют `user.balance += amount` / `-=`. Поэтому здесь намеренно
+    только логирование, без повторного списания/начисления.
     """
-    await change_balance_atomic(session, user.id, amount, source, source_id, admin_id, details)
+    before = user.balance if user.balance is not None else Decimal("0")
+    after = before + amount
+    log = BalanceLog(
+        user_id=user.id,
+        amount=amount,
+        balance_before=before,
+        balance_after=after,
+        source=source,
+        source_id=source_id,
+        admin_id=admin_id,
+        details=details,
+    )
+    session.add(log)

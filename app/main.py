@@ -146,7 +146,11 @@ async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_
     
     for u in users:
         time_str = format_time_for_user(draw_starts_at, u.timezone)
-        msg = "⏰ <b>Секслото — скоро розыгрыш!</b>\n\nРозыгрыш начнётся ровно " + time_str + ".\nНе забудьте зайти в Live и посмотреть на свои бочонки! 🎰"
+        msg = (
+            "⏰ <b>Секслото — скоро розыгрыш!</b>\n\n"
+            f"Розыгрыш начнётся {time_str}.\n"
+            "Не забудьте зайти в Live и посмотреть на свои бочонки! 🎰"
+        )
         try:
             await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
         except Exception:
@@ -1636,7 +1640,7 @@ async def auto_broadcast_worker(bot):
         '📤 <b>Зарабатывайте на своем контенте!</b>\n\nЗагрузите видеоролик (+30 монет) или фото (+15 монет) прямо сейчас! Игроки будут смотреть и оценивать его, продвигая вас в топы! 🚀\n\n👉 Нажмите кнопку <b>📤 Загрузить</b>!',
         '👥 <b>Позовите друзей и заберите бонусы!</b>\n\nСкопируйте вашу реферальную ссылку и отправьте друзьям. За каждого приглашенного вы получите огромный бонус в монетах! Растем вместе! 🤝\n\n👉 Перейдите в раздел <b>👥 Рефералы</b>!',
         '🐞 <b>Нашли баг или есть идея?</b>\n\nМы постоянно улучшаем бота и ценим любое ваше мнение. Напишите нам о любой ошибке или предложите крутую функцию в разделе поддержки!\n\n👉 Кнопка <b>💬 Жалобы и предложения</b>!',
-        '🎁 <b>Заберите вашу еженедельную Халяву!</b>\n\nКаждую неделю мы рассылаем секретное слово прямо в бот! Введите его в промокодах и заберите награду бесплатно! 🎟\n\n👉 Раздел <b>🎟 Промокоды ➔ Активировать промокод</b>!',
+        '🎁 <b>Заберите еженедельную халяву!</b>\n\nРаз в неделю бот рассылает секретный промокод на бесплатные монеты. Активируйте его и заберите награду! 🎟\n\n👉 Раздел <b>🎟 Промокоды ➔ Активировать промокод</b>!',
         '📈 <b>Прокачайте свой уровень в системе!</b>\n\nЗа каждую активность (просмотры, загрузки, комменты) вы получаете XP. Повышение уровня открывает доступ к элитным никам и бонусам! 📊\n\n👉 Посмотрите ваш ранг в меню <b>📊 Уровень</b>!',
         '🏆 <b>Битва за Топы в самом разгаре!</b>\n\nВойдите в тройку лучших загрузчиков или самых богатых игроков недели и заберите еженедельный денежный приз до 200 монет на баланс! 🥇\n\n👉 Посмотрите лидеров в меню <b>🏆 Топы</b>!',
         '💬 <b>Общайтесь и обсуждайте контент!</b>\n\nПод каждым одобренным видео есть раздел комментариев. Делитесь своим мнением с другими пользователями и ставьте яркие реакции! 🔥\n\n👉 Зайдите в меню <b>🎬 Смотреть</b>!',
@@ -1702,12 +1706,16 @@ async def api_lottery_buy(request: web.Request) -> web.Response:
             user = await get_user(session, user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
-            ok, msg = await buy_lottery_ticket(session, user.id, is_admin_free=False)
-            if ok:
-                await session.refresh(user)
-                return web.json_response({"ok": True, "balance": float(user.balance)})
-            else:
-                return web.json_response({"ok": False, "error": msg})
+            ticket, error = await buy_lottery_ticket(session, user)
+            if not ticket:
+                return web.json_response({"ok": False, "error": error or "purchase_failed"})
+            await session.refresh(user)
+            return web.json_response({
+                "ok": True,
+                "balance": float(user.balance),
+                "ticket_id": ticket.id,
+                "numbers": ticket.numbers,
+            })
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
 
@@ -1758,11 +1766,17 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
     try:
         data = await request.json()
         user_id = int(data.get("user_id", 0))
-        target_number = int(data.get("target_number", 0))
-        bet_amount = float(data.get("bet_amount", 0))
-        bet_type = data.get("bet_type", "first")
-        
+        bet_type = data.get("bet_type", "")
+        allowed_bets = {"first_even", "first_odd", "last_even", "last_odd"}
+        if bet_type not in allowed_bets:
+            return web.json_response({"ok": False, "error": "Неверный тип ставки"})
+
+        target_number = 0
+
         from app.services import get_user, ensure_current_lottery_round, change_balance_atomic, to_decimal
+         
+        # В Mini App ставка фиксированная: 10 монет.
+        bet_amount = to_decimal(data.get("bet_amount", 10) or 10)
         from app.db import async_session
         from app.models import LotteryBet
         async with async_session() as session:
@@ -1771,18 +1785,18 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
                 return web.json_response({"ok": False, "error": "User not found"})
             if user.balance < bet_amount:
                 return web.json_response({"ok": False, "error": "Недостаточно монет"})
-            
+
             round_obj = await ensure_current_lottery_round(session)
             if round_obj.status != "open":
                 return web.json_response({"ok": False, "error": "Прием ставок закрыт"})
-                
-            await change_balance_atomic(session, user.id, -to_decimal(bet_amount), "lottery_bet")
+
+            await change_balance_atomic(session, user.id, -bet_amount, "lottery_bet", source_id=round_obj.id, details=f"type={bet_type}")
             bet = LotteryBet(
                 user_id=user.id,
                 round_id=round_obj.id,
                 bet_type=bet_type,
                 target_number=target_number,
-                amount=to_decimal(bet_amount)
+                amount=bet_amount,
             )
             session.add(bet)
             await session.commit()
@@ -1945,12 +1959,11 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
                 db_day = await get_setting(session, "weekly_promo_day", "")
                 db_hour = await get_setting(session, "weekly_promo_hour", "")
                 db_amount = await get_setting(session, "weekly_promo_amount", "")
-                db_uses = await get_setting(session, "weekly_promo_uses", "")
-                
+
                 p_day = int(db_day) if db_day.isdigit() else WEEKLY_PROMO_DAY
                 p_hour = int(db_hour) if db_hour.isdigit() else WEEKLY_PROMO_HOUR
                 p_amount = float(db_amount) if db_amount else WEEKLY_PROMO_AMOUNT
-                p_uses = int(db_uses) if db_uses.isdigit() else 999999
+                p_uses = 999999
                 
                 if now_msk.weekday() == p_day and now_msk.hour == p_hour:
                     current_week = now_msk.isocalendar()[1]
@@ -1977,8 +1990,12 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
                         
                         users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
                         
-                        uses_text = "НЕ ОГРАНИЧЕНО" if p_uses >= 999999 else str(p_uses)
-                        msg = "🎁 <b>ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА!</b>\n\nЛови секретный промокод на <b>" + str(p_amount) + " монет</b>!\nАктивировать: <code>/start promo_" + code + "</code>\n\n<i>Успей забрать, количество активаций ограничено: " + uses_text + " шт!</i>"
+                        msg = (
+                            "🎁 <b>ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА!</b>\n\n"
+                            f"Лови секретный промокод на <b>{p_amount}</b> монет!\n"
+                            f"Активировать: <code>/start promo_{code}</code>\n\n"
+                            "<i>Количество активаций не ограничено.</i>"
+                        )
                         
                         sent = 0
                         for uid in users:
