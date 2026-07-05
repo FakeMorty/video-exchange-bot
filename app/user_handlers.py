@@ -544,11 +544,11 @@ async def accept_rules(callback: CallbackQuery):
             await process_referral_reward(session, user.referred_by_user_id)
         await session.commit()
 
-    # If user already has nickname, show main menu immediately
-    if user.nickname_set and user.display_name:
-        await send_welcome_banner(callback, session, user)
-        await callback.answer()
-        return
+        # If user already has nickname, show main menu immediately while session is still alive.
+        if user.nickname_set and user.display_name:
+            await send_welcome_banner(callback, session, user)
+            await callback.answer()
+            return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -1750,6 +1750,8 @@ async def successful_payment(message: Message):
                     session.expunge_all()
                     await message.answer(f"❌ Ошибка создания промокода: {error}")
                 else:
+                    # Фиксируем фактически оплаченные Stars, чтобы учёт не врал при скидках.
+                    promo.stars_paid = paid_stars
                     await session.commit()
                     bot = await message.bot.get_me()
                     await message.answer(
@@ -1813,16 +1815,37 @@ async def successful_payment(message: Message):
             # payload format: "user_offer_{offer_id}"
             offer_id = int(payload.split("_")[2])
             async with async_session() as session:
+                user = await get_user(session, message.from_user.id)
+                if not user:
+                    await message.answer("⚠️ Пользователь не найден.")
+                    return
+
+                payment = await get_payment_by_payload(session, payload)
+                if not payment or payment.user_id != user.id:
+                    await message.answer("Ошибка платежа: платёж не найден или принадлежит другому пользователю.")
+                    return
+                if int(payment.stars_amount) != paid_stars:
+                    await message.answer("Ошибка платежа: сумма не совпадает.")
+                    return
+                if not await mark_payment_paid_once(session, payload):
+                    await session.rollback()
+                    session.expunge_all()
+                    await message.answer("✅ Платёж уже был обработан ранее.")
+                    return
+
                 offer = await session.get(Offer, offer_id)
-                if offer:
-                    offer.status = "pending"
-                    # Отмечаем платёж как завершённый
-                    await mark_payment_paid_once(session, payload)
-                    await session.commit()
-                    
-                    # Агрегированное уведомление админам
-                    from app.services import schedule_mod_notification
-                    await schedule_mod_notification(session, "offer")
+                if not offer or offer.creator_user_id != user.id:
+                    await session.rollback()
+                    session.expunge_all()
+                    await message.answer("Ошибка платежа: оффер не найден или не принадлежит вам.")
+                    return
+
+                offer.status = "pending"
+                await session.commit()
+
+                from app.services import schedule_mod_notification
+                await schedule_mod_notification(session, "offer")
+
                 await message.answer(
                     "✅ Оплата прошла успешно! Ваш оффер отправлен на модерацию.\n"
                     "Он появится в списке, как только администратор его одобрит."
@@ -1842,11 +1865,11 @@ async def successful_payment(message: Message):
             if int(payment_row.stars_amount) != paid_stars:
                 await message.answer("Ошибка платежа: сумма не совпадает.")
                 return
-            payment = await apply_successful_payment(session, payload)
+            payment, credited_total = await apply_successful_payment(session, payload)
         if payment:
             await message.answer(
                 f"✅ Оплата успешна!\n"
-                f"💰 Начислено: <b>{payment.coins_amount:,.0f}</b> монет".replace(',', ' '),
+                f"💰 Начислено: <b>{credited_total:,.0f}</b> монет".replace(',', ' '),
                 parse_mode="HTML"
             )
         else:
@@ -1909,8 +1932,10 @@ async def lootbox_buy(callback: CallbackQuery):
 
             # Admin free
             admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
-
+            discount = await get_stars_discount(session, user.id)
             coin_price = to_decimal(LOOTBOX_COIN_PRICE)
+            base_star_price = int(LOOTBOX_STAR_PRICE)
+            display_star_price = max(1, int(math.ceil(base_star_price * (1 - discount)))) if discount > 0 else base_star_price
             if not admin_free and user.balance < coin_price:
                 await callback.answer(f"Недостаточно монет. Нужно: {coin_price:.0f}", show_alert=True)
                 return
@@ -1937,7 +1962,7 @@ async def lootbox_buy(callback: CallbackQuery):
                     f"{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\n"
                     f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
                     parse_mode="HTML",
-                    reply_markup=_lootbox_kb(),
+                    reply_markup=_lootbox_kb(coin_price, display_star_price),
                 )
                 await callback.answer("🆓 Лутбокс открыт бесплатно!")
                 return
@@ -1952,7 +1977,7 @@ async def lootbox_buy(callback: CallbackQuery):
             f"{icon} <b>Лутбокс открыт!</b>\n\n"
             f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
             parse_mode="HTML",
-            reply_markup=_lootbox_kb(),
+            reply_markup=_lootbox_kb(coin_price, display_star_price),
         )
         await callback.answer()
         return
@@ -1989,7 +2014,7 @@ async def lootbox_buy(callback: CallbackQuery):
                     f"{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\n"
                     f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
                     parse_mode="HTML",
-                    reply_markup=_lootbox_kb(),
+                    reply_markup=_lootbox_kb(to_decimal(LOOTBOX_COIN_PRICE), base_star_price),
                 )
                 await callback.answer("🆓 Лутбокс открыт бесплатно!")
                 return

@@ -990,13 +990,14 @@ async def get_payment_by_payload(session: AsyncSession, payload: str) -> Payment
     )).scalar_one_or_none()
 
 
-async def apply_successful_payment(session: AsyncSession, payload: str) -> Payment | None:
+async def apply_successful_payment(session: AsyncSession, payload: str) -> tuple[Payment | None, Decimal]:
     payment = (await session.execute(
         select(Payment).where(Payment.payload == payload)
     )).scalar_one_or_none()
     if not payment or payment.status != "pending":
-        return None
+        return None, Decimal("0")
     payment.status = "paid"
+    credited_total = Decimal("0")
     user = await get_user_by_id(session, payment.user_id)
     if user:
         bonus_multiplier = 1.0
@@ -1019,13 +1020,13 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> Payme
                 Payment.id != payment.id,
             )
         )).scalar_one_or_none()
-        total_coins = payment.coins_amount * to_decimal(bonus_multiplier)
+        credited_total = payment.coins_amount * to_decimal(bonus_multiplier)
         if first_today:
-            total_coins += to_decimal(FIRST_PURCHASE_DAILY_BONUS)
-        await change_balance_atomic(session, user.id, total_coins, "purchase",
+            credited_total += to_decimal(FIRST_PURCHASE_DAILY_BONUS)
+        await change_balance_atomic(session, user.id, credited_total, "purchase",
                                     details=f"payload={payload}, bonus_mult={bonus_multiplier}, first_today={first_today}")
         await session.commit()
-    return payment
+    return payment, credited_total
 
 
 # ============================
