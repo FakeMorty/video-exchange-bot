@@ -520,7 +520,7 @@ def _katya_chat_kb(chat_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🗑 Новая тема", callback_data=f"katya_clear:{chat_id}")],
         [
             InlineKeyboardButton(text="📋 Мои чаты", callback_data="katya_chats"),
-            InlineKeyboardButton(text="❌ Пока, Катя", callback_data="katya_close"),
+            InlineKeyboardButton(text="❌ Закрыть", callback_data="katya_close"),
         ],
     ])
 
@@ -604,7 +604,7 @@ def _katya_delete_confirm_kb(chat_id: int) -> InlineKeyboardMarkup:
 async def btn_katya(message: Message, state: FSMContext):
     """Точка входа — кнопка в главном меню."""
     if not ENABLE_AI_ASSISTANT:
-        await message.answer("💋 Катя сейчас недоступна. Попробуй позже.")
+        await message.answer("💋 ИИ-общение сейчас недоступно. Попробуй позже.")
         return
 
     async with async_session() as session:
@@ -622,15 +622,17 @@ async def btn_katya(message: Message, state: FSMContext):
     chat_info = f"📋 Чатов: {len(chats)}/{max_chats}" if max_chats < 999 else "📋 Чатов: {0} (∞)".format(len(chats))
 
     await message.answer(
-        "💋 <b>Катя</b>\n\n"
-        "Приве-е-ет 🥰 Это Катя! Заканчиваю 11 класс, устала от этих "
-        "ЕГЭшки... Наконец-то можно отвлечься! 😩\n\n"
-        "Кстати, я гимнасткой занимаюсь — гибкая 🤸‍♀️ Может, проверишь? 😏\n\n"
+        "💋 <b>ИИ-общение</b>\n\n"
+        "Выбери персонажа, открой существующий чат или создай новый.\n\n"
+        "Доступные собеседники:\n"
+        "• Катя — гимнастка и любительница флирта\n"
+        "• Софа — готка, геймерша и саркастичная собеседница\n"
+        "• Саня — брутальный тренер и доминантный болтун\n\n"
         f"💰 Стоимость: <b>{AI_ASSISTANT_PRICE} монет</b> за сообщение\n"
         f"💰 Твой баланс: <b>{balance}</b> монет\n"
         f"📊 Лимит: {AI_ASSISTANT_DAILY_LIMIT} сообщений в день\n"
         f"{chat_info}\n\n"
-        "*потягивается, прогибаясь в спинке* Ну что, поболтаем? 😘",
+        "Выбери чат и погнали 😉",
         parse_mode="HTML",
         reply_markup=_katya_start_kb(),
     )
@@ -651,12 +653,12 @@ async def katya_back_main(callback: CallbackQuery, state: FSMContext):
     chat_info = f"📋 Чатов: {len(chats)}/{max_chats}" if max_chats < 999 else f"📋 Чатов: {len(chats)} (∞)"
 
     await callback.message.edit_text(
-        "💋 <b>Катя</b>\n\n"
-        "Приве-е-ет 🥰 Это Катя!\n\n"
+        "💋 <b>ИИ-общение</b>\n\n"
+        "Открой существующий чат или создай новый — персонажа можно выбрать при создании.\n\n"
         f"💰 Стоимость: <b>{AI_ASSISTANT_PRICE} монет</b> за сообщение\n"
         f"💰 Твой баланс: <b>{balance}</b> монет\n"
         f"{chat_info}\n\n"
-        "*потягивается* Ну что, поболтаем? 😘",
+        "Выбери чат и продолжим 😉",
         parse_mode="HTML",
         reply_markup=_katya_start_kb(),
     )
@@ -682,9 +684,9 @@ async def katya_list_chats(callback: CallbackQuery, state: FSMContext):
     kb = _katya_chats_kb(chats, max_chats, can_create)
 
     if not chats:
-        text = "💋 У тебя пока нет чатов со мной. Создай первый! 😏"
+        text = "💋 У тебя пока нет чатов. Создай первый и выбери персонажа 😉"
     else:
-        lines = ["💋 <b>Твои чаты с Катей:</b>\n"]
+        lines = ["💋 <b>Твои чаты</b>\n"]
         for i, chat in enumerate(chats, 1):
             msg_count = chat.message_count or 0
             lines.append(f"{i}. 💬 <b>{chat.title}</b> — {msg_count} сообщ.")
@@ -731,10 +733,10 @@ async def cb_katya_char_sel(callback: CallbackQuery, state: FSMContext):
     char_name = callback.data.split(":", 1)[1]
     await state.update_data(selected_char=char_name)
     
-    char_labels = {"katya": "Катей", "sofa": "Софой", "sanya": "Саней"}
+    char_labels = {"katya": "Катя", "sofa": "Софа", "sanya": "Саня"}
     await callback.message.edit_text(
-        f"Вы выбрали общение с <b>{char_labels.get(char_name, 'Катей')}</b>!\n\n"
-        f"Выберите тему для чата или задайте свою:",
+        f"Выбран персонаж: <b>{char_labels.get(char_name, 'Катя')}</b>\n\n"
+        "Теперь выбери тему для чата или задай своё название:",
         parse_mode="HTML",
         reply_markup=_katya_new_chat_topics_kb(char_name)
     )
@@ -1190,7 +1192,7 @@ async def katya_close_chat(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "💋 *целует в щёчку*\n\n"
         "Ну ладно, уходи... Но я буду скучать! Возвращайся скорее 💔\n\n"
-        "Нажми 💋 Катя чтобы снова найти меня.",
+        "Нажми 💋 ИИ-общение, чтобы снова открыть список чатов.",
         reply_markup=_katya_start_kb(),
     )
     await callback.answer()
@@ -1249,8 +1251,8 @@ async def katya_menu_message(message: Message, state: FSMContext):
         return
 
     await message.answer(
-        "💋 Выбери чат или создай новый!\n\n"
-        "Нажми 💋 Катя → 💬 Мои чаты",
+        "💋 Выбери чат или создай новый.\n\n"
+        "Открой раздел 💋 ИИ-общение → 💬 Мои чаты.",
     )
 
 

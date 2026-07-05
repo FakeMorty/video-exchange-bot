@@ -2860,7 +2860,7 @@ async def _send_lottery_menu(message_or_callback_message: Message, telegram_user
     except Exception:
         draw_line = "Следующий розыгрыш скоро стартует в live-режиме."
     await message_or_callback_message.answer(
-        "🎰 <b>Лотерея-лото</b>\n\n"
+        "🎰 <b>Секслото</b>\n\n"
         f"Раунд: <b>{state_data.get('week_key')}</b>\n"
         f"Статус: <b>{state_data.get('status')}</b>\n"
         f"Цена билета: <b>{state_data.get('ticket_price')}</b> монет\n"
