@@ -177,4 +177,40 @@ async def fix_database():
             except Exception:
                 await conn.rollback()
 
+        # Ensure lottery_bets table exists
+        if is_sqlite:
+            try:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS lottery_bets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        round_id INTEGER NOT NULL REFERENCES lottery_rounds(id),
+                        bet_type VARCHAR(50),
+                        amount NUMERIC(10,2) DEFAULT 10.0,
+                        is_settled BOOLEAN DEFAULT 0,
+                        is_won BOOLEAN DEFAULT 0
+                    )
+                """))
+                await conn.commit()
+                log_info(logger, "Created lottery_bets table")
+            except Exception:
+                await conn.rollback()
+        else:
+            try:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS lottery_bets (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        round_id INTEGER NOT NULL REFERENCES lottery_rounds(id),
+                        bet_type VARCHAR(50),
+                        amount NUMERIC(10,2) DEFAULT 10.0,
+                        is_settled BOOLEAN DEFAULT false,
+                        is_won BOOLEAN DEFAULT false
+                    )
+                """))
+                await conn.commit()
+                log_info(logger, "Created lottery_bets table")
+            except Exception:
+                await conn.rollback()
+
     log_info(logger, "DB fix complete!")

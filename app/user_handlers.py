@@ -2823,15 +2823,16 @@ def _lottery_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-async def _send_lottery_menu(message_or_callback_message: Message) -> None:
+async def _send_lottery_menu(message_or_callback_message: Message, telegram_user_id: int | None = None) -> None:
     if not ENABLE_LOTTERY:
         await message_or_callback_message.answer("⛔ Лотерея временно отключена.")
         return
     async with async_session() as session:
         round_obj = await ensure_current_lottery_round(session)
         state_data = get_lottery_state_dict(round_obj)
-        tg_user_id = getattr(getattr(message_or_callback_message, "from_user", None), "id", None)
-        user = await get_user(session, tg_user_id) if tg_user_id else None
+        if telegram_user_id is None:
+            telegram_user_id = getattr(getattr(message_or_callback_message, "from_user", None), "id", None)
+        user = await get_user(session, telegram_user_id) if telegram_user_id else None
     base = (WEBHOOK_BASE or "").rstrip("/")
     live_url = f"{base}/lottery/live" if base else ""
     try:
@@ -2856,12 +2857,12 @@ async def _send_lottery_menu(message_or_callback_message: Message) -> None:
 @router.message(F.text == BTN_LOTTERY)
 async def btn_lottery(message: Message, state: FSMContext):
     await state.clear()
-    await _send_lottery_menu(message)
+    await _send_lottery_menu(message, message.from_user.id)
 
 
 @router.callback_query(F.data == "open_lottery")
 async def open_lottery_from_games(callback: CallbackQuery):
-    await _send_lottery_menu(callback.message)
+    await _send_lottery_menu(callback.message, callback.from_user.id)
     await callback.answer()
 
 
@@ -2870,7 +2871,7 @@ async def lottery_menu(callback: CallbackQuery):
     if not ENABLE_LOTTERY:
         await callback.answer("⛔ Лотерея отключена.", show_alert=True)
         return
-    await _send_lottery_menu(callback.message)
+    await _send_lottery_menu(callback.message, callback.from_user.id)
     await callback.answer()
 
 

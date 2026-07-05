@@ -47,8 +47,8 @@ async def run_selfcheck(session: AsyncSession) -> list[CheckItem]:
     table_names = [
         "users", "videos", "balance_logs", "user_action_logs",
         "trusted_uploaders", "lootbox_opens",
-        "lottery_rounds", "lottery_tickets",
-        "video_views",
+        "lottery_rounds", "lottery_tickets", "lottery_bets",
+        "video_views", "katya_chats", "katya_messages",
     ]
     for t in table_names:
         try:
