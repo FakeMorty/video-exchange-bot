@@ -527,6 +527,32 @@ async def count_rejected_videos(session: AsyncSession) -> int:
     )).scalar_one()
 
 
+async def _get_runtime_upload_reward(session: AsyncSession, content_type: str) -> Decimal:
+    if content_type == "photo":
+        db_val = await get_setting(session, "photo_upload_reward", "")
+        fallback = PHOTO_UPLOAD_REWARD
+    else:
+        db_val = await get_setting(session, "upload_reward", "")
+        fallback = UPLOAD_REWARD
+
+    if db_val:
+        try:
+            return to_decimal(db_val)
+        except Exception:
+            pass
+    return to_decimal(fallback)
+
+
+async def calculate_upload_reward(
+    session: AsyncSession,
+    uploader_user_id: int,
+    content_type: str,
+) -> Decimal:
+    reward = await _get_runtime_upload_reward(session, content_type)
+    multiplier = await get_coin_multiplier(session, uploader_user_id)
+    return round_coin(reward * to_decimal(multiplier))
+
+
 async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
     v = (await session.execute(
         select(Video).where(Video.id == video_id)
@@ -536,13 +562,7 @@ async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
     v.status = "approved"
     uploader = await get_user_by_id(session, v.uploader_user_id)
     if uploader:
-        from app.config import PHOTO_UPLOAD_REWARD, UPLOAD_REWARD
-        is_photo = v.content_type == "photo"
-        reward_val = PHOTO_UPLOAD_REWARD if is_photo else UPLOAD_REWARD
-        # Apply coin_multiplier perk
-        multiplier = await get_coin_multiplier(session, uploader.id)
-        reward = round_coin(to_decimal(reward_val) * to_decimal(multiplier))
-        
+        reward = await calculate_upload_reward(session, uploader.id, v.content_type)
         await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
         await log_user_action(session, uploader.id, "video_approved",
                               f"id={v.id}, type={v.content_type}, reward={reward}")
@@ -628,30 +648,27 @@ async def auto_approve_if_trusted(
     session: AsyncSession,
     video_id: int,
     uploader_user_id: int,
-) -> bool:
+) -> tuple[bool, Decimal]:
     """
     Если авто-модерация включена и пользователь доверенный — сразу одобряет видео.
-    Возвращает True если видео было авто-одобрено, False если осталось pending.
+    Возвращает (было_ли_автоодобрение, фактическая_награда).
     """
     if not await is_trusted_uploader(session, uploader_user_id):
-        return False
+        return False, Decimal("0")
 
     v = (await session.execute(
         select(Video).where(Video.id == video_id, Video.status == "pending")
     )).scalar_one_or_none()
     if not v:
-        return False
+        return False, Decimal("0")
 
     v.status = "approved"
     v.rejection_reason = None
-    
-    from app.config import PHOTO_UPLOAD_REWARD, UPLOAD_REWARD
-    is_photo = v.content_type == "photo"
-    reward_val = PHOTO_UPLOAD_REWARD if is_photo else UPLOAD_REWARD
-    reward = to_decimal(reward_val)
-    
+    reward = Decimal("0")
+
     uploader = await get_user_by_id(session, uploader_user_id)
     if uploader:
+        reward = await calculate_upload_reward(session, uploader.id, v.content_type)
         uploader = await change_balance_atomic(
             session,
             uploader.id,
@@ -663,7 +680,7 @@ async def auto_approve_if_trusted(
                               f"id={v.id}, type={v.content_type}, reward={reward} (trusted)")
 
     await session.commit()
-    return True
+    return True, reward
 
 
 async def get_random_video_for_user(session: AsyncSession, user_id: int) -> "Video | None":
@@ -2348,8 +2365,8 @@ async def approve_all_pending(session: AsyncSession, admin_id: int, limit: int =
         # Начисляем награду загрузчику
         uploader = uploader_map.get(v.uploader_user_id)
         if uploader:
-            reward = to_decimal(UPLOAD_REWARD if v.content_type == "video" else PHOTO_UPLOAD_REWARD)
-            await change_balance_atomic(session, uploader.id, reward, "upload_reward", source_id=v.id)
+            reward = await calculate_upload_reward(session, uploader.id, v.content_type)
+            await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
         count += 1
     await session.commit()
     await log_user_action(session, admin_id, "approve_all", f"count={count}")

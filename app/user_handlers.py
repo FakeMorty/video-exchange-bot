@@ -1311,15 +1311,17 @@ async def handle_video_upload(message: Message):
 
         # Авто-модерация для доверенных авторов
         from app.services import auto_approve_if_trusted
-        auto_approved = await auto_approve_if_trusted(session, saved.id, user.id)
-        
+        auto_approved, reward = await auto_approve_if_trusted(session, saved.id, user.id)
+
         if auto_approved:
             xp_mult = await get_xp_multiplier(session, user.id)
             user.xp += int(XP_PER_UPLOAD * xp_mult)
             await _level_up_check(session, user, message)
             await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
-            await message.answer(f"✅ Видео #{saved.id} автоматически одобрено! (доверенный автор)\n+{UPLOAD_REWARD:.0f} монет")
+            await message.answer(
+                f"✅ Видео #{saved.id} автоматически одобрено! (доверенный автор)\n+{reward:.0f} монет"
+            )
             return
 
         xp_mult = await get_xp_multiplier(session, user.id)
@@ -1369,15 +1371,17 @@ async def handle_photo_upload(message: Message):
 
         # Авто-модерация для доверенных авторов
         from app.services import auto_approve_if_trusted
-        auto_approved = await auto_approve_if_trusted(session, saved.id, user.id)
-        
+        auto_approved, reward = await auto_approve_if_trusted(session, saved.id, user.id)
+
         if auto_approved:
             xp_mult = await get_xp_multiplier(session, user.id)
             user.xp += int(XP_PER_UPLOAD * xp_mult)
             await _level_up_check(session, user, message)
             await session.commit()
             await _update_quest_progress(session, user.id, "upload", 1)
-            await message.answer(f"✅ Фото #{saved.id} автоматически одобрено! (доверенный автор)\n+{PHOTO_UPLOAD_REWARD:.0f} монет")
+            await message.answer(
+                f"✅ Фото #{saved.id} автоматически одобрено! (доверенный автор)\n+{reward:.0f} монет"
+            )
             return
 
         xp_mult = await get_xp_multiplier(session, user.id)
