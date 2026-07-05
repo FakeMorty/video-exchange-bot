@@ -1824,8 +1824,27 @@ async def api_user_timezone(request: web.Request) -> web.Response:
 
 async def on_startup(app):
     bot = app['bot']
-    await init_db()
-    
+
+    from app.config import DATABASE_URL
+    is_sqlite = (not DATABASE_URL) or "sqlite" in DATABASE_URL
+
+    try:
+        if is_sqlite:
+            # Для SQLite поднимаем схему напрямую из ORM — это dev/test путь.
+            await init_db()
+            log_info(logger, "SQLite detected. ORM schema initialized.")
+        else:
+            # Для Postgres/production сначала прогоняем Alembic, чтобы не создавать
+            # таблицы в обход миграций и не ломать историю версий.
+            def run_migrations():
+                alembic_cfg = Config("alembic.ini")
+                command.upgrade(alembic_cfg, "head")
+
+            await asyncio.to_thread(run_migrations)
+            log_info(logger, "Alembic migrations synced")
+    except Exception as e:
+        log_error(logger, f"Migration sync error: {e}")
+
     # DB Maintenance
     from app.utils.db_fix import fix_database
     try:
@@ -1833,21 +1852,6 @@ async def on_startup(app):
         log_info(logger, "Database maintenance complete")
     except Exception as e:
         log_error(logger, f"Database maintenance error: {e}")
-
-    try:
-        from app.config import DATABASE_URL
-        is_sqlite = (not DATABASE_URL) or "sqlite" in DATABASE_URL
-        if is_sqlite:
-            log_info(logger, "SQLite detected. Skipping Alembic migration sync.")
-        else:
-            def run_migrations():
-                alembic_cfg = Config("alembic.ini")
-                command.upgrade(alembic_cfg, "head")
-            
-            await asyncio.to_thread(run_migrations)
-            log_info(logger, "Alembic migrations synced")
-    except Exception as e:
-        log_error(logger, f"Migration sync error: {e}")
         
     await _notify_admins_started(bot)
 
@@ -1947,11 +1951,10 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
     while not stop_event.is_set():
         try:
             now_utc = datetime.now(timezone.utc)
-            now_msk = now_utc + timedelta(hours=3)
-            
+
             async with async_session() as session:
                 from app.services import get_setting
-                
+
                 db_day = await get_setting(session, "weekly_promo_day", "")
                 db_hour = await get_setting(session, "weekly_promo_hour", "")
                 db_amount = await get_setting(session, "weekly_promo_amount", "")
@@ -1960,9 +1963,10 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
                 p_hour = int(db_hour) if db_hour.isdigit() else WEEKLY_PROMO_HOUR
                 p_amount = float(db_amount) if db_amount else WEEKLY_PROMO_AMOUNT
                 p_uses = 999999
-                
-                if now_msk.weekday() == p_day and now_msk.hour == p_hour:
-                    current_week = now_msk.isocalendar()[1]
+
+                # Настройка часа в админке подписана как UTC — соблюдаем это в рантайме.
+                if now_utc.weekday() == p_day and now_utc.hour == p_hour:
+                    current_week = now_utc.isocalendar()[1]
                     if last_run_week != current_week:
                         last_run_week = current_week
                         

@@ -86,7 +86,7 @@ from app.services import (
     check_daily_photo_limit,
     create_promocode, activate_promocode,
     calculate_promocode_star_cost,
-    create_feedback,
+    create_feedback, process_referral_reward,
     ensure_current_lottery_round, buy_lottery_ticket,
     get_latest_lottery_round, get_user_lottery_tickets, get_lottery_state_dict,
     is_admin_or_super, is_admin_free_eligible,
@@ -901,10 +901,13 @@ async def watch_video_content(callback: CallbackQuery):
                     user = await get_user(session, callback.from_user.id)
                     await _level_up_check(session, user, callback)
                     await _update_quest_progress(session, user.id, "watch", 1)
-                    
+
+                    if user.referred_by_user_id:
+                        await process_referral_reward(session, user.referred_by_user_id)
+
                     # Увеличиваем счётчик просмотров и проверяем нужно ли показать рекламу
-                    count = await increment_video_watched(session, user.id)
-                    
+                    await increment_video_watched(session, user.id)
+
                     if await should_show_ad_after_video(session, user.id):
                         await _show_ad_or_event(callback, session, user)
                 except Exception:
@@ -1038,6 +1041,8 @@ async def watch_photo_content(callback: CallbackQuery):
                 # Фото успешно отправлено — пост-обработка в фоне
                 try:
                     await record_photo_view(session, user.id, photo.id)
+                    if user.referred_by_user_id:
+                        await process_referral_reward(session, user.referred_by_user_id)
                 except Exception:
                     logger.exception("Post-photo processing failed (non-critical)")
                 return
@@ -2442,9 +2447,7 @@ async def my_rentals(callback: CallbackQuery):
 @router.message(F.text == BTN_GAMES)
 async def btn_games(message: Message, state: FSMContext):
     await state.clear()
-    from app.config import GAME_SESSION_COST
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    
+
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -2452,48 +2455,23 @@ async def btn_games(message: Message, state: FSMContext):
         if not await require_nickname(message, user):
             return
 
-        can_play = await can_play_free_game(session, user.id)
-        if can_play:
-            await message.answer(
-                "🎮 <b>Игровой центр</b>\n\nВыберите игру:",
-                parse_mode="HTML",
-                reply_markup=games_menu_keyboard()
-            )
-        else:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=f"💰 Продлить за {GAME_SESSION_COST} монет",
-                    callback_data="game_pay_session"
-                )]
-            ])
-            await message.answer(
-                "⏳ Бесплатные игры на сегодня закончились. Продлите сессию:",
-                reply_markup=kb
-            )
+    await message.answer(
+        "🎮 <b>Игровой центр</b>\n\nВыберите раздел:",
+        parse_mode="HTML",
+        reply_markup=games_menu_keyboard()
+    )
 
 
 @router.callback_query(F.data == "game_pay_session")
 async def game_pay_session(callback: CallbackQuery):
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-        # Админы получают новую бесплатную сессию без списания монет
-        if is_admin_or_super(callback.from_user.id, user):
-            gs = await get_or_create_game_session(session, user.id)
-            gs.games_played = 0
-            gs.window_start = utc_now()
-            gs.paid_at = utc_now()
-            await session.commit()
-            await callback.answer("✅ Сессия продлена (админ).", show_alert=True)
-            return
-        ok = await pay_for_game_session(session, user.id)
-        if ok:
-            await callback.answer("✅ Сессия продлена! Ещё 5 игр.", show_alert=True)
-        else:
-            await callback.answer("❌ Недостаточно монет.", show_alert=True)
-    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer(
+        "Продление игровой сессии больше не требуется: в меню остались только Секслото и лутбоксы.",
+        show_alert=True,
+    )
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data == "dice_menu")
