@@ -652,11 +652,16 @@ async def auto_approve_if_trusted(
     
     uploader = await get_user_by_id(session, uploader_user_id)
     if uploader:
-        await log_balance_change(session, uploader, reward, "upload_approved", source_id=v.id)
-        uploader.balance += reward
+        uploader = await change_balance_atomic(
+            session,
+            uploader.id,
+            reward,
+            "upload_approved",
+            source_id=v.id,
+        ) or uploader
         await log_user_action(session, uploader.id, "video_auto_approved",
                               f"id={v.id}, type={v.content_type}, reward={reward} (trusted)")
-    
+
     await session.commit()
     return True
 
@@ -722,15 +727,14 @@ async def refund_watch_and_unview(
         return
 
     cost = to_decimal(cost)
-    await log_balance_change(
+    await change_balance_atomic(
         session,
-        user,
+        user.id,
         cost,
         "watch_refund",
         source_id=video_id,
         details=reason,
     )
-    user.balance += cost
     await session.execute(
         delete(VideoView).where(VideoView.user_id == user_id, VideoView.video_id == video_id)
     )

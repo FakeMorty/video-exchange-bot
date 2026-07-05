@@ -79,7 +79,7 @@ from app.services import (
     get_active_offers, get_rentable_offers, get_offer_by_id,
     start_offer_participation, verify_offer_subscription,
     create_offer_rental, get_user_rentals,
-    log_user_action, to_decimal,
+    change_balance_atomic, log_user_action, to_decimal,
     set_display_name, get_display_name, get_styled_display_name, log_balance_change,
     can_play_free_game, pay_for_game_session, increment_game_played,
     get_or_create_game_session,
@@ -1501,9 +1501,13 @@ async def cb_buy_pack(callback: CallbackQuery):
             bonus = to_decimal(FIRST_PURCHASE_DAILY_BONUS)
             total = to_decimal(coins) + bonus
             
-            await log_balance_change(session, user, total, "purchase_admin_free",
-                                     details=f"ADMIN_FREE: {pack['title']} + bonus")
-            user.balance += total
+            user = await change_balance_atomic(
+                session,
+                user.id,
+                total,
+                "purchase_admin_free",
+                details=f"ADMIN_FREE: {pack['title']} + bonus"
+            ) or user
             await log_user_action(session, user.id, "admin_free_purchase",
                                   f"pack={pack_key}, coins={total}")
             await session.commit()
@@ -1560,9 +1564,13 @@ async def process_custom_stars(message: Message, state: FSMContext):
             bonus = to_decimal(FIRST_PURCHASE_DAILY_BONUS)
             total = to_decimal(coins) + bonus
 
-            await log_balance_change(session, user, total, "purchase_admin_free",
-                                     details=f"ADMIN_FREE: custom {coins} монет + bonus")
-            user.balance += total
+            user = await change_balance_atomic(
+                session,
+                user.id,
+                total,
+                "purchase_admin_free",
+                details=f"ADMIN_FREE: custom {coins} монет + bonus"
+            ) or user
             await log_user_action(session, user.id, "admin_free_purchase",
                                   f"custom_stars={stars}, coins={total}")
             await session.commit()
@@ -1892,9 +1900,13 @@ async def lootbox_buy(callback: CallbackQuery):
             if admin_free:
                 # Бесплатный лутбокс для админа
                 reward, rarity = _roll_lootbox_reward_coins()
-                await log_balance_change(session, user, reward, "lootbox_reward_admin_free",
-                                         details=f"ADMIN_FREE rarity={rarity}")
-                user.balance += reward
+                user = await change_balance_atomic(
+                    session,
+                    user.id,
+                    reward,
+                    "lootbox_reward_admin_free",
+                    details=f"ADMIN_FREE rarity={rarity}"
+                ) or user
                 session.add(LootboxOpen(
                     user_id=user.id, payment_payload=None, pay_currency="coins",
                     price_coins=Decimal("0"), price_stars=0, reward_coins=reward, rarity=rarity,
@@ -1940,9 +1952,13 @@ async def lootbox_buy(callback: CallbackQuery):
             if await is_admin_free_eligible(session, callback.from_user.id, user):
                 from app.services import _roll_lootbox_reward_coins
                 reward, rarity = _roll_lootbox_reward_coins()
-                await log_balance_change(session, user, reward, "lootbox_reward_admin_free",
-                                         details=f"ADMIN_FREE stars rarity={rarity}")
-                user.balance += reward
+                user = await change_balance_atomic(
+                    session,
+                    user.id,
+                    reward,
+                    "lootbox_reward_admin_free",
+                    details=f"ADMIN_FREE stars rarity={rarity}"
+                ) or user
                 session.add(LootboxOpen(
                     user_id=user.id, payment_payload=payload, pay_currency="stars",
                     price_coins=Decimal("0"), price_stars=star_price, reward_coins=reward, rarity=rarity,
@@ -3188,15 +3204,13 @@ async def promo_activate_code(message: Message, state: FSMContext):
             reward_multiplier = random.randint(1, 20)
             reward = Decimal(str(reward_multiplier * 10))
             
-            from app.services import log_balance_change
-            await log_balance_change(
+            user = await change_balance_atomic(
                 session,
-                user,
+                user.id,
                 reward,
                 "freebie_reward",
                 details=f"word={current_word}; week={current_week}"
-            )
-            user.balance += reward
+            ) or user
             user.last_freebie_week = current_week
             user.last_freebie_year = current_year
             await session.commit()

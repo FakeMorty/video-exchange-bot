@@ -1,5 +1,9 @@
 from app.models import LotteryTicket, User, utc_now, LotteryRound
 import os
+import json
+import hmac
+import hashlib
+import urllib.parse
 from sqlalchemy import func
 from app.models import Video
 from sqlalchemy import select
@@ -45,6 +49,48 @@ from app.services import (
 
 setup_logging()
 logger = get_logger(__name__)
+
+
+def _validate_telegram_webapp_init_data(init_data: str) -> int | None:
+    """Проверяет Telegram WebApp initData и возвращает telegram user id."""
+    if not init_data or not BOT_TOKEN:
+        return None
+
+    try:
+        pairs = urllib.parse.parse_qsl(init_data, keep_blank_values=True)
+        data = dict(pairs)
+        received_hash = data.pop("hash", "")
+        if not received_hash:
+            return None
+
+        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calculated_hash, received_hash):
+            return None
+
+        auth_date = int(data.get("auth_date", "0") or 0)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        if auth_date and abs(now_ts - auth_date) > 24 * 60 * 60:
+            return None
+
+        user_raw = data.get("user")
+        if not user_raw:
+            return None
+        user_data = json.loads(user_raw)
+        user_id = int(user_data.get("id", 0))
+        return user_id or None
+    except Exception:
+        return None
+
+
+def _get_webapp_user_id(request: web.Request, payload: dict | None = None) -> int | None:
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    if not init_data and payload:
+        init_data = str(payload.get("init_data", "") or "")
+    if not init_data:
+        init_data = request.query.get("init_data", "")
+    return _validate_telegram_webapp_init_data(init_data)
 
 
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
@@ -802,11 +848,16 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     window.Telegram.WebApp.ready();
     window.Telegram.WebApp.expand();
 
-    // Получаем ID пользователя Telegram
+    // Telegram WebApp auth context
     const tgUser = window.Telegram.WebApp.initDataUnsafe.user;
-    const userId = tgUser ? tgUser.id : 999888777; // дефолт для тестов
+    const initData = window.Telegram.WebApp.initData || '';
+    const userId = tgUser ? tgUser.id : 0;
     const userName = tgUser ? (tgUser.first_name + (tgUser.last_name ? ' ' + tgUser.last_name : '')) : 'Гость';
-    
+
+    function authHeaders(extra = {}) {
+        return Object.assign({'X-Telegram-Init-Data': initData}, extra);
+    }
+
     document.getElementById('user-name').innerText = userName;
 
     let lastRoundId = null;
@@ -1078,8 +1129,8 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
             if (tz) {
                 await fetch('/api/user/timezone', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({user_id: userId, timezone: tz})
+                    headers: authHeaders({'Content-Type': 'application/json'}),
+                    body: JSON.stringify({timezone: tz})
                 });
             }
         } catch (e) {
@@ -1090,7 +1141,9 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     sendTimezone();
     async function loadUserBalance() {
         try {
-            const res = await fetch('/api/user/balance?user_id=' + userId);
+            const res = await fetch('/api/user/balance', {
+                headers: authHeaders()
+            });
             if (res.ok) {
                 const data = await res.json();
                 document.getElementById('user-balance').innerText = data.balance.toFixed(2);
@@ -1105,8 +1158,8 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
         try {
             const res = await fetch('/api/lottery/buy', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: userId})
+                headers: authHeaders({'Content-Type': 'application/json'}),
+                body: JSON.stringify({})
             });
             const data = await res.json();
             if (res.ok && data.ok) {
@@ -1135,8 +1188,8 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
         try {
             const res = await fetch('/api/lottery/buy-coins', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: userId, package_id: packageId})
+                headers: authHeaders({'Content-Type': 'application/json'}),
+                body: JSON.stringify({package_id: packageId})
             });
             const data = await res.json();
             if (res.ok && data.ok) {
@@ -1209,8 +1262,8 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
                 try {
                     const res = await fetch('/api/lottery/place-bet', {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({user_id: userId, bet_type: betType})
+                        headers: authHeaders({'Content-Type': 'application/json'}),
+                        body: JSON.stringify({bet_type: betType})
                     });
                     const data = await res.json();
                     if (res.ok && data.ok) {
@@ -1681,15 +1734,15 @@ async def auto_broadcast_worker(bot):
 # WEB APP API HANDLERS
 # =========================
 async def api_user_balance(request: web.Request) -> web.Response:
-    user_id = request.query.get("user_id")
-    if not user_id:
-        return web.json_response({"ok": False, "error": "user_id is required"})
     try:
-        user_id = int(user_id)
+        telegram_user_id = _get_webapp_user_id(request)
+        if not telegram_user_id:
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
         from app.services import get_user
         from app.db import async_session
         async with async_session() as session:
-            user = await get_user(session, user_id)
+            user = await get_user(session, telegram_user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
             return web.json_response({"ok": True, "balance": float(user.balance)})
@@ -1699,11 +1752,14 @@ async def api_user_balance(request: web.Request) -> web.Response:
 async def api_lottery_buy(request: web.Request) -> web.Response:
     try:
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
+        telegram_user_id = _get_webapp_user_id(request, data)
+        if not telegram_user_id:
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
         from app.services import get_user, buy_lottery_ticket
         from app.db import async_session
         async with async_session() as session:
-            user = await get_user(session, user_id)
+            user = await get_user(session, telegram_user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
             ticket, error = await buy_lottery_ticket(session, user)
@@ -1722,7 +1778,10 @@ async def api_lottery_buy(request: web.Request) -> web.Response:
 async def api_lottery_buy_coins(request: web.Request) -> web.Response:
     try:
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
+        telegram_user_id = _get_webapp_user_id(request, data)
+        if not telegram_user_id:
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
         pack_key = data.get("package_id", "")
         from app.services import get_user, create_payment
         from app.db import async_session
@@ -1730,14 +1789,14 @@ async def api_lottery_buy_coins(request: web.Request) -> web.Response:
         pack = STARS_PACKAGES.get(pack_key)
         if not pack:
             return web.json_response({"ok": False, "error": "Unknown package"})
-        
+
         async with async_session() as session:
-            user = await get_user(session, user_id)
+            user = await get_user(session, telegram_user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
-            
+
             payment = await create_payment(session, user.id, pack_key)
-            
+
             from aiogram.types import LabeledPrice
             bot = request.app['bot']
             link = await bot.create_invoice_link(
@@ -1765,7 +1824,10 @@ async def api_lottery_offers(request: web.Request) -> web.Response:
 async def api_lottery_place_bet(request: web.Request) -> web.Response:
     try:
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
+        telegram_user_id = _get_webapp_user_id(request, data)
+        if not telegram_user_id:
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
         bet_type = data.get("bet_type", "")
         allowed_bets = {"first_even", "first_odd", "last_even", "last_odd"}
         if bet_type not in allowed_bets:
@@ -1778,7 +1840,7 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
         from app.db import async_session
         from app.models import LotteryBet
         async with async_session() as session:
-            user = await get_user(session, user_id)
+            user = await get_user(session, telegram_user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
             if user.balance < bet_amount:
@@ -1805,15 +1867,15 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
 async def api_user_timezone(request: web.Request) -> web.Response:
     try:
         data = await request.json()
-        user_id = int(data.get("user_id", 0))
+        telegram_user_id = _get_webapp_user_id(request, data)
         timezone = data.get("timezone", "")
-        if not user_id or not timezone:
-            return web.json_response({"ok": False})
-        
+        if not telegram_user_id or not timezone:
+            return web.json_response({"ok": False}, status=401)
+
         from app.services import get_user
         from app.db import async_session
         async with async_session() as session:
-            user = await get_user(session, user_id)
+            user = await get_user(session, telegram_user_id)
             if user:
                 user.timezone = timezone
                 await session.commit()

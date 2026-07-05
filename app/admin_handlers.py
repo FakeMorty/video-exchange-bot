@@ -982,18 +982,15 @@ async def cb_admin_user_give_coins_exec(callback: CallbackQuery, state: FSMConte
             await callback.answer("Пользователь не найден.", show_alert=True)
             return
             
-        from app.services import log_balance_change
-        await log_balance_change(
+        from app.services import change_balance_atomic
+        user = await change_balance_atomic(
             session,
-            user,
+            user.id,
             amount,
             "admin_balance",
             admin_id=callback.from_user.id,
             details="Быстрые кнопки баланса"
-        )
-        if user.balance is None:
-            user.balance = Decimal("0")
-        user.balance += amount
+        ) or user
         await session.commit()
         
     await callback.answer(f"✅ Успешно { 'начислено' if amount > 0 else 'списано' } {abs(amount)} монет!", show_alert=True)
@@ -1025,18 +1022,15 @@ async def process_admin_user_give_coins(message: Message, state: FSMContext):
                 await state.clear()
                 return
                 
-            from app.services import log_balance_change
-            await log_balance_change(
+            from app.services import change_balance_atomic
+            user = await change_balance_atomic(
                 session,
-                user,
+                user.id,
                 amount,
                 "admin_balance",
                 admin_id=message.from_user.id,
-                details=f"Изменено администратором"
-            )
-            if user.balance is None:
-                user.balance = Decimal("0")
-            user.balance += amount
+                details="Изменено администратором"
+            ) or user
             await session.commit()
             
         status_msg = "начислено" if amount >= 0 else "списано"
