@@ -287,22 +287,38 @@ def _check_cooldown(user_id: int) -> tuple[bool, int]:
     elapsed = now - last
     if elapsed < AI_ASSISTANT_COOLDOWN_SEC:
         return False, AI_ASSISTANT_COOLDOWN_SEC - int(elapsed)
-    _user_last_ts[user_id] = now
     return True, 0
 
 
-def _check_daily_limit(user_id: int) -> bool:
-    """True если дневной лимит не исчерпан."""
+def _consume_cooldown(user_id: int) -> None:
+    _user_last_ts[user_id] = time.monotonic()
+
+
+def _reset_daily_limit_if_needed(user_id: int) -> None:
     now = time.monotonic()
     reset_ts = _user_daily_reset.get(user_id, 0)
     if now - reset_ts > 86400:
         _user_daily_count[user_id] = 0
         _user_daily_reset[user_id] = now
+
+
+def _check_daily_limit(user_id: int) -> bool:
+    """True если дневной лимит не исчерпан."""
+    _reset_daily_limit_if_needed(user_id)
     count = _user_daily_count.get(user_id, 0)
-    if count >= AI_ASSISTANT_DAILY_LIMIT:
-        return False
-    _user_daily_count[user_id] = count + 1
-    return True
+    return count < AI_ASSISTANT_DAILY_LIMIT
+
+
+def _consume_daily_limit(user_id: int) -> None:
+    _reset_daily_limit_if_needed(user_id)
+    _user_daily_count[user_id] = _user_daily_count.get(user_id, 0) + 1
+
+
+def _release_daily_limit(user_id: int) -> None:
+    _reset_daily_limit_if_needed(user_id)
+    current = _user_daily_count.get(user_id, 0)
+    if current > 0:
+        _user_daily_count[user_id] = current - 1
 
 
 # ══════════════════════════════════════════════════
@@ -963,6 +979,15 @@ async def katya_chat_message(message: Message, state: FSMContext):
         )
         return
 
+    user_text = message.text.strip()
+    if not user_text:
+        return
+
+    # Ограничение длины
+    if len(user_text) > 2000:
+        await message.answer("✂️ Слишком длинное! *зевает* Я на ЕГЭ меньше пишу, чем ты тут 😏 Напиши короче!")
+        return
+
     # Проверка кулдауна
     ok, remaining = _check_cooldown(user_id)
     if not ok:
@@ -978,14 +1003,8 @@ async def katya_chat_message(message: Message, state: FSMContext):
         )
         return
 
-    user_text = message.text.strip()
-    if not user_text:
-        return
-
-    # Ограничение длины
-    if len(user_text) > 2000:
-        await message.answer("✂️ Слишком длинное! *зевает* Я на ЕГЭ меньше пишу, чем ты тут 😏 Напиши короче!")
-        return
+    _consume_cooldown(user_id)
+    _consume_daily_limit(user_id)
 
     # Получаем chat_id из state
     chat_id = data.get("katya_chat_id")
@@ -1039,6 +1058,9 @@ async def katya_chat_message(message: Message, state: FSMContext):
     response_text = await call_katya(history, system_prompt)
 
     if response_text is None:
+        # Внешняя ошибка не должна съедать дневной лимит.
+        _release_daily_limit(user_id)
+
         # Возвращаем монеты при ошибке
         if not admin_free:
             async with async_session() as session:

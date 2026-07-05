@@ -3,8 +3,8 @@
 Полностью переработанная версия без аренды слотов.
 """
 
-from datetime import datetime, timezone, timedelta
-from decimal import Decimal
+from datetime import timedelta
+from decimal import Decimal, ROUND_CEILING
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -20,9 +20,17 @@ from app.services import (
     get_user, change_balance_atomic, 
     ensure_payment_pending
 )
-from app.config import ADMINS, STARS_TO_COINS_RATE
+from app.config import STARS_TO_COINS_RATE
 
 router = Router()
+
+
+def _calc_offer_stars_price(cost: Decimal) -> int:
+    """Конвертация цены размещения из монет в Stars без занижения стоимости."""
+    if STARS_TO_COINS_RATE <= 0:
+        return 1
+    stars = (Decimal(cost) / Decimal(str(STARS_TO_COINS_RATE))).quantize(Decimal("1"), rounding=ROUND_CEILING)
+    return max(1, int(stars))
 
 
 class UserOfferState(StatesGroup):
@@ -272,7 +280,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             await session.flush()
 
             payload = f"user_offer_{offer.id}"
-            stars_price = max(1, int(cost / STARS_TO_COINS_RATE))
+            stars_price = _calc_offer_stars_price(cost)
             await ensure_payment_pending(
                 session,
                 user_id=user.id,

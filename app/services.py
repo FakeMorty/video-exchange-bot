@@ -849,13 +849,21 @@ async def count_referrals(session: AsyncSession, user_id: int) -> int:
 
 
 async def process_referral_reward(session: AsyncSession, referrer_id: int):
-    """Начисляем награду, если реферал посмотрел 5 видео."""
+    """Начисляем награду, если реферал посмотрел 5 видео.
+
+    Считаются именно просмотры видео, а не фото и не любые записи VideoView.
+    """
     refs = (await session.execute(
         select(User).where(User.referred_by_user_id == referrer_id)
     )).scalars().all()
     for ref in refs:
         views = (await session.execute(
-            select(func.count(VideoView.id)).where(VideoView.user_id == ref.id)
+            select(func.count(VideoView.id))
+            .join(Video, Video.id == VideoView.video_id)
+            .where(
+                VideoView.user_id == ref.id,
+                Video.content_type == "video",
+            )
         )).scalar_one()
         if views >= 5:
             inviter = await get_user_by_id(session, referrer_id)
@@ -869,8 +877,13 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
                 )).scalar_one_or_none()
                 if not already:
                     reward = to_decimal(REFERRAL_REWARD_INVITER)
-                    await change_balance_atomic(session, inviter.id, reward, "referral_reward",
-                                                 details=f"ref_user_id={ref.id}")
+                    await change_balance_atomic(
+                        session,
+                        inviter.id,
+                        reward,
+                        "referral_reward",
+                        details=f"ref_user_id={ref.id}",
+                    )
                     inviter.referral_earnings += reward
                     await session.commit()
 
