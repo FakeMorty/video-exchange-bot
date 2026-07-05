@@ -401,29 +401,48 @@ async def get_or_create_user(
         return user, False
 
     referred_by = None
+    inviter = None
     starting_bonus = to_decimal(STARTING_BALANCE)
+    referral_new_user_bonus = Decimal("0")
     if referral_code:
         inviter = (await session.execute(
             select(User).where(User.referral_code == referral_code)
         )).scalar_one_or_none()
         if inviter and inviter.telegram_id != telegram_id:
             referred_by = inviter.id
+            referral_new_user_bonus = to_decimal(REFERRAL_REWARD_NEW_USER)
 
     created = False
     try:
+        # Создаём пользователя с нулевым балансом и начисляем стартовые деньги отдельно,
+        # чтобы не было двойного начисления при логировании регистрации.
         user = User(
             telegram_id=telegram_id,
             username=username,
             first_name=first_name,
             last_name=last_name,
-            balance=starting_bonus,
+            balance=Decimal("0"),
             referral_code=uuid.uuid4().hex[:8],
             referred_by_user_id=referred_by,
         )
         session.add(user)
         await session.flush()
-        await change_balance_atomic(session, user.id, starting_bonus, "registration",
-                                    details=f"Starting balance. Referred by: {referred_by}")
+
+        total_start_credit = starting_bonus + referral_new_user_bonus
+        await change_balance_atomic(
+            session,
+            user.id,
+            total_start_credit,
+            "registration",
+            details=(
+                f"Starting balance={starting_bonus}; "
+                f"referral_bonus={referral_new_user_bonus}; referred_by={referred_by}"
+            ),
+        )
+
+        if inviter is not None:
+            inviter.referrals_count = (inviter.referrals_count or 0) + 1
+
         await session.commit()
         created = True
     except Exception:
@@ -431,9 +450,13 @@ async def get_or_create_user(
         user = await get_user(session, telegram_id)
         if not user:
             raise
-    
-    await log_user_action(session, user.id, "registration",
-                          f"tg_id={telegram_id}, referred_by={referred_by}")
+
+    await log_user_action(
+        session,
+        user.id,
+        "registration",
+        f"tg_id={telegram_id}, referred_by={referred_by}",
+    )
     return user, created
 
 
@@ -1707,35 +1730,39 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
             continue
         group_total = round_coin(pool * share)
         per_ticket = round_coin(group_total / len(winner_group))
-    for t in winner_group:
-        user = await get_user_by_id(session, t.user_id)
-        if not user or t.reward_paid:
-            continue
-        await change_balance_atomic(
-            session,
-            user.id,
-            per_ticket,
-            source,
-            source_id=round_obj.id,
-            details=f"ticket_id={t.id}; matched={t.matched_count}",
-        )
-        t.reward_paid = True
-        paid_total += per_ticket
+        for t in winner_group:
+            user = await get_user_by_id(session, t.user_id)
+            if not user or t.reward_paid:
+                continue
+            await change_balance_atomic(
+                session,
+                user.id,
+                per_ticket,
+                source,
+                source_id=round_obj.id,
+                details=f"ticket_id={t.id}; matched={t.matched_count}",
+            )
+            t.reward_paid = True
+            paid_total += per_ticket
 
-    # Рассчитываем ставки на первый/последний бочонок Секслото
+    # Рассчитываем ставки на первый/последний бочонок Секслото.
+    # Берём данные напрямую из drawn_numbers текущего раунда,
+    # чтобы settlement не зависел от сторонних runtime-настроек.
     try:
-        first_str = await get_setting(session, f"lottery_first_drawn_{round_obj.id}", "")
-        last_str = await get_setting(session, f"lottery_last_drawn_{round_obj.id}", "")
-        if first_str and last_str:
-            first_num = int(first_str)
-            last_num = int(last_str)
-            
+        drawn_list = _deserialize_numbers(round_obj.drawn_numbers)
+        if drawn_list:
+            first_num = drawn_list[0]
+            last_num = drawn_list[-1]
+
             from app.models import LotteryBet
             bets_result = await session.execute(
-                select(LotteryBet).where(LotteryBet.round_id == round_obj.id, LotteryBet.is_settled == False)
+                select(LotteryBet).where(
+                    LotteryBet.round_id == round_obj.id,
+                    LotteryBet.is_settled == False,
+                )
             )
             bets = bets_result.scalars().all()
-            
+
             for bet in bets:
                 is_won = False
                 if bet.bet_type == "first_even" and first_num % 2 == 0:
@@ -1746,10 +1773,10 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
                     is_won = True
                 elif bet.bet_type == "last_odd" and last_num % 2 != 0:
                     is_won = True
-                    
+
                 bet.is_settled = True
                 bet.is_won = is_won
-                
+
                 if is_won:
                     win_amount = bet.amount * to_decimal(2.0)
                     user = await get_user_by_id(session, bet.user_id)
