@@ -1577,6 +1577,18 @@ async def _mod_notification_loop(bot):
             await asyncio.sleep(300)
 
 
+async def _cancel_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
+
 async def video_cache_cleanup_worker(stop_event: asyncio.Event):
     """Периодически очищает кэш видео, если он стал слишком большим."""
     cache_dir = "video_cache"
@@ -1835,77 +1847,7 @@ async def on_startup(app):
     except Exception as e:
         log_error(logger, f"Katya sticker load error: {e}")
 
-    # Фоновая задача: агрегированные уведомления модерации
-    asyncio.create_task(_mod_notification_loop(bot))
-    asyncio.create_task(auto_broadcast_worker(bot))
     log_info(logger, "Service initialized")
-
-
-# =========================
-# WEB APP API HANDLERS
-# =========================
-    app.router.add_post("/api/user/timezone", api_user_timezone)
-    app.router.add_post("/api/lottery/buy", api_lottery_buy)
-    app.router.add_post("/api/lottery/buy-coins", api_lottery_buy_coins)
-    app.router.add_get("/api/lottery/offers", api_lottery_offers)
-    app.router.add_post("/api/lottery/place-bet", api_lottery_place_bet)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
-    await site.start()
-
-    try:
-        log_info(logger, "Polling started")
-        stop_event = asyncio.Event()
-        audit_task = None
-        lottery_task = None
-        if ENABLE_SUBSCRIPTION_AUDIT:
-            audit_task = asyncio.create_task(subscription_audit_worker(bot, stop_event))
-
-            log_info(logger, "Subscription audit worker enabled")
-
-        else:
-            log_info(logger, "Subscription audit worker disabled by config")
-        if ENABLE_LOTTERY:
-            lottery_task = asyncio.create_task(lottery_worker(bot, stop_event))
-            log_info(logger, "Lottery worker enabled")
-        
-        cache_task = asyncio.create_task(video_cache_cleanup_worker(stop_event))
-        retention_task = asyncio.create_task(retention_worker(bot, stop_event))
-        promo_task = asyncio.create_task(weekly_promo_worker(bot, stop_event))
-
-        log_info(logger, "Video cache cleanup worker enabled")
-        
-        await dp.start_polling(bot)
-    finally:
-        stop_event.set()
-        if audit_task is not None:
-            audit_task.cancel()
-            try:
-                await audit_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        if lottery_task is not None:
-            lottery_task.cancel()
-            try:
-                await lottery_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        if cache_task is not None:
-            cache_task.cancel()
-            try:
-                await cache_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        await runner.cleanup()
-        await bot.session.close()
-        await engine.dispose()
 
 
 
@@ -2103,28 +2045,46 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
     await site.start()
 
+    stop_event = asyncio.Event()
+    audit_task = None
+    lottery_task = None
+    retention_task = None
+    promo_task = None
+    cache_task = None
+    mod_notifications_task = None
+    auto_broadcast_task = None
+
     try:
         log_info(logger, "Polling started")
-        stop_event = asyncio.Event()
-        audit_task = None
-        lottery_task = None
+
+        mod_notifications_task = asyncio.create_task(_mod_notification_loop(bot))
+        auto_broadcast_task = asyncio.create_task(auto_broadcast_worker(bot))
+
         if ENABLE_SUBSCRIPTION_AUDIT:
             audit_task = asyncio.create_task(subscription_audit_worker(bot, stop_event))
             log_info(logger, "Subscription audit worker enabled")
-        
+
         retention_task = asyncio.create_task(retention_worker(bot, stop_event))
         promo_task = asyncio.create_task(weekly_promo_worker(bot, stop_event))
-        
+
         if ENABLE_LOTTERY:
             lottery_task = asyncio.create_task(lottery_worker(bot, stop_event))
             log_info(logger, "Lottery worker enabled")
-        
+
         cache_task = asyncio.create_task(video_cache_cleanup_worker(stop_event))
         log_info(logger, "Video cache cleanup worker enabled")
-        
+
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         stop_event.set()
+        await _cancel_task(audit_task)
+        await _cancel_task(lottery_task)
+        await _cancel_task(cache_task)
+        await _cancel_task(retention_task)
+        await _cancel_task(promo_task)
+        await _cancel_task(mod_notifications_task)
+        await _cancel_task(auto_broadcast_task)
+        await runner.cleanup()
         await bot.session.close()
         await engine.dispose()
 
