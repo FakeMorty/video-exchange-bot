@@ -1771,10 +1771,8 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
         if bet_type not in allowed_bets:
             return web.json_response({"ok": False, "error": "Неверный тип ставки"})
 
-        target_number = 0
-
         from app.services import get_user, ensure_current_lottery_round, change_balance_atomic, to_decimal
-         
+
         # В Mini App ставка фиксированная: 10 монет.
         bet_amount = to_decimal(data.get("bet_amount", 10) or 10)
         from app.db import async_session
@@ -1795,7 +1793,6 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
                 user_id=user.id,
                 round_id=round_obj.id,
                 bet_type=bet_type,
-                target_number=target_number,
                 amount=bet_amount,
             )
             session.add(bet)

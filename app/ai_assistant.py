@@ -1196,13 +1196,14 @@ async def katya_menu_message(message: Message, state: FSMContext):
                 await message.answer(f"❌ Максимум чатов: {max_chats}. Удали старый!")
                 return
 
-            chat = await _create_chat(session, user.id, title)
+            selected_char = data.get("selected_char", "katya")
+            chat = await _create_chat(session, user.id, title, selected_char)
 
         await state.update_data(waiting_chat_name=False)
         await state.set_state(KatyaChatState.chatting)
-        await state.update_data(katya_history=[], katya_chat_id=chat.id)
+        await state.update_data(katya_history=[], katya_chat_id=chat.id, selected_char=selected_char)
 
-        greeting = _get_chat_greeting(title)
+        greeting = _get_chat_greeting(title, selected_char)
         await message.answer(
             f"💋 <b>Чат «{title}»</b>\n\n{greeting}",
             parse_mode="HTML",
