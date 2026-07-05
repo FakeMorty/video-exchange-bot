@@ -394,6 +394,22 @@ async def require_nickname(message: Message, user) -> bool:
     return False
 
 
+def _best_event_badge(events: list, target: str) -> str:
+    """Выбирает лучший бейдж акции только для релевантного типа покупки."""
+    if target == "vip":
+        relevant = [e for e in events if getattr(e, "applies_vip", False)]
+    elif target == "coins":
+        relevant = [e for e in events if getattr(e, "applies_coins", False)]
+    else:
+        relevant = []
+
+    if not relevant:
+        return ""
+
+    best_ev = max(relevant, key=lambda e: e.discount_percent)
+    return f"\n🔥 <b>АКЦИЯ: {escape(best_ev.name)} — скидка {best_ev.discount_percent}%!</b>"
+
+
 async def _level_up_check(session, user, message_or_callback):
     """Проверяет апгрейд уровня и отправляет поздравление."""
     new_level = calc_level_from_xp(user.xp)
@@ -696,18 +712,13 @@ async def show_vip(message: Message, state: FSMContext):
                 vip_price, packs, sale = await get_current_prices(session, user.id)
                 events = await get_active_events(session)
                 
-                # Admin free badge
+                # Admin free badge должен учитывать runtime-настройку из БД
                 admin_free_badge = ""
-                if ENABLE_ADMIN_FREE:
-                    from app.services import is_admin_or_super
-                    if is_admin_or_super(message.from_user.id, user):
-                        admin_free_badge = "\n🆓 <b>ADMIN FREE — бесплатно!</b>"
-                
-                sale_badge = ""
-                if events:
-                    best_ev = max(events, key=lambda e: e.discount_percent)
-                    sale_badge = f"\n🔥 <b>АКЦИЯ: {escape(best_ev.name)} — скидка {best_ev.discount_percent}%!</b>"
-                elif sale:
+                if await is_admin_free_eligible(session, message.from_user.id, user):
+                    admin_free_badge = "\n🆓 <b>ADMIN FREE — бесплатно!</b>"
+
+                sale_badge = _best_event_badge(events, "vip") if events else ""
+                if not sale_badge and sale and sale.applies_to in ("all", "vip"):
                     sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
                 
                 await message.answer(
@@ -1446,12 +1457,9 @@ async def btn_buy(message: Message, state: FSMContext):
             if await is_admin_free_eligible(session, message.from_user.id, user):
                 admin_free_badge = "\n🆓 <b>ADMIN FREE — всё бесплатно!</b>"
 
-        # Бейдж активной акции
-        sale_badge = ""
-        if events:
-            best_ev = max(events, key=lambda e: e.discount_percent)
-            sale_badge = f"\n🔥 <b>АКЦИЯ: {escape(best_ev.name)} — скидка {best_ev.discount_percent}%!</b>"
-        elif sale:
+        # Бейдж активной акции только для покупок монет
+        sale_badge = _best_event_badge(events, "coins") if events else ""
+        if not sale_badge and sale and sale.applies_to in ("all", "coins"):
             sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
 
         # Динамический курс
