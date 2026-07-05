@@ -206,56 +206,55 @@ async def user_offer_duration(message: Message, state: FSMContext):
 async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
     method = callback.data.split(":")[1]
     data = await state.get_data()
-    
+    cost: Decimal = data["placement_cost"]
+
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         if not user:
             await callback.answer()
             return
-        
-        cost = data["placement_cost"]
-        
-    if method == "coins":
-        if user.balance < cost:
-            await callback.message.answer(f"❌ Недостаточно монет. Нужно: {cost:.0f}, у вас: {user.balance:.0f}")
-            await state.clear()
-            return
-        
-        # Списываем монеты атомарно
-        await change_balance_atomic(session, user.id, -cost, "user_offer_placement", details=f"Оффер: {data['title']}")
-        
-        # Создаём оффер в статусе pending (для модерации)
-        from app.models import Offer
-        start = utc_now()
-        end = start + timedelta(days=data["duration_days"])
-        offer = Offer(
-            creator_user_id=user.id,
-            title=data["title"],
-            description=data["description"],
-            channel_url=data["url"],
-            reward_preview=data["reward_preview"],
-            reward_final=data["reward_final"],
-            penalty_unsubscribe=data["penalty_unsubscribe"],
-            duration_days=data["duration_days"],
-            placement_cost=cost,
-            status="pending",
-            is_active=False
-        )
-        session.add(offer)
-        await session.commit()
-        
-        # Агрегированное уведомление админам
-        from app.services import schedule_mod_notification
-        await schedule_mod_notification(session, "offer")
 
-        await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
-        await state.clear()
-            
-    elif method == "stars":
-            # Сначала создаём оффер в статусе payment_pending
-            from app.models import Offer
-            start = utc_now()
-            end = start + timedelta(days=data["duration_days"])
+        if method == "coins":
+            if user.balance < cost:
+                await callback.message.answer(
+                    f"❌ Недостаточно монет. Нужно: {cost:.0f}, у вас: {user.balance:.0f}"
+                )
+                await callback.answer()
+                return
+
+            await change_balance_atomic(
+                session,
+                user.id,
+                -cost,
+                "user_offer_placement",
+                details=f"Оффер: {data['title']}",
+            )
+
+            offer = Offer(
+                creator_user_id=user.id,
+                title=data["title"],
+                description=data["description"],
+                channel_url=data["url"],
+                reward_preview=data["reward_preview"],
+                reward_final=data["reward_final"],
+                penalty_unsubscribe=data["penalty_unsubscribe"],
+                duration_days=data["duration_days"],
+                placement_cost=cost,
+                status="pending",
+                is_active=False,
+            )
+            session.add(offer)
+            await session.commit()
+
+            from app.services import schedule_mod_notification
+            await schedule_mod_notification(session, "offer")
+
+            await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
+            await state.clear()
+            await callback.answer()
+            return
+
+        if method == "stars":
             offer = Offer(
                 creator_user_id=user.id,
                 title=data["title"],
@@ -267,34 +266,34 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 duration_days=data["duration_days"],
                 placement_cost=cost,
                 status="payment_pending",
-                is_active=False
+                is_active=False,
             )
             session.add(offer)
             await session.flush()
-            
-            # Используем ID оффера в payload
+
             payload = f"user_offer_{offer.id}"
-            
-            # Создаём Stars платеж
+            stars_price = max(1, int(cost / STARS_TO_COINS_RATE))
             await ensure_payment_pending(
                 session,
                 user_id=user.id,
                 payload=payload,
-                stars_amount=int(cost / STARS_TO_COINS_RATE),  # Курс STARS_TO_COINS_RATE монет за 1 Star
-                coins_amount=cost
+                stars_amount=stars_price,
+                coins_amount=cost,
             )
             await session.commit()
-            
+
             await callback.message.answer_invoice(
                 title="Размещение оффера",
                 description=f"Оффер «{data['title']}» на {data['duration_days']} дней",
                 payload=payload,
                 currency="XTR",
-                prices=[LabeledPrice(label="Размещение", amount=max(1, int(cost / STARS_TO_COINS_RATE)))]
+                prices=[LabeledPrice(label="Размещение", amount=stars_price)],
             )
             await state.clear()
-    
-    await callback.answer()
+            await callback.answer()
+            return
+
+    await callback.answer("Неизвестный способ оплаты", show_alert=True)
 
 
 async def _create_user_offer(session, user_id: int, data: dict, cost: Decimal):

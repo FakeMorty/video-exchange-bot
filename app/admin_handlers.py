@@ -1101,24 +1101,32 @@ async def cb_admin_user_send_msg_start(callback: CallbackQuery, state: FSMContex
 
 @router.message(AdminUserState.waiting_message_text)
 async def process_admin_user_send_msg(message: Message, state: FSMContext, bot):
-    if not await check_admin(message.from_user.id): return
+    if not await check_admin(message.from_user.id):
+        return
     text_val = (message.text or "").strip()
     if not text_val:
         await message.answer("❌ Сообщение не может быть пустым. Введите текст:")
         return
-        
+
     data = await state.get_data()
     user_id = data.get("target_user_id")
     if not user_id:
         await state.clear()
         return
-        
+
+    async with async_session() as session:
+        user = await get_user_by_id(session, user_id)
+        if not user:
+            await message.answer("❌ Пользователь не найден.")
+            await state.clear()
+            return
+        telegram_id = user.telegram_id
+
     try:
         await bot.send_message(
-            user_id,
-            f"✉️ <b>Сообщение от администрации бота:</b>\n\n"
-            f"{text_val}",
-            parse_mode="HTML"
+            telegram_id,
+            f"✉️ <b>Сообщение от администрации бота:</b>\n\n{text_val}",
+            parse_mode="HTML",
         )
         await message.answer(
             "✅ Сообщение успешно отправлено в личные сообщения пользователю!",
@@ -2032,18 +2040,26 @@ async def admin_trusted_uploaders(callback: CallbackQuery):
         return
 
     async with async_session() as session:
-        trusted = (await session.execute(
+        trusted_rows = (await session.execute(
             select(TrustedUploader, User)
             .join(User, TrustedUploader.trusted_user_id == User.id)
             .order_by(TrustedUploader.created_at.desc())
         )).all()
 
-    if not trusted:
+        admin_ids = {tu.admin_user_id for tu, _ in trusted_rows}
+        admin_map = {}
+        if admin_ids:
+            admins = (await session.execute(
+                select(User).where(User.id.in_(admin_ids))
+            )).scalars().all()
+            admin_map = {admin.id: admin for admin in admins}
+
+    if not trusted_rows:
         text = "🤝 <b>Доверенные авторы</b>\n\nНет доверенных авторов.\n\nДобавьте автора по ID или @username:"
     else:
         text = "🤝 <b>Доверенные авторы</b>\n\n"
-        for tu, user_obj in trusted:
-            admin_obj = await get_user_by_id(session, tu.admin_user_id)
+        for tu, user_obj in trusted_rows:
+            admin_obj = admin_map.get(tu.admin_user_id)
             admin_name = get_display_name(admin_obj) if admin_obj else "?"
             text += f"• {get_display_name(user_obj)} (добавил {admin_name})\n"
 
@@ -2081,7 +2097,8 @@ async def trusted_add_process(message: Message, state: FSMContext):
     query = message.text.strip()
     async with async_session() as session:
         if query.isdigit():
-            user = await get_user_by_id(session, int(query))
+            # Здесь ожидается Telegram ID, а не внутренний users.id.
+            user = await get_user(session, int(query))
         else:
             if query.startswith("@"):
                 query = query[1:]
@@ -2140,7 +2157,8 @@ async def trusted_remove_process(message: Message, state: FSMContext):
     query = message.text.strip()
     async with async_session() as session:
         if query.isdigit():
-            user = await get_user_by_id(session, int(query))
+            # Здесь ожидается Telegram ID, а не внутренний users.id.
+            user = await get_user(session, int(query))
         else:
             if query.startswith("@"):
                 query = query[1:]

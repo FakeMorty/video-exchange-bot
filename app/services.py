@@ -1565,8 +1565,9 @@ async def _get_lottery_window(session, dt: datetime) -> tuple[str, datetime, dat
     key = f"lottery_{interval}h_{cycle_idx}"
     return key, start, draw_start, draw_end
 
-def _serialize_numbers(nums: list[int]) -> str:
-    return ",".join(str(n) for n in sorted(nums))
+def _serialize_numbers(nums: list[int], *, sort_numbers: bool = True) -> str:
+    values = sorted(nums) if sort_numbers else list(nums)
+    return ",".join(str(n) for n in values)
 
 def _deserialize_numbers(raw: str | None) -> list[int]:
     if not raw:
@@ -1678,14 +1679,16 @@ def get_lottery_state_dict(round_obj: LotteryRound | None) -> dict:
 
 
 async def draw_next_lottery_number(session: AsyncSession, round_obj: LotteryRound) -> int | None:
-    drawn = set(_deserialize_numbers(round_obj.drawn_numbers))
+    drawn = _deserialize_numbers(round_obj.drawn_numbers)
+    drawn_set = set(drawn)
     all_numbers = set(range(1, round_obj.numbers_pool + 1))
-    available = sorted(all_numbers - drawn)
+    available = sorted(all_numbers - drawn_set)
     if not available:
         return None
+
     next_num = random.choice(available)
-    drawn.add(next_num)
-    round_obj.drawn_numbers = _serialize_numbers(list(drawn))
+    drawn.append(next_num)
+    round_obj.drawn_numbers = _serialize_numbers(drawn, sort_numbers=False)
     if len(drawn) >= round_obj.numbers_per_ticket:
         round_obj.status = "completed"
     else:

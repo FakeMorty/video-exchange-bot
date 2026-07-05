@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.models import Base, User, LotteryRound, LotteryTicket, LotteryBet
-from app.services import settle_lottery_round
+from app.services import settle_lottery_round, draw_next_lottery_number
 
 
 @pytest.mark.asyncio
@@ -61,5 +61,42 @@ async def test_settle_lottery_round_pays_all_winner_tiers_and_bets():
         assert u5.balance == Decimal("20.00")
         assert u4.balance == Decimal("10.00")
         assert bettor.balance == Decimal("20.00")
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_draw_next_lottery_number_preserves_draw_order_for_side_bets():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        round_obj = LotteryRound(
+            week_key="test_round_2",
+            status="drawing",
+            ticket_price=Decimal("10.00"),
+            numbers_pool=6,
+            numbers_per_ticket=3,
+            drawn_numbers="5,1",
+            prize_pool=Decimal("0.00"),
+            starts_at=None,
+            draw_starts_at=None,
+            draw_ends_at=None,
+        )
+        # SQLite model requires datetimes, so use a real timestamp
+        from app.models import utc_now
+        now = utc_now()
+        round_obj.starts_at = now
+        round_obj.draw_starts_at = now
+        round_obj.draw_ends_at = now
+        session.add(round_obj)
+        await session.commit()
+
+        next_num = await draw_next_lottery_number(session, round_obj)
+        assert next_num in {2, 3, 4, 6}
+        assert round_obj.drawn_numbers.startswith("5,1,")
 
     await engine.dispose()
