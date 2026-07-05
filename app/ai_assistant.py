@@ -47,7 +47,7 @@ from app.config import (
 )
 from app.db import async_session
 from app.services import (
-    get_user, log_balance_change, log_user_action,
+    get_user, change_balance_atomic, log_user_action,
     is_admin_free_eligible,
 )
 from app.logger import get_logger
@@ -991,13 +991,14 @@ async def katya_chat_message(message: Message, state: FSMContext):
     chat_id = data.get("katya_chat_id")
     chat_character = data.get("selected_char", "katya")
 
-    # Списываем монеты
+    # Списываем монеты и увеличиваем счётчик сообщений в чате
     async with async_session() as session:
         user = await get_user(session, user_id)
         if not user:
             return
 
         admin_free = await is_admin_free_eligible(session, user_id, user)
+        chat = None
 
         # Выгружаем персонажа чата из БД
         if chat_id:
@@ -1005,35 +1006,26 @@ async def katya_chat_message(message: Message, state: FSMContext):
             if chat:
                 chat_character = chat.character or "katya"
 
-    if not admin_free:
-        if user.balance < _KATYA_PRICE:
-            await message.answer(
-                f"💸 *вздыхает*\n\n"
-                f"Малыш, у тебя всего {user.balance} монет, а нужно {_KATYA_PRICE}... "
-                f"Заливай видео, заработай и возвращайся! Я никуда не денусь 💋",
-                parse_mode="HTML",
-            )
-            return
+        if not admin_free:
+            if user.balance < _KATYA_PRICE:
+                await message.answer(
+                    f"💸 *вздыхает*\n\n"
+                    f"Малыш, у тебя всего {user.balance} монет, а нужно {_KATYA_PRICE}... "
+                    f"Заливай видео, заработай и возвращайся! Я никуда не денусь 💋",
+                    parse_mode="HTML",
+                )
+                return
 
-        user = await change_balance_atomic(
-            session, user.id, -_KATYA_PRICE, "katya_chat",
-            details=f"chat={chat_id};msg={user_text[:60]}",
-        )
-        # Увеличиваем счётчик сообщений в чате
-        if chat_id:
-            chat = await _get_chat(session, chat_id)
-            if chat:
-                chat.message_count = (chat.message_count or 0) + 1
+            user = await change_balance_atomic(
+                session, user.id, -_KATYA_PRICE, "katya_chat",
+                details=f"chat={chat_id};msg={user_text[:60]}",
+            )
+
+        if chat:
+            chat.message_count = (chat.message_count or 0) + 1
+
         await session.commit()
-        balance_after = user.balance if user else 0
-    else:
-        balance_after = user.balance
-        # Счётчик сообщений даже для админов
-        if chat_id:
-            chat = await _get_chat(session, chat_id)
-            if chat:
-                chat.message_count = (chat.message_count or 0) + 1
-                await session.commit()
+        balance_after = user.balance if user else Decimal("0")
 
     # Показываем «печатает»
     await message.bot.send_chat_action(user_id, "typing")
@@ -1052,11 +1044,10 @@ async def katya_chat_message(message: Message, state: FSMContext):
             async with async_session() as session:
                 user = await get_user(session, user_id)
                 if user:
-                    await log_balance_change(
-                        session, user, _KATYA_PRICE, "katya_chat_refund",
+                    await change_balance_atomic(
+                        session, user.id, _KATYA_PRICE, "katya_chat_refund",
                         details="api_error",
                     )
-                    user.balance += _KATYA_PRICE
                     await session.commit()
         await message.answer(
             "😵 *хмурится*\n\n"

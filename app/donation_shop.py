@@ -13,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from app.db import async_session
 from app.services import (
-    get_user, log_balance_change, log_user_action,
+    get_user, change_balance_atomic, log_balance_change, log_user_action,
     activate_perk, has_active_perk, get_active_perks, deactivate_perk,
     get_display_name,
     is_admin_free_eligible,

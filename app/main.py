@@ -1944,7 +1944,6 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
     from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR, WEEKLY_PROMO_AMOUNT, WEEKLY_PROMO_USES
     from app.models import Promocode, User
     from app.services import to_decimal
-    from datetime import datetime, timezone, timedelta
     
     last_run_week = None
     

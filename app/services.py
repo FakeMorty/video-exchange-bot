@@ -337,56 +337,6 @@ async def change_balance_atomic(
     return user
 
 
-async def log_balance_change(
-
-    session: AsyncSession,
-
-    user: "User",
-
-    amount: Decimal,
-
-    source: str,
-
-    source_id: int = None,
-
-    admin_id: int = None,
-
-    details: str = None,
-
-):
-
-    from decimal import Decimal
-
-    before = user.balance if user.balance is not None else Decimal("0")
-
-    after = before + amount
-
-    from app.models import BalanceLog
-
-    log = BalanceLog(
-
-        user_id=user.id,
-
-        amount=amount,
-
-        balance_before=before,
-
-        balance_after=after,
-
-        source=source,
-
-        source_id=source_id,
-
-        admin_id=admin_id,
-
-        details=details,
-
-    )
-
-    session.add(log)
-
-
-
 async def log_user_action(
     session: AsyncSession,
     user_id: int,

@@ -72,7 +72,7 @@ from app.services import (
     get_random_video_for_user, get_random_photo_for_user,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
     record_photo_view,
-    rate_video, claim_daily_bonus, count_referrals,
+    rate_video, count_referrals,
     create_payment, create_custom_payment, apply_successful_payment,
     ensure_payment_pending, mark_payment_paid_once,
     get_payment_by_payload,
@@ -96,7 +96,6 @@ from app.services import (
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
-    is_vip,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -2443,8 +2442,6 @@ async def my_rentals(callback: CallbackQuery):
 @router.message(F.text == BTN_GAMES)
 async def btn_games(message: Message, state: FSMContext):
     await state.clear()
-    from app.keyboards import games_menu_keyboard
-    from app.services import can_play_free_game
     from app.config import GAME_SESSION_COST
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
@@ -2794,7 +2791,8 @@ async def _send_lottery_menu(message_or_callback_message: Message) -> None:
     async with async_session() as session:
         round_obj = await ensure_current_lottery_round(session)
         state_data = get_lottery_state_dict(round_obj)
-        user = await get_user(session, message_or_callback_message.chat.id)
+        tg_user_id = getattr(getattr(message_or_callback_message, "from_user", None), "id", None)
+        user = await get_user(session, tg_user_id) if tg_user_id else None
     base = (WEBHOOK_BASE or "").rstrip("/")
     live_url = f"{base}/lottery/live" if base else ""
     try:

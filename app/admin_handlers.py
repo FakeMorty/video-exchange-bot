@@ -5,7 +5,7 @@ from html import escape
 from decimal import Decimal
 
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -42,8 +42,6 @@ from app.utils.admin import check_admin, is_super_admin, _safe_edit
 logger = get_logger(__name__)
 
 router = Router()
-
-from aiogram.filters import Command, CommandStart, CommandObject
 
 @router.message(Command("cancel"))
 async def cmd_cancel_admin(message: Message, state: FSMContext):
@@ -2325,7 +2323,6 @@ async def admin_approve_all(callback: CallbackQuery):
 async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id: int, bot):
     import asyncio
     from app.db import async_session
-    from app.services import approve_all_pending
     
     total_approved = 0
     BATCH_SIZE = 50
