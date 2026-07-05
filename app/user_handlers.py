@@ -112,6 +112,7 @@ from app.keyboards import (
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_FAQ, BTN_AI,
 )
 from app.logger import get_logger
+from app.release_notes import build_version_text
 from app.utils.messaging import format_time_for_user
 
 logger = get_logger(__name__)
@@ -3363,19 +3364,7 @@ async def cmd_health(message: Message):
 
 @router.message(Command("version"))
 async def cmd_version(message: Message):
-    version = "3.3.0"
-    changes = (
-        f"🔥 <b>Версия:</b> {version}\n\n"
-        "<b>Последние изменения:</b>\n"
-        "• Секслото переведено на настраиваемый интервал и длительность розыгрыша через админку\n"
-        "• Mini App синхронизируется с настройками розыгрыша и снова умеет покупать билеты/монеты\n"
-        "• Исправлены ставки в Mini App: теперь это реальная ставка на 10 монет, а не бесплатный клик\n"
-        "• Добавлены локальные часовые пояса в уведомлениях о розыгрыше\n"
-        "• Новичкам показывается стартовый лутбокс\n"
-        "• При нехватке монет бот агрессивно подсказывает реферальную ссылку\n"
-        "• Ежедневные квесты и ежедневный бонус окончательно убраны из актуального UX"
-    )
-    await message.answer(changes, parse_mode="HTML")
+    await message.answer(build_version_text(admin=False), parse_mode="HTML")
 
 
 @router.message(Command("selfcheck"))
@@ -3526,33 +3515,8 @@ async def cb_bot_version_info(callback: CallbackQuery):
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         admin_flag = is_admin_or_super(callback.from_user.id, user)
-        
-    version_text = (
-        "🤖 <b>ИНФОРМАЦИЯ О ВЕРСИИ И ИЗМЕНЕНИЯХ</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "• <b>Текущая версия:</b> <code>v3.3.0-stable</code>\n"
-        "• <b>Статус:</b> Актуальная боевая сборка\n\n"
-        "📢 <b>Последние изменения для пользователей:</b>\n"
-        "✅ <b>Секслото:</b> теперь время розыгрышей настраивается из админки и корректно показывается в Mini App.\n"
-        "✅ <b>Mini App:</b> внутри live-интерфейса снова работают покупка билетов и покупка монет за Telegram Stars.\n"
-        "✅ <b>Часовые пояса:</b> бот учитывает локальное время пользователя и пишет его в напоминаниях о розыгрыше.\n"
-        "✅ <b>Стартовый лутбокс:</b> новичок получает приветственный лутбокс с круглой наградой от 50 до 400 монет.\n"
-        "✅ <b>Рефералка:</b> при нехватке монет бот теперь сразу подсовывает готовую реферальную ссылку.\n"
-        "✅ <b>Халява:</b> ежедневный бонус убран, вместо него работает еженедельный секретный промокод.\n"
-        "✅ <b>Квесты и старые мини-игры:</b> в актуальном UX больше не продвигаются и не засоряют интерфейс.\n"
-    )
-    
-    if admin_flag:
-        version_text += (
-            "\n👑 <b>Административный список изменений:</b>\n"
-            "⚙️ <b>Секслото из Telegram:</b> интервал и длительность розыгрыша редактируются в админке без правки кода.\n"
-            "⚙️ <b>День weekly promo:</b> выбор дня недели переведён на удобные кнопки ПН–ВС.\n"
-            "⚙️ <b>Startup cleanup:</b> убран дублирующий startup-flow, который мог ломать запуск приложения.\n"
-            "⚙️ <b>Mini App API:</b> исправлены серверные эндпоинты покупки билетов и ставок.\n"
-            "⚙️ <b>Changelog:</b> системный файл истории изменений в корне проекта поддерживается в актуальном состоянии."
-        )
-        
-    await callback.message.answer(version_text, parse_mode="HTML")
+
+    await callback.message.answer(build_version_text(admin=admin_flag), parse_mode="HTML")
     await callback.answer()
 
 
