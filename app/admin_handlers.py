@@ -1,4 +1,5 @@
 from app.models import utc_now
+import os
 import asyncio
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -10,7 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 )
 from sqlalchemy import select, func, text
 
@@ -37,6 +38,7 @@ from app.keyboards import (
     admin_db_keyboard,
 )
 from app.logger import get_logger
+from app.reports import build_bot_report_pdf
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
 logger = get_logger(__name__)
@@ -1292,11 +1294,56 @@ async def cb_admin_view_user_videos(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_extended_stats")
 async def admin_extended_stats(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id): return
+    if not await check_admin(callback.from_user.id):
+        return
     async with async_session() as session:
         stats = await get_admin_extended_stats(session)
-    await _safe_edit(callback, f"📊 <b>Статистика</b>\n\n👥 Юзеров: {stats['users']}\n💰 Баланс: {stats['total_balance_in_system']:.2f}", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")]]))
+
+    rows = []
+    if is_super_admin(callback.from_user.id):
+        rows.append([InlineKeyboardButton(text="📊 Экспорт PDF по боту", callback_data="admin_export_bot_pdf")])
+    rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")])
+
+    await _safe_edit(
+        callback,
+        f"📊 <b>Статистика</b>\n\n👥 Юзеров: {stats['users']}\n💰 Баланс: {stats['total_balance_in_system']:.2f}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_export_bot_pdf")
+async def admin_export_bot_pdf(callback: CallbackQuery):
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только супер-админ.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.answer("⏳ Готовлю большой отчёт по всему боту: собираю данные и строю диаграммы...")
+
+    async def _runner() -> None:
+        pdf_path = None
+        try:
+            pdf_path, filename = await build_bot_report_pdf()
+            await callback.bot.send_document(
+                callback.from_user.id,
+                FSInputFile(str(pdf_path), filename=filename),
+                caption="📊 Подробный PDF-отчёт по боту готов.",
+            )
+        except Exception as e:
+            logger.exception("Failed to build bot PDF report")
+            await callback.bot.send_message(
+                callback.from_user.id,
+                f"❌ Не удалось собрать PDF по боту. Ошибка: {escape(str(e))}",
+                parse_mode="HTML",
+            )
+        finally:
+            if pdf_path:
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
+
+    asyncio.create_task(_runner())
 
 
 @router.callback_query(F.data == "admin_offers_menu")

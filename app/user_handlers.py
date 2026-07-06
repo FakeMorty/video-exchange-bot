@@ -1,4 +1,5 @@
 from html import escape
+import os
 import uuid
 import random
 import math
@@ -15,7 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, CallbackQuery,
     LabeledPrice, PreCheckoutQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 )
 from sqlalchemy import select, func, desc
 
@@ -116,6 +117,7 @@ from app.keyboards import (
 )
 from app.logger import get_logger
 from app.release_notes import build_version_text
+from app.reports import build_user_report_pdf
 from app.utils.messaging import format_time_for_user
 
 logger = get_logger(__name__)
@@ -636,10 +638,16 @@ async def show_profile(message: Message, state: FSMContext):
         bar = "█" * progress + "░" * (10 - progress)
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="✏️ Сменить ник",
-                callback_data="set_nickname_start"
-            )],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Сменить ник",
+                    callback_data="set_nickname_start"
+                ),
+                InlineKeyboardButton(
+                    text="📄 Экспорт PDF",
+                    callback_data="profile_export_pdf"
+                ),
+            ],
             [InlineKeyboardButton(
                 text="🛍 Донатный магазин",
                 callback_data="donation_shop"
@@ -667,6 +675,37 @@ async def show_profile(message: Message, state: FSMContext):
 # =========================
 # LEVEL
 # =========================
+@router.callback_query(F.data == "profile_export_pdf")
+async def profile_export_pdf(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("⏳ Готовлю ваш отчёт: собираю статистику и строю графики...")
+
+    async def _runner() -> None:
+        pdf_path = None
+        try:
+            pdf_path, filename = await build_user_report_pdf(callback.from_user.id)
+            await callback.bot.send_document(
+                callback.from_user.id,
+                FSInputFile(str(pdf_path), filename=filename),
+                caption="📄 Ваш подробный PDF-отчёт готов.",
+            )
+        except Exception as e:
+            logger.exception("Failed to build user PDF report")
+            await callback.bot.send_message(
+                callback.from_user.id,
+                f"❌ Не удалось собрать PDF-отчёт. Ошибка: {escape(str(e))}",
+                parse_mode="HTML",
+            )
+        finally:
+            if pdf_path:
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
+
+    asyncio.create_task(_runner())
+
+
 @router.message(F.text == BTN_LEVEL)
 async def show_level(message: Message, state: FSMContext):
     await state.clear()
