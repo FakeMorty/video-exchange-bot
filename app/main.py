@@ -757,13 +757,13 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
       <div class="strip-title" style="margin-bottom: 8px;">🔥 Акции и Ставки Секслото 🔥</div>
       <div class="banner-carousel">
         
-        <!-- Слайд 1: Купить билет -->
+        <!-- Слайд 1: Купить билеты -->
         <div class="banner-slide">
           <div>
-            <h3>🎟 Купить билет Секслото</h3>
-            <p>Испытай свою удачу и выиграй суперприз прямо сейчас!</p>
+            <h3>🎟 Купить билеты Секслото</h3>
+            <p>Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!</p>
           </div>
-          <button class="banner-btn" onclick="buyTicketAction()">Купить билет за <span id="banner-ticket-price">-</span> 🪙</button>
+          <button class="banner-btn" onclick="openTicketModal()">Купить билеты по <span id="banner-ticket-price">-</span> 🪙</button>
         </div>
         
         <!-- Слайд 2: Монеты за звезды -->
@@ -804,6 +804,32 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
       <div class="strip-title">🔵 Выпавшие бочонки «Секслото» 🔵</div>
       <div class="balls-strip" id="balls-container">
         <div class="no-numbers" style="color: var(--tg-theme-hint-color); font-size: 14px; text-align:center; width:100%;">Розыгрыш еще не начался...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно покупки билетов -->
+  <div id="ticket-modal" class="modal">
+    <div class="modal-content">
+      <span class="modal-close" onclick="closeTicketModal()">&times;</span>
+      <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;">🎟 Купить билеты</h3>
+      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);">
+        Укажи количество билетов или нажми «Максимум».
+      </p>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="setTicketQty(1)">1</button>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="setTicketQty(5)">5</button>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="setTicketQty(10)">10</button>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px; background:#34c759;" onclick="setMaxTicketQty()">Максимум</button>
+        </div>
+        <input id="ticket-qty-input" type="number" min="1" step="1" value="1"
+               style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.04); color:var(--text-color); font-size:15px;" />
+        <div style="font-size:12px; color: var(--tg-theme-hint-color, #888); text-align:center;">
+          Цена билета: <b><span id="ticket-modal-price">-</span> 🪙</b><br>
+          Сейчас можно купить до: <b><span id="ticket-modal-max">-</span></b>
+        </div>
+        <button class="banner-btn" onclick="confirmBuyTickets()">Купить</button>
       </div>
     </div>
   </div>
@@ -866,6 +892,8 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     let lastRoundId = null;
     let isSpinning = false;
     let drawStartsAt = null;
+    let currentUserBalance = 0;
+    let currentTicketPrice = 0;
     
     // Инициализация Canvas и 2D Физики
     const canvas = document.getElementById('lototron-canvas');
@@ -1149,27 +1177,56 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
             });
             if (res.ok) {
                 const data = await res.json();
-                document.getElementById('user-balance').innerText = data.balance.toFixed(2);
+                currentUserBalance = Number(data.balance || 0);
+                document.getElementById('user-balance').innerText = currentUserBalance.toFixed(2);
             }
         } catch (e) {
             console.error(e);
         }
     }
 
-    // Мгновенная покупка билета прямо внутри WebApp!
-    async function buyTicketAction() {
+    function openTicketModal() {
+        const maxCount = currentTicketPrice > 0 ? Math.max(0, Math.floor(currentUserBalance / currentTicketPrice)) : 0;
+        document.getElementById('ticket-modal').style.display = 'flex';
+        document.getElementById('ticket-qty-input').value = maxCount > 0 ? '1' : '0';
+        document.getElementById('ticket-modal-price').innerText = currentTicketPrice.toFixed(2);
+        document.getElementById('ticket-modal-max').innerText = String(maxCount);
+    }
+
+    function closeTicketModal() {
+        document.getElementById('ticket-modal').style.display = 'none';
+    }
+
+    function setTicketQty(value) {
+        document.getElementById('ticket-qty-input').value = String(value);
+    }
+
+    function setMaxTicketQty() {
+        const maxCount = currentTicketPrice > 0 ? Math.max(0, Math.floor(currentUserBalance / currentTicketPrice)) : 0;
+        document.getElementById('ticket-qty-input').value = String(maxCount);
+    }
+
+    async function confirmBuyTickets() {
+        const qtyInput = document.getElementById('ticket-qty-input');
+        const quantity = parseInt(qtyInput.value || '0', 10);
+        if (!Number.isFinite(quantity) || quantity < 1) {
+            window.Telegram.WebApp.showAlert('❌ Введите корректное количество билетов.');
+            return;
+        }
         try {
             const res = await fetch('/api/lottery/buy', {
                 method: 'POST',
                 headers: authHeaders({'Content-Type': 'application/json'}),
-                body: JSON.stringify({})
+                body: JSON.stringify({quantity})
             });
             const data = await res.json();
             if (res.ok && data.ok) {
+                closeTicketModal();
                 window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-                window.Telegram.WebApp.showAlert('🎟 Билет успешно куплен прямо из приложения! Баланс монет обновлен!');
-                document.getElementById('user-balance').innerText = data.balance.toFixed(2);
-                tick(); // обновляем кол-во билетов
+                currentUserBalance = Number(data.balance || 0);
+                document.getElementById('user-balance').innerText = currentUserBalance.toFixed(2);
+                window.Telegram.WebApp.showAlert('🎟 Куплено билетов: ' + data.quantity + '. Баланс обновлен!');
+                tick();
             } else {
                 window.Telegram.WebApp.showAlert('❌ Ошибка покупки: ' + (data.error || 'неизвестно'));
             }
@@ -1345,6 +1402,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
         badge.innerText = statusText;
         badge.className = badgeClass;
 
+        currentTicketPrice = Number(data.ticket_price || 0);
         document.getElementById('prize-pool').innerText = data.prize_pool + ' 🪙';
         document.getElementById('ticket-price').innerText = data.ticket_price + ' 🪙';
         document.getElementById('banner-ticket-price').innerText = data.ticket_price;
@@ -1759,21 +1817,24 @@ async def api_lottery_buy(request: web.Request) -> web.Response:
         if not telegram_user_id:
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
 
-        from app.services import get_user, buy_lottery_ticket
+        quantity = int(data.get("quantity", 1) or 1)
+
+        from app.services import get_user, buy_lottery_tickets
         from app.db import async_session
         async with async_session() as session:
             user = await get_user(session, telegram_user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
-            ticket, error = await buy_lottery_ticket(session, user)
-            if not ticket:
+            tickets, total_cost, error = await buy_lottery_tickets(session, user, quantity)
+            if error or not tickets:
                 return web.json_response({"ok": False, "error": error or "purchase_failed"})
             await session.refresh(user)
             return web.json_response({
                 "ok": True,
                 "balance": float(user.balance),
-                "ticket_id": ticket.id,
-                "numbers": ticket.numbers,
+                "quantity": len(tickets),
+                "total_cost": float(total_cost),
+                "ticket_ids": [t.id for t in tickets[:20]],
             })
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})

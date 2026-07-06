@@ -1679,37 +1679,91 @@ async def get_latest_lottery_round(session: AsyncSession) -> LotteryRound | None
     )).scalar_one_or_none()
 
 
-async def buy_lottery_ticket(session: AsyncSession, user: User) -> tuple[LotteryTicket | None, str | None]:
+LOTTERY_MAX_TICKETS_PER_PURCHASE = 100
+
+
+def get_lottery_max_tickets_for_balance(balance: Decimal, ticket_price: Decimal) -> int:
+    if ticket_price <= 0:
+        return LOTTERY_MAX_TICKETS_PER_PURCHASE
+    try:
+        affordable = int(to_decimal(balance) // to_decimal(ticket_price))
+    except Exception:
+        affordable = 0
+    return max(0, min(LOTTERY_MAX_TICKETS_PER_PURCHASE, affordable))
+
+
+async def buy_lottery_tickets(
+    session: AsyncSession,
+    user: User,
+    quantity: int,
+    *,
+    is_admin_free: bool = False,
+) -> tuple[list[LotteryTicket], Decimal, str | None]:
     round_obj = await ensure_current_lottery_round(session)
     now = utc_now()
     if round_obj.status != "open" or now >= round_obj.draw_starts_at:
-        return None, "Продажа билетов закрыта до следующей недели."
+        return [], Decimal("0"), "Продажа билетов закрыта до следующего розыгрыша."
+
+    try:
+        quantity = int(quantity)
+    except Exception:
+        return [], Decimal("0"), "Количество билетов должно быть числом."
+
+    if quantity < 1:
+        return [], Decimal("0"), "Количество билетов должно быть больше нуля."
+
+    if quantity > LOTTERY_MAX_TICKETS_PER_PURCHASE:
+        return [], Decimal("0"), f"За один раз можно купить не больше {LOTTERY_MAX_TICKETS_PER_PURCHASE} билетов."
 
     price = to_decimal(round_obj.ticket_price)
-    if user.balance < price:
-        return None, f"Недостаточно монет. Билет стоит {price}."
+    max_affordable = get_lottery_max_tickets_for_balance(user.balance, price)
+    if not is_admin_free and quantity > max_affordable:
+        if max_affordable <= 0:
+            return [], Decimal("0"), f"Недостаточно монет. Билет стоит {price}."
+        return [], Decimal("0"), f"Недостаточно монет. Сейчас максимум: {max_affordable} билетов."
 
+    total_cost = price * quantity
+    tickets: list[LotteryTicket] = []
     pool = list(range(1, round_obj.numbers_pool + 1))
     pick_count = min(round_obj.numbers_per_ticket, len(pool))
-    numbers = sorted(random.sample(pool, k=pick_count))
-    ticket = LotteryTicket(
-        round_id=round_obj.id,
-        user_id=user.id,
-        numbers=_serialize_numbers(numbers),
-    )
-    user.balance -= price
-    round_obj.prize_pool += price
-    await log_balance_change(
-        session,
-        user,
-        -price,
-        "lottery_ticket_purchase",
-        source_id=round_obj.id,
-        details=f"numbers={ticket.numbers}",
-    )
-    session.add(ticket)
+
+    if is_admin_free:
+        await log_balance_change(
+            session,
+            user,
+            Decimal("0"),
+            "lottery_ticket_admin_free",
+            source_id=round_obj.id,
+            details=f"qty={quantity}",
+        )
+    else:
+        user = await change_balance_atomic(
+            session,
+            user.id,
+            -total_cost,
+            "lottery_ticket_purchase",
+            source_id=round_obj.id,
+            details=f"qty={quantity}",
+        ) or user
+
+    for _ in range(quantity):
+        numbers = sorted(random.sample(pool, k=pick_count))
+        ticket = LotteryTicket(
+            round_id=round_obj.id,
+            user_id=user.id,
+            numbers=_serialize_numbers(numbers),
+        )
+        tickets.append(ticket)
+
+    round_obj.prize_pool += total_cost
+    session.add_all(tickets)
     await session.commit()
-    return ticket, None
+    return tickets, total_cost, None
+
+
+async def buy_lottery_ticket(session: AsyncSession, user: User) -> tuple[LotteryTicket | None, str | None]:
+    tickets, _total_cost, error = await buy_lottery_tickets(session, user, 1)
+    return (tickets[0] if tickets else None), error
 
 
 async def get_user_lottery_tickets(

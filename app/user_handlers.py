@@ -89,8 +89,9 @@ from app.services import (
     create_promocode, activate_promocode,
     calculate_promocode_star_cost,
     create_feedback, process_referral_reward,
-    ensure_current_lottery_round, buy_lottery_ticket,
+    ensure_current_lottery_round, buy_lottery_ticket, buy_lottery_tickets,
     get_latest_lottery_round, get_user_lottery_tickets, get_lottery_state_dict,
+    get_lottery_max_tickets_for_balance, LOTTERY_MAX_TICKETS_PER_PURCHASE,
     is_admin_or_super, is_admin_free_eligible,
     should_show_low_balance_hint, mark_low_balance_hint_shown,
     can_show_offer_to_user, mark_offer_shown,
@@ -346,6 +347,10 @@ class PromoActivateState(StatesGroup):
 
 class FeedbackState(StatesGroup):
     waiting_text = State()
+
+
+class LotteryBuyState(StatesGroup):
+    waiting_quantity = State()
 
 
 # =========================
@@ -2837,11 +2842,25 @@ def _lottery_menu_kb() -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(text="🔴 Как открыть Live", callback_data="lottery_live_info")])
 
     buttons.extend([
-        [InlineKeyboardButton(text="🎫 Купить билет", callback_data="lottery_buy")],
+        [InlineKeyboardButton(text="🎫 Купить билеты", callback_data="lottery_buy")],
         [InlineKeyboardButton(text="📋 Мои билеты", callback_data="lottery_my_tickets")],
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="lottery_menu")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _lottery_buy_kb(max_count: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="1", callback_data="lottery_buy_qty:1"),
+            InlineKeyboardButton(text="5", callback_data="lottery_buy_qty:5"),
+            InlineKeyboardButton(text="10", callback_data="lottery_buy_qty:10"),
+        ],
+        [InlineKeyboardButton(text=f"🎯 Максимум ({max_count})", callback_data="lottery_buy_max")],
+        [InlineKeyboardButton(text="✏️ Ввести количество", callback_data="lottery_buy_custom")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="lottery_menu")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _send_lottery_menu(message_or_callback_message: Message, telegram_user_id: int | None = None) -> None:
@@ -2897,61 +2916,127 @@ async def lottery_menu(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "lottery_buy")
-async def lottery_buy(callback: CallbackQuery):
+def _format_lottery_purchase_summary(tickets: list[LotteryTicket], total_cost: Decimal, balance_after: Decimal, *, admin_free: bool) -> str:
+    qty = len(tickets)
+    lines = [
+        f"🎫 <b>Куплено билетов:</b> {qty}",
+    ]
+    if admin_free:
+        lines.append("🆓 <b>ADMIN FREE</b> — без списания монет")
+    else:
+        lines.append(f"💸 <b>Списано:</b> {_fmt_coins(total_cost)} монет")
+        lines.append(f"💰 <b>Баланс:</b> {_fmt_coins(balance_after)} монет")
+
+    preview_limit = 5
+    lines.append("")
+    lines.append("<b>Ваши билеты:</b>")
+    for ticket in tickets[:preview_limit]:
+        lines.append(f"• #{ticket.id}: <code>{ticket.numbers}</code>")
+    if qty > preview_limit:
+        lines.append(f"• … и ещё {qty - preview_limit} билет(ов)")
+    return "\n".join(lines)
+
+
+async def _lottery_buy_execute(target, telegram_user_id: int, quantity: int, *, is_callback: bool = False) -> tuple[bool, str]:
+    async with async_session() as session:
+        user = await get_user(session, telegram_user_id)
+        if not user:
+            return False, "Пользователь не найден."
+
+        admin_free = await is_admin_free_eligible(session, telegram_user_id, user)
+        tickets, total_cost, error = await buy_lottery_tickets(session, user, quantity, is_admin_free=admin_free)
+        if error:
+            return False, error
+        await session.refresh(user)
+        text = _format_lottery_purchase_summary(tickets, total_cost, user.balance, admin_free=admin_free)
+
+    await target.answer(text, parse_mode="HTML")
+    return True, f"Куплено {len(tickets)} билет(ов)!"
+
+
+@router.callback_query(F.data == "lottery_buy")
+async def lottery_buy(callback: CallbackQuery, state: FSMContext):
     if not ENABLE_LOTTERY:
         await callback.answer("⛔ Лотерея отключена.", show_alert=True)
         return
+
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         if not user:
             await callback.answer()
             return
+        round_obj = await ensure_current_lottery_round(session)
+        now = utc_now()
+        if round_obj.status != "open" or now >= round_obj.draw_starts_at:
+            await callback.answer("Продажа билетов закрыта до следующего розыгрыша.", show_alert=True)
+            return
 
-        # Admin free — лотерейный билет бесплатно
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
-        if admin_free:
-            round_obj = await ensure_current_lottery_round(session)
-            now = utc_now()
-            if round_obj.status != "open" or now >= round_obj.draw_starts_at:
-                await callback.answer("Продажа билетов закрыта до следующей недели.", show_alert=True)
-                return
-
-            pool = list(range(1, round_obj.numbers_pool + 1))
-            pick_count = min(round_obj.numbers_per_ticket, len(pool))
-            numbers = sorted(random.sample(pool, k=pick_count))
-            from app.services import _serialize_numbers
-            ticket = LotteryTicket(
-                round_id=round_obj.id,
-                user_id=user.id,
-                numbers=_serialize_numbers(numbers),
-            )
-            round_obj.prize_pool += to_decimal(round_obj.ticket_price)
-            await log_balance_change(
-                session, user, to_decimal(0), "lottery_ticket_admin_free",
-                details=f"ADMIN_FREE numbers={ticket.numbers}",
-            )
-            session.add(ticket)
-            await log_user_action(session, user.id, "lottery_admin_free",
-                                  f"round={round_obj.week_key}, numbers={ticket.numbers}")
-            await session.commit()
-            await callback.answer("🆓 Билет куплен бесплатно (ADMIN FREE)!", show_alert=True)
-            await callback.message.answer(
-                f"🎫 Билет #{ticket.id} куплен (🆓 ADMIN FREE)\n"
-                f"Ваши числа: <b>{ticket.numbers}</b>",
-                parse_mode="HTML",
-            )
+        max_count = LOTTERY_MAX_TICKETS_PER_PURCHASE if admin_free else get_lottery_max_tickets_for_balance(user.balance, to_decimal(round_obj.ticket_price))
+        if max_count <= 0:
+            await callback.answer(f"Недостаточно монет. Билет стоит {round_obj.ticket_price}.", show_alert=True)
             return
 
-        ticket, error = await buy_lottery_ticket(session, user)
-        if error:
-            await callback.answer(error, show_alert=True)
-            return
-        await callback.answer("Билет куплен!", show_alert=True)
+        await state.clear()
+        await state.set_state(LotteryBuyState.waiting_quantity)
         await callback.message.answer(
-            f"🎫 Билет #{ticket.id} куплен\n"
-            f"Ваши числа: <b>{ticket.numbers}</b>",
+            "🎫 <b>Покупка билетов</b>\n\n"
+            f"Цена одного билета: <b>{_fmt_coins(round_obj.ticket_price)}</b> монет\n"
+            f"Сейчас можно купить до: <b>{max_count}</b> билет(ов)\n\n"
+            "Выберите количество, нажмите «Максимум» или введите своё число.",
             parse_mode="HTML",
+            reply_markup=_lottery_buy_kb(max_count),
         )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("lottery_buy_qty:"))
+async def lottery_buy_qty(callback: CallbackQuery, state: FSMContext):
+    quantity = int(callback.data.split(":", 1)[1])
+    ok, msg = await _lottery_buy_execute(callback.message, callback.from_user.id, quantity, is_callback=True)
+    await callback.answer(msg, show_alert=not ok)
+    if ok:
+        await state.clear()
+
+
+@router.callback_query(F.data == "lottery_buy_max")
+async def lottery_buy_max(callback: CallbackQuery, state: FSMContext):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+        round_obj = await ensure_current_lottery_round(session)
+        admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
+        quantity = LOTTERY_MAX_TICKETS_PER_PURCHASE if admin_free else get_lottery_max_tickets_for_balance(user.balance, to_decimal(round_obj.ticket_price))
+    if quantity <= 0:
+        await callback.answer("Сейчас нельзя купить ни одного билета.", show_alert=True)
+        return
+    ok, msg = await _lottery_buy_execute(callback.message, callback.from_user.id, quantity, is_callback=True)
+    await callback.answer(msg, show_alert=not ok)
+    if ok:
+        await state.clear()
+
+
+@router.callback_query(F.data == "lottery_buy_custom")
+async def lottery_buy_custom(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(LotteryBuyState.waiting_quantity)
+    await callback.message.answer("✏️ Введите количество билетов, которое хотите купить:")
+    await callback.answer()
+
+
+@router.message(LotteryBuyState.waiting_quantity)
+async def lottery_buy_custom_input(message: Message, state: FSMContext):
+    value = (message.text or "").strip()
+    if not value.isdigit():
+        await message.answer("❌ Введите целое число билетов.")
+        return
+    quantity = int(value)
+    ok, msg = await _lottery_buy_execute(message, message.from_user.id, quantity)
+    if not ok:
+        await message.answer(f"❌ {msg}")
+        return
+    await state.clear()
 
 
 @router.callback_query(F.data == "lottery_my_tickets")
