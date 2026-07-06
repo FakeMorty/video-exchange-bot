@@ -59,7 +59,7 @@ from app.config import (
     ENABLE_LOTTERY,
     WEBHOOK_BASE,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
-    AI_ASSISTANT_PRICE,
+    AI_ASSISTANT_PRICE, LOTTERY_DRAW_HOUR_MSK, LOTTERY_SECONDS_PER_BALL,
 )
 from app.db import async_session
 from app.models import (
@@ -91,7 +91,8 @@ from app.services import (
     create_feedback, process_referral_reward,
     ensure_current_lottery_round, buy_lottery_ticket, buy_lottery_tickets,
     get_latest_lottery_round, get_user_lottery_tickets, get_lottery_state_dict,
-    get_lottery_max_tickets_for_balance, LOTTERY_MAX_TICKETS_PER_PURCHASE,
+    get_lottery_draw_duration_seconds, get_lottery_max_tickets_for_balance,
+    LOTTERY_MAX_TICKETS_PER_PURCHASE,
     is_admin_or_super, is_admin_free_eligible,
     should_show_low_balance_hint, mark_low_balance_hint_shown,
     can_show_offer_to_user, mark_offer_shown,
@@ -2865,30 +2866,59 @@ def _lottery_buy_kb(max_count: int) -> InlineKeyboardMarkup:
 
 async def _send_lottery_menu(message_or_callback_message: Message, telegram_user_id: int | None = None) -> None:
     if not ENABLE_LOTTERY:
-        await message_or_callback_message.answer("⛔ Лотерея временно отключена.")
+        await message_or_callback_message.answer("⛔ Секслото временно отключено.")
         return
+
     async with async_session() as session:
         round_obj = await ensure_current_lottery_round(session)
         state_data = get_lottery_state_dict(round_obj)
         if telegram_user_id is None:
             telegram_user_id = getattr(getattr(message_or_callback_message, "from_user", None), "id", None)
         user = await get_user(session, telegram_user_id) if telegram_user_id else None
+
     base = (WEBHOOK_BASE or "").rstrip("/")
     live_url = f"{base}/lottery/live" if base else ""
+
     try:
         draw_line = f"Следующий розыгрыш: <b>{format_time_for_user(round_obj.draw_starts_at, getattr(user, 'timezone', None))}</b>"
     except Exception:
         draw_line = "Следующий розыгрыш скоро стартует в live-режиме."
-    await message_or_callback_message.answer(
+
+    status_map = {
+        "open": "приём билетов открыт",
+        "drawing": "идёт розыгрыш",
+        "completed": "розыгрыш завершён",
+    }
+    status_text = status_map.get(state_data.get("status"), str(state_data.get("status")))
+
+    draw_date_msk = (round_obj.draw_starts_at + timedelta(hours=3)).strftime("%d.%m.%Y")
+    duration_seconds = get_lottery_draw_duration_seconds(round_obj.numbers_per_ticket)
+    minutes = duration_seconds // 60
+    seconds = duration_seconds % 60
+    duration_text = f"{minutes} мин {seconds} сек" if minutes else f"{seconds} сек"
+    drawn_text = ", ".join(map(str, state_data.get("drawn_numbers", []))) or "пока ничего"
+
+    text = (
         "🎰 <b>Секслото</b>\n\n"
-        f"Раунд: <b>{state_data.get('week_key')}</b>\n"
-        f"Статус: <b>{state_data.get('status')}</b>\n"
-        f"Цена билета: <b>{state_data.get('ticket_price')}</b> монет\n"
-        f"Призовой фонд: <b>{state_data.get('prize_pool')}</b> монет\n"
-        f"Уже выпало: {', '.join(map(str, state_data.get('drawn_numbers', []))) or '—'}\n\n"
-        + (f"🔴 Live-ссылка: <a href=\"{live_url}\">{live_url}</a>\n" if live_url else "")
+        f"📅 <b>Розыгрыш:</b> {draw_date_msk}\n"
+        f"📌 <b>Статус:</b> {status_text}\n"
+        f"🎟 <b>Цена билета:</b> {_fmt_coins(state_data.get('ticket_price'))} монет\n"
+        f"💰 <b>Призовой фонд:</b> {_fmt_coins(state_data.get('prize_pool'))} монет\n"
+        f"🔵 <b>Уже выпало:</b> {drawn_text}\n\n"
+        "<b>Как это работает:</b>\n"
+        f"• в одном билете — <b>{round_obj.numbers_per_ticket} чисел из {round_obj.numbers_pool}</b>\n"
+        f"• каждый день в <b>{LOTTERY_DRAW_HOUR_MSK}:00 по МСК</b> начинается розыгрыш\n"
+        f"• на каждый бочонок уходит около <b>{LOTTERY_SECONDS_PER_BALL} секунд</b>, весь розыгрыш длится примерно <b>{duration_text}</b>\n"
+        "• выигрыши получают билеты с <b>4, 5 или 6 совпадениями</b>\n"
+        "• призовой фонд делится так: <b>6 совпадений — 70%</b>, <b>5 совпадений — 20%</b>, <b>4 совпадения — 10%</b>\n"
+        "• если в одной категории несколько выигрышных билетов, её доля делится между ними поровну\n\n"
+        + (f"🔴 <b>Live:</b> <a href=\"{live_url}\">открыть трансляцию</a>\n" if live_url else "")
         + f"{draw_line}\n\n"
-        "Нажмите «🔴 Открыть Live», чтобы посмотреть колесо и ход розыгрыша.",
+        "Нажми «🎫 Купить билеты», чтобы выбрать количество билетов, или открой Live и следи за розыгрышем в реальном времени."
+    )
+
+    await message_or_callback_message.answer(
+        text,
         parse_mode="HTML",
         reply_markup=_lottery_menu_kb(),
     )
@@ -3067,8 +3097,9 @@ async def lottery_live_info(callback: CallbackQuery):
     base = (WEBHOOK_BASE or "").rstrip("/")
     live_url = f"{base}/lottery/live" if base else "/lottery/live"
     await callback.message.answer(
-        "🔴 <b>Live-розыгрыш</b>\n\n"
-        f"Ссылка: {live_url}",
+        "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
+        "В прямом эфире ты увидишь, как лототрон по очереди вытягивает все бочонки.\n"
+        f"Открыть Live: {live_url}",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -3563,7 +3594,7 @@ async def btn_faq(message: Message, state: FSMContext):
         "<b>3. Что дает подписка VIP?</b>\n"
         "Удвоенные награды за просмотры, скидки в магазине и бонусы в экономике.\n\n"
         "<b>4. Что такое Секслото?</b>\n"
-        "Это главный азартный режим бота: каждый день в 20:00 по МСК начинается розыгрыш, а длительность зависит от количества бочонков (по 15 секунд на каждый).\n\n"
+        "Это ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. Выигрыши получают билеты с 4, 5 или 6 совпадениями.\n\n"
         "<b>5. Как общаться с ИИ?</b>\n"
         f"Нажмите кнопку 💋 ИИ-общение. Одно сообщение стоит {AI_ASSISTANT_PRICE} монет.\n\n"
         "<b>6. Как работают промокоды?</b>\n"
