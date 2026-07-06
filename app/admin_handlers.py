@@ -592,7 +592,7 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
         "lottery": (
             "🎰 <b>Секслото — разыгрываем миллионы!</b>\n\n"
             "Новый раунд уже открыт! Купите счастливый билет за монеты и следите за розыгрышем прямо в Mini App. 🎡\n\n"
-            "👉 Зайдите в меню <b>🎮 Игры ➔ 🎰 Лотерея-лото</b>"
+            "👉 Зайдите в меню <b>🎮 Игры ➔ 🎰 Секслото</b>"
         ),
         "katya": (
             "💋 <b>Катя заждалась тебя...</b>\n\n"
@@ -1329,8 +1329,7 @@ async def admin_bot_settings(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Экономика", callback_data="settings_economy")],
         [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
-        [InlineKeyboardButton(text="🎰 Секслото и лутбоксы", callback_data="settings_games")],
-        [InlineKeyboardButton(text="🎰 Настройки Секслото", callback_data="settings_lottery")],
+        [InlineKeyboardButton(text="🎁 Лутбоксы", callback_data="settings_games")],
         [InlineKeyboardButton(text="🎁 Еженедельный Промокод", callback_data="settings_weekly_promo")],
         [InlineKeyboardButton(text="📺 Реклама", callback_data="settings_ads")],
         [InlineKeyboardButton(text="✏️ Никнеймы", callback_data="settings_nicks")],
@@ -1427,7 +1426,7 @@ async def settings_vip(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- ЛОТЕРЕЯ И ЛУТБОКСЫ ----------
+# ---------- ЛУТБОКСЫ ----------
 @router.callback_query(F.data == "settings_games")
 async def settings_games(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id):
@@ -1435,37 +1434,21 @@ async def settings_games(callback: CallbackQuery):
         return
     async with async_session() as session:
         from app.services import get_setting
-        lt = await get_setting(session, "lottery_ticket_price", "")
-        lp = await get_setting(session, "lottery_numbers_pool", "")
-        ln = await get_setting(session, "lottery_numbers_per_ticket", "")
         lc = await get_setting(session, "lootbox_coin_price", "")
         ls = await get_setting(session, "lootbox_star_price", "")
-        el = await get_setting(session, "enable_lottery", "")
         eb = await get_setting(session, "enable_lootboxes", "")
-    from app.config import (
-        LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL,
-        LOTTERY_NUMBERS_PER_TICKET, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
-        ENABLE_LOTTERY, ENABLE_LOOTBOXES,
-    )
+    from app.config import LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE, ENABLE_LOOTBOXES
     def v(db_val, default):
         return f"{db_val or default}"
     text = (
-        f"🎰 <b>Секслото и лутбоксы</b>\n\n"
-        f"Цена билета лотереи: {v(lt, LOTTERY_TICKET_PRICE)}\n"
-        f"Чисел в пуле: {v(lp, LOTTERY_NUMBERS_POOL)}\n"
-        f"Чисел в билете: {v(ln, LOTTERY_NUMBERS_PER_TICKET)}\n"
+        f"🎁 <b>Лутбоксы</b>\n\n"
         f"Цена лутбокса (монеты): {v(lc, LOOTBOX_COIN_PRICE)}\n"
         f"Цена лутбокса (Stars): {v(ls, LOOTBOX_STAR_PRICE)}\n"
-        f"Лотерея: {v(el, 'on' if ENABLE_LOTTERY else 'off')}\n"
         f"Лутбоксы: {v(eb, 'on' if ENABLE_LOOTBOXES else 'off')}\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Цена билета лотереи", callback_data="settings_edit:lottery_ticket_price")],
-        [InlineKeyboardButton(text="✏️ Чисел в пуле", callback_data="settings_edit:lottery_numbers_pool")],
-        [InlineKeyboardButton(text="✏️ Чисел в билете", callback_data="settings_edit:lottery_numbers_per_ticket")],
         [InlineKeyboardButton(text="✏️ Цена лутбокса (монеты)", callback_data="settings_edit:lootbox_coin_price")],
         [InlineKeyboardButton(text="✏️ Цена лутбокса (Stars)", callback_data="settings_edit:lootbox_star_price")],
-        [InlineKeyboardButton(text="🔘 Лотерея " + ("выкл" if el == "off" else "вкл"), callback_data="settings_toggle:enable_lottery")],
         [InlineKeyboardButton(text="🔘 Лутбоксы " + ("выкл" if eb == "off" else "вкл"), callback_data="settings_toggle:enable_lootboxes")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
@@ -1605,29 +1588,11 @@ async def settings_promos(callback: CallbackQuery):
 # ---------- ЛОТЕРЕЯ (СЕКРЕТНЫЕ НАСТРОЙКИ СЕКЛОТО) ----------
 @router.callback_query(F.data == "settings_lottery")
 async def settings_lottery(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    async with async_session() as session:
-        from app.services import get_setting
-        li = await get_setting(session, "lottery_interval_hours", "")
-        ld = await get_setting(session, "lottery_draw_duration_hours", "")
-    from app.config import LOTTERY_INTERVAL_HOURS, LOTTERY_DRAW_DURATION_HOURS
-    def v(db_val, default):
-        return f"{db_val or default}"
-
-    text = (
-        "🎰 <b>Настройки Секслото</b>\n\n"
-        f"<b>Интервал розыгрышей (часов):</b> {v(li, LOTTERY_INTERVAL_HOURS)}\n"
-        f"<b>Длительность розыгрыша (часов):</b> {v(ld, LOTTERY_DRAW_DURATION_HOURS)}\n"
+    await callback.answer(
+        "Настройки Секслото убраны из админки: расписание и длительность теперь зафиксированы в коде.",
+        show_alert=True,
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Интервал розыгрышей", callback_data="settings_edit:lottery_interval_hours")],
-        [InlineKeyboardButton(text="✏️ Длительность розыгрыша", callback_data="settings_edit:lottery_draw_duration_hours")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
-    ])
-    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
-    await callback.answer()
+    await admin_bot_settings(callback)
 
 
 # ---------- ЕЖЕНЕДЕЛЬНЫЙ ПРОМОКОД ----------

@@ -205,14 +205,16 @@ async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_
 
 
 async def notify_lottery_started(bot: Bot, session, round_id: int):
+    from app.config import LOTTERY_SECONDS_PER_BALL
+
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
     user_ids = list(set(t.user_id for t in tickets))
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
-    
+
     msg = (
-        f"🎰 <b>ЛОТЕРЕЯ #{round_id} НАЧИНАЕТСЯ!</b> 🎰\n\n"
+        f"🎰 <b>СЕКСЛОТО #{round_id} НАЧИНАЕТСЯ!</b> 🎰\n\n"
         f"Лототрон запущен! Бочонки начинают перемешиваться! 🌀\n"
-        f"Следите за сообщениями — мы будем вытаскивать бочонки в реальном времени каждые 5 секунд! 🎪"
+        f"Следите за сообщениями — мы будем вытаскивать бочонки в реальном времени примерно каждые {LOTTERY_SECONDS_PER_BALL} секунд! 🎪"
     )
     for u in users:
         try:
@@ -334,6 +336,8 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
 
 
 async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
+    from app.config import LOTTERY_SECONDS_PER_BALL
+
     REMINDER_HOURS_BEFORE = 1  # За сколько часов до розыгрыша напомнить
     while not stop_event.is_set():
         try:
@@ -352,37 +356,36 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                     log_info(logger, f"Lottery round #{round_obj.id}: sending draw reminder")
                     await notify_lottery_reminder(bot, session, round_obj.id, round_obj.draw_starts_at)
 
-                # Запуск розыгрыша Столото в реальном времени!
+                # Запуск розыгрыша Секслото в реальном времени
                 if round_obj.status == "open" and now_utc >= round_obj.draw_starts_at:
                     round_obj.status = "drawing"
                     await session.commit()
                     log_info(logger, f"Lottery round #{round_obj.id} moved to drawing")
-                    
+
                     # Оповещаем о старте лототрона
                     await notify_lottery_started(bot, session, round_obj.id)
-                    
+
                     drawn_nums = []
-                    # Тянем бочонки по одному с интервалом в 5 секунд!
-                    for step in range(round_obj.numbers_per_ticket):
+                    # Тянем бочонки по одному: один цикл лототрона = 15 секунд.
+                    for _step in range(round_obj.numbers_per_ticket):
                         if stop_event.is_set():
                             break
-                            
-                        # Лототрон крутится 5 секунд
-                        await asyncio.sleep(5)
-                        
+
+                        await asyncio.sleep(LOTTERY_SECONDS_PER_BALL)
+
                         next_num = await draw_next_lottery_number(session, round_obj)
                         if next_num is None:
                             break
                         drawn_nums.append(next_num)
-                        
-                        # Рассылаем выпадающий бочонок всем участникам
+
+                        # Рассылаем выпавший бочонок всем участникам
                         tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_obj.id))).scalars().all()
                         user_ids = list(set(t.user_id for t in tickets))
                         users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
-                        
+
                         drawn_str = ", ".join(f"<b>[{n}]</b>" for n in drawn_nums)
                         msg = (
-                            f"🌀 <b>Лототрон вращается... 5 секунд прошло!</b>\n\n"
+                            f"🌀 <b>Лототрон вращается... {LOTTERY_SECONDS_PER_BALL} секунд прошло!</b>\n\n"
                             f"Из лототрона выпадает бочонок с номером: 🔵 <b>{next_num}</b>! 🎉\n\n"
                             f"📈 <b>Выпавшие номера на данный момент:</b>\n"
                             f"➡ {drawn_str}"

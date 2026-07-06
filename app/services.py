@@ -1587,31 +1587,51 @@ async def get_recent_feedback(session: AsyncSession, limit: int = 20) -> list[Fe
 
 
 # ============================
-# ЛОТЕРЕЯ-ЛОТО
+# СЕКСЛОТО
 # ============================
+def get_lottery_draw_duration_seconds(numbers_per_ticket: int) -> int:
+    from app.config import LOTTERY_SECONDS_PER_BALL
+    return max(1, numbers_per_ticket) * max(1, LOTTERY_SECONDS_PER_BALL)
+
+
 async def _get_lottery_window(session, dt: datetime) -> tuple[str, datetime, datetime, datetime]:
-    from app.config import LOTTERY_INTERVAL_HOURS, LOTTERY_DRAW_DURATION_HOURS
-    
-    db_interval = await get_setting(session, "lottery_interval_hours", "")
-    db_duration = await get_setting(session, "lottery_draw_duration_hours", "")
-    
-    interval = int(db_interval) if db_interval.isdigit() else LOTTERY_INTERVAL_HOURS
-    draw_dur = int(db_duration) if db_duration.isdigit() else LOTTERY_DRAW_DURATION_HOURS
-    
-    epoch = datetime(1970, 1, 1, 20, 0, 0)
-    delta = dt - epoch
-    
-    if interval < 1: interval = 48
-    if draw_dur < 1: draw_dur = 2
-    
-    cycle_idx = int(delta.total_seconds() // (interval * 3600))
-    
-    start = epoch + timedelta(hours=cycle_idx * interval)
-    draw_start = start + timedelta(hours=max(1, interval - draw_dur))
-    draw_end = start + timedelta(hours=interval)
-    
-    key = f"lottery_{interval}h_{cycle_idx}"
-    return key, start, draw_start, draw_end
+    from app.config import LOTTERY_DRAW_HOUR_MSK, LOTTERY_NUMBERS_PER_TICKET
+
+    draw_duration_seconds = get_lottery_draw_duration_seconds(LOTTERY_NUMBERS_PER_TICKET)
+    msk_offset = timedelta(hours=3)
+    now_msk = dt + msk_offset
+
+    today_draw_start_msk = datetime(
+        now_msk.year,
+        now_msk.month,
+        now_msk.day,
+        LOTTERY_DRAW_HOUR_MSK,
+        0,
+        0,
+    )
+    today_draw_end_msk = today_draw_start_msk + timedelta(seconds=draw_duration_seconds)
+
+    if now_msk < today_draw_end_msk:
+        draw_start_msk = today_draw_start_msk
+    else:
+        next_day = now_msk + timedelta(days=1)
+        draw_start_msk = datetime(
+            next_day.year,
+            next_day.month,
+            next_day.day,
+            LOTTERY_DRAW_HOUR_MSK,
+            0,
+            0,
+        )
+
+    draw_end_msk = draw_start_msk + timedelta(seconds=draw_duration_seconds)
+    previous_draw_end_msk = draw_start_msk - timedelta(days=1) + timedelta(seconds=draw_duration_seconds)
+
+    start_utc = previous_draw_end_msk - msk_offset
+    draw_start_utc = draw_start_msk - msk_offset
+    draw_end_utc = draw_end_msk - msk_offset
+    key = f"lottery_{draw_start_msk.strftime('%Y%m%d')}"
+    return key, start_utc, draw_start_utc, draw_end_utc
 
 def _serialize_numbers(nums: list[int], *, sort_numbers: bool = True) -> str:
     values = sorted(nums) if sort_numbers else list(nums)
