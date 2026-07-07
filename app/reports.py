@@ -1613,26 +1613,35 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
     styles = _build_styles(font_name)
     story = []
 
-    story.append(Paragraph("1. Сводка по всем пользователям", styles["H1Custom"]))
-    story.append(Paragraph("Сводный PDF-экспорт по всем пользователям бота", styles["SmallCustom"]))
-    story.append(Paragraph(f"Собран: {data['generated_at']}", styles["SmallCustom"]))
-    story.append(Spacer(1, 0.25 * cm))
+    hero_meta = [
+        f"Собран: {data['generated_at']}",
+        f"Пользователей в выгрузке: {data['users_count']}",
+        "Формат: единый dashboard-документ по всем пользователям",
+    ]
+    story.append(_hero_block("Отчёт по всем пользователям", "Сводный mini-dashboard: одна выгрузка, внутри — карточки всех пользователей базы", hero_meta, font_name, styles, bg="#0B1220"))
+    story.append(Spacer(1, 0.22 * cm))
+    story.append(_kpi_cards([
+        {"label": "Пользователей в выгрузке", "value": str(data['users_count']), "foot": "полный состав PDF", "accent": "#2563EB", "bg": "#EFF6FF"},
+        {"label": "VIP-пользователей", "value": str(data['vip_count']), "foot": "активный VIP в момент выгрузки", "accent": "#8B5CF6", "bg": "#F5F3FF"},
+        {"label": "С покупками", "value": str(data['payers_count']), "foot": "хотя бы одна успешная оплата", "accent": "#F59E0B", "bg": "#FFFBEB"},
+        {"label": "Создатели контента", "value": str(data['creators_count']), "foot": "загружали видео или фото", "accent": "#10B981", "bg": "#ECFDF5"},
+        {"label": "Игроки Секслото", "value": str(data['lottery_players_count']), "foot": "есть хотя бы 1 билет", "accent": "#EC4899", "bg": "#FDF2F8"},
+        {"label": "Пользователи ИИ", "value": str(data['ai_users_count']), "foot": "есть хотя бы один чат", "accent": "#14B8A6", "bg": "#F0FDFA"},
+    ], font_name, styles, columns=3))
+    story.append(Spacer(1, 0.22 * cm))
+    story.append(_section_banner("1. Общая сводка по выгрузке", font_name, bg="#0F172A"))
+    story.append(Spacer(1, 0.12 * cm))
     story.append(_table(_all_users_overview_table(data), font_name, col_widths=[7 * cm, 8.5 * cm]))
-    story.append(Spacer(1, 0.2 * cm))
-    story.append(Paragraph(
-        "Ниже идут последовательные карточки всех пользователей. Это не общий бот-отчёт, а единый документ с пользовательскими срезами по всей базе.",
-        styles["BodyCustom"],
-    ))
+    story.append(Spacer(1, 0.18 * cm))
+    story.append(_section_banner("Как читать документ", font_name, bg="#334155"))
+    story.append(Spacer(1, 0.1 * cm))
+    story.append(_bullet("Это не агрегированный отчёт по боту, а общий PDF, где дальше идут последовательные user-card блоки по каждому пользователю.", styles))
+    story.append(_bullet("Внутри каждой карточки сначала смотри KPI, затем профиль и сводную таблицу, после этого — ключевые выводы по поведению пользователя.", styles))
+    story.append(_bullet("Если нужен более глубокий разбор по графикам и периодам, для конкретного человека лучше открывать его отдельный персональный PDF-отчёт.", styles))
 
     for idx, user_data in enumerate(data["users"], start=1):
         story.append(PageBreak())
         user = user_data["user"]
-        story.append(Paragraph(f"2.{idx}. Пользователь #{idx}", styles["H2Custom"]))
-        story.append(Paragraph(f"{user_data['display_name']} • Telegram ID {user.telegram_id}", styles["SmallCustom"]))
-        story.append(Spacer(1, 0.15 * cm))
-        story.append(_table(_user_summary_table(user_data), font_name, col_widths=[5 * cm, 10.5 * cm]))
-        story.append(Spacer(1, 0.15 * cm))
-
         content = user_data["content"]
         lottery = user_data["lottery"]
         referrals = user_data["referrals"]
@@ -1640,6 +1649,27 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
         comparison = user_data.get("comparison", {})
         economy_30 = next((row for row in user_data["economy_rows"] if row["period"] == "30 дней"), None)
         economy_all = next((row for row in user_data["economy_rows"] if row["period"] == "Всё время"), None)
+
+        user_meta = [
+            f"Пользователь #{idx}",
+            f"Telegram ID: {user.telegram_id}",
+            f"Собранный профиль: {user_data['display_name']}",
+        ]
+        story.append(_hero_block(f"{user_data['display_name']}", "Карточка пользователя внутри общей выгрузки", user_meta, font_name, styles, bg="#111827"))
+        story.append(Spacer(1, 0.18 * cm))
+        story.append(_kpi_cards([
+            {"label": "Баланс", "value": _fmt_dec(user.balance), "foot": "монет на счёте", "accent": "#2563EB", "bg": "#EFF6FF"},
+            {"label": "Уровень / XP", "value": f"{user.level} / {user.xp}", "foot": user_data['profile']['activity_segment'], "accent": "#8B5CF6", "bg": "#F5F3FF"},
+            {"label": "Потрачено Stars", "value": _fmt_dec(user_data['payments']['stars_total']), "foot": f"оплат: {user_data['payments']['count']}", "accent": "#F59E0B", "bg": "#FFFBEB"},
+            {"label": "Контент", "value": str(content['videos'] + content['photos']), "foot": f"одобрено: {_fmt_pct(content['approval_rate_pct'])}", "accent": "#10B981", "bg": "#ECFDF5"},
+            {"label": "Секслото", "value": str(lottery['tickets_total']), "foot": f"ROI: {_fmt_pct(lottery['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
+            {"label": "Рефералы", "value": str(referrals['total']), "foot": f"активных: {referrals['active']}", "accent": "#14B8A6", "bg": "#F0FDFA"},
+        ], font_name, styles, columns=3))
+        story.append(Spacer(1, 0.18 * cm))
+        story.append(_section_banner(f"2.{idx}. Профиль и сводка", font_name, bg="#1E293B"))
+        story.append(Spacer(1, 0.1 * cm))
+        story.append(_table(_user_summary_table(user_data), font_name, col_widths=[5 * cm, 10.5 * cm]))
+        story.append(Spacer(1, 0.15 * cm))
 
         details_table = [
             ["Блок", "Метрика", "Значение"],
@@ -1659,7 +1689,8 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
         ]
         story.append(_table(details_table, font_name, col_widths=[3.2 * cm, 6 * cm, 6.3 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Paragraph("Ключевые выводы", styles["H3Custom"]))
+        story.append(_section_banner("Ключевые выводы", font_name, bg="#334155"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_bullet(f"Профиль поведения: <b>{user_data['insights']['dominant']}</b>", styles))
         story.append(_bullet(user_data['insights']['balance_comment'], styles))
         story.append(_bullet(user_data['insights']['content_comment'], styles))
