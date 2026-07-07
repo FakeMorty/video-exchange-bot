@@ -1411,6 +1411,9 @@ async def get_user_dossier(session: AsyncSession, user_id: int) -> dict | None:
             BalanceLog.source == "admin_balance", BalanceLog.amount > 0
         )
     )).scalar_one() or Decimal("0")
+    is_super_admin = user.telegram_id in ADMINS
+    is_admin = is_super_admin or bool(user.is_admin)
+    role_label = "Супер-админ" if is_super_admin else ("Админ" if is_admin else "Обычный пользователь")
     return {
         "user": user, "games_count": games_count,
         "game_profit": game_profit, "suspicious_games": suspicious_games,
@@ -1421,6 +1424,9 @@ async def get_user_dossier(session: AsyncSession, user_id: int) -> dict | None:
         "balance_logs": balance_logs, "action_logs": action_logs,
         "total_earned": total_earned, "total_spent": total_spent,
         "admin_given": admin_given,
+        "is_admin": is_admin,
+        "is_super_admin": is_super_admin,
+        "role_label": role_label,
     }
 
 

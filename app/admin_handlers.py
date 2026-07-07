@@ -1213,6 +1213,7 @@ async def cb_admin_user_dossier_detailed(callback: CallbackQuery):
         f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
         f"• <b>Username:</b> {('@' + user.username) if user.username else 'нет'}\n"
         f"• <b>Никнейм в БД:</b> {user.display_name or 'не установлен'}\n"
+        f"• <b>Роль доступа:</b> {d['role_label']}\n"
         f"• <b>Баланс:</b> <b>{user.balance}</b> монет\n"
         f"• <b>VIP статус:</b> {'👑 Активен до ' + user.vip_until.strftime('%d.%m.%Y') if is_vip(user) else '❌ Нет'}\n"
         f"• <b>Рефералы:</b> пригласил <b>{user.referrals_count}</b> юзеров (заработал {user.referral_earnings} монет)\n"

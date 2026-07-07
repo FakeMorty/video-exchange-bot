@@ -23,6 +23,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import and_, func, or_, select
 
+from app.config import ADMINS
 from app.db import async_session
 from app.models import (
     BalanceLog,
@@ -115,6 +116,22 @@ def _detect_payment_type(payload: str | None) -> str:
         if payload.startswith(f"{key}_"):
             return key
     return "other"
+
+
+def _user_role_info(user: User) -> dict[str, bool | str]:
+    is_super = user.telegram_id in ADMINS
+    is_admin = is_super or bool(getattr(user, "is_admin", False))
+    if is_super:
+        label = "Супер-админ"
+    elif is_admin:
+        label = "Админ"
+    else:
+        label = "Обычный пользователь"
+    return {
+        "is_super_admin": is_super,
+        "is_admin": is_admin,
+        "label": label,
+    }
 
 
 def _fmt_dec(value: Decimal | float | int | None) -> str:
@@ -583,6 +600,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
 
         display_name = await get_styled_display_name(session, user)
         is_vip = bool(user.vip_until and user.vip_until > now)
+        role_info = _user_role_info(user)
 
         all_logs = (await session.execute(select(BalanceLog).where(BalanceLog.user_id == user.id).order_by(BalanceLog.created_at.asc()))).scalars().all()
         logs_30 = [log for log in all_logs if log.created_at >= (now - timedelta(days=30))]
@@ -810,6 +828,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
         "generated_at": generated_at,
         "user": user,
         "display_name": display_name,
+        "role": role_info,
         "is_vip": is_vip,
         "profile": {"registration_days": reg_days, "bonus_streak": user.bonus_streak, "active_days_30": active_days_30, "activity_segment": activity_segment},
         "payments": {"count": len(payments), "count_30": len(payments_30), "stars_total": paid_stars_total, "stars_30": paid_stars_30, "coins_total": paid_coins_total, "types": {k: float(v) for k, v in payment_type_counts.items()}, "stars_series_30": [payment_stars_daily.get(day, 0.0) for day in last_30_labels], "count_series_30": [payment_count_daily.get(day, 0.0) for day in last_30_labels]},
@@ -856,6 +875,8 @@ async def collect_bot_report_data() -> dict:
         total_users = await _count_query(session, select(func.count(User.id)))
         active_users = await _count_query(session, select(func.count(User.id)).where(User.status == "active"))
         vip_users = await _count_query(session, select(func.count(User.id)).where(User.vip_until.is_not(None), User.vip_until > now))
+        admin_users_db = await _count_query(session, select(func.count(User.id)).where(User.is_admin.is_(True)))
+        super_admin_users = sum(1 for tid in ADMINS if tid)
         trusted_uploaders = await _count_query(session, select(func.count(TrustedUploader.id)))
         total_balance = Decimal(str((await session.execute(select(func.sum(User.balance)))).scalar_one() or 0))
         avg_balance = Decimal(str((await session.execute(select(func.avg(User.balance)))).scalar_one() or 0))
@@ -1101,7 +1122,7 @@ async def collect_bot_report_data() -> dict:
 
     return {
         "generated_at": generated_at,
-        "summary": {"total_users": total_users, "active_users": active_users, "vip_users": vip_users, "trusted_uploaders": trusted_uploaders, "avg_balance": avg_balance, "total_balance": total_balance, "paid_stars_total": purchases_paid, "payer_count": payer_count, "payments_count": payments_count, "payment_conversion_pct": _safe_div(payer_count * 100, total_users), "avg_stars_per_payer": _safe_div(purchases_paid, payer_count), "avg_stars_per_payment": _safe_div(purchases_paid, payments_count), "vip_share_pct": vip_share_pct, "nickname_set_pct": nickname_set_pct, "rules_accept_pct": rules_accept_pct, "dormant_30_pct": dormant_30_pct, "new_users": new_users_rows, "dau": dau, "wau": wau, "mau": mau, "sticky_pct": sticky_pct},
+        "summary": {"total_users": total_users, "active_users": active_users, "vip_users": vip_users, "admin_users_db": admin_users_db, "super_admin_users": super_admin_users, "trusted_uploaders": trusted_uploaders, "avg_balance": avg_balance, "total_balance": total_balance, "paid_stars_total": purchases_paid, "payer_count": payer_count, "payments_count": payments_count, "payment_conversion_pct": _safe_div(payer_count * 100, total_users), "avg_stars_per_payer": _safe_div(purchases_paid, payer_count), "avg_stars_per_payment": _safe_div(purchases_paid, payments_count), "vip_share_pct": vip_share_pct, "nickname_set_pct": nickname_set_pct, "rules_accept_pct": rules_accept_pct, "dormant_30_pct": dormant_30_pct, "new_users": new_users_rows, "dau": dau, "wau": wau, "mau": mau, "sticky_pct": sticky_pct},
         "growth": {"labels_30": labels_30, "registrations_30": reg_series, "cumulative_30": cumulative, "registrations_last_7": registrations_last_7, "registrations_prev_7": registrations_prev_7},
         "content": {"total": content_total, "approved": content_approved, "rejected": content_rejected, "pending": content_pending, "auto_approved": auto_approved, "views": total_views, "avg_rating": round(float(avg_rating or 0), 2), "uploads_30": upload_series, "creators_total": creators_total, "creators_30": creators_30, "viewers_30": viewers_30, "approval_rate_pct": approval_rate_pct, "avg_views_per_upload": avg_views_per_upload, "avg_uploads_per_creator": avg_uploads_per_creator},
         "economy": {"positive_total": positive_total, "negative_total": negative_total, "net_total": net_total, "source_income": source_income, "source_expense": source_expense, "daily_net_30": econ_series, "payment_stars_series_30": [payment_stars_map.get(day, 0.0) for day in labels_30], "payment_count_series_30": [payment_count_map.get(day, 0.0) for day in labels_30], "payment_type_counts": {k: float(v) for k, v in payment_type_counts.items()}, "labels_30": labels_30},
@@ -1126,6 +1147,7 @@ def _user_summary_table(data: dict):
         ["Параметр", "Значение"],
         ["Ник", data["display_name"]],
         ["Telegram ID", str(user.telegram_id)],
+        ["Статус доступа", str(data["role"]["label"])],
         ["Дата регистрации", user.created_at.strftime("%d.%m.%Y %H:%M")],
         ["Возраст профиля", f"{data['profile']['registration_days']} дн."],
         ["Текущий баланс", _fmt_dec(user.balance)],
@@ -1145,6 +1167,8 @@ def _bot_summary_table(data: dict):
         ["Всего пользователей", str(summary["total_users"])],
         ["Активных пользователей", str(summary["active_users"])],
         ["VIP", f"{summary['vip_users']} ({_fmt_pct(summary['vip_share_pct'])})"],
+        ["Супер-админы", str(summary["super_admin_users"])],
+        ["Админы в БД", str(summary["admin_users_db"])],
         ["Поставили ник", _fmt_pct(summary["nickname_set_pct"])],
         ["Приняли правила", _fmt_pct(summary["rules_accept_pct"])],
         ["Спящие 30+ дней", _fmt_pct(summary["dormant_30_pct"])],
@@ -1599,6 +1623,8 @@ def _all_users_overview_table(data: dict):
     rows = [["Параметр", "Значение"]]
     rows.extend([
         ["Пользователей в выгрузке", str(data["users_count"])],
+        ["Супер-админов", str(data["super_admin_count"])],
+        ["Админов", str(data["admin_count"])],
         ["VIP-пользователей", str(data["vip_count"])],
         ["С покупками", str(data["payers_count"])],
         ["С загрузками контента", str(data["creators_count"])],
@@ -1622,12 +1648,14 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
     story.append(Spacer(1, 0.22 * cm))
     story.append(_kpi_cards([
         {"label": "Пользователей в выгрузке", "value": str(data['users_count']), "foot": "полный состав PDF", "accent": "#2563EB", "bg": "#EFF6FF"},
+        {"label": "Супер-админы", "value": str(data['super_admin_count']), "foot": "по списку ADMINS", "accent": "#7C3AED", "bg": "#F5F3FF"},
+        {"label": "Админы", "value": str(data['admin_count']), "foot": "с учётом супер-админов", "accent": "#0F766E", "bg": "#F0FDFA"},
         {"label": "VIP-пользователей", "value": str(data['vip_count']), "foot": "активный VIP в момент выгрузки", "accent": "#8B5CF6", "bg": "#F5F3FF"},
         {"label": "С покупками", "value": str(data['payers_count']), "foot": "хотя бы одна успешная оплата", "accent": "#F59E0B", "bg": "#FFFBEB"},
         {"label": "Создатели контента", "value": str(data['creators_count']), "foot": "загружали видео или фото", "accent": "#10B981", "bg": "#ECFDF5"},
         {"label": "Игроки Секслото", "value": str(data['lottery_players_count']), "foot": "есть хотя бы 1 билет", "accent": "#EC4899", "bg": "#FDF2F8"},
         {"label": "Пользователи ИИ", "value": str(data['ai_users_count']), "foot": "есть хотя бы один чат", "accent": "#14B8A6", "bg": "#F0FDFA"},
-    ], font_name, styles, columns=3))
+    ], font_name, styles, columns=4))
     story.append(Spacer(1, 0.22 * cm))
     story.append(_section_banner("1. Общая сводка по выгрузке", font_name, bg="#0F172A"))
     story.append(Spacer(1, 0.12 * cm))
@@ -1721,6 +1749,8 @@ async def build_all_users_report_pdf() -> tuple[Path, str]:
         "generated_at": utc_now().strftime('%d.%m.%Y %H:%M UTC'),
         "users": reports,
         "users_count": len(reports),
+        "super_admin_count": sum(1 for report in reports if report.get("role", {}).get("is_super_admin")),
+        "admin_count": sum(1 for report in reports if report.get("role", {}).get("is_admin")),
         "vip_count": sum(1 for report in reports if report.get("is_vip")),
         "payers_count": sum(1 for report in reports if report.get("payments", {}).get("count", 0) > 0),
         "creators_count": sum(1 for report in reports if (report.get("content", {}).get("videos", 0) + report.get("content", {}).get("photos", 0)) > 0),
