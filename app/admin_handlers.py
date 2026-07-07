@@ -38,7 +38,7 @@ from app.keyboards import (
     admin_db_keyboard,
 )
 from app.logger import get_logger
-from app.reports import build_bot_report_pdf, build_user_report_pdf
+from app.reports import build_all_users_report_pdf, build_bot_report_pdf, build_user_report_pdf
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
 logger = get_logger(__name__)
@@ -1352,6 +1352,7 @@ async def admin_extended_stats(callback: CallbackQuery):
     rows = []
     if is_super_admin(callback.from_user.id):
         rows.append([InlineKeyboardButton(text="📊 Экспорт PDF по боту", callback_data="admin_export_bot_pdf")])
+        rows.append([InlineKeyboardButton(text="👥 Экспорт PDF по всем пользователям", callback_data="admin_export_all_users_pdf")])
     rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")])
 
     await _safe_edit(
@@ -1384,6 +1385,40 @@ async def admin_export_bot_pdf(callback: CallbackQuery):
             await callback.bot.send_message(
                 callback.from_user.id,
                 f"❌ Не удалось собрать PDF по боту. Ошибка: {escape(str(e))}",
+                parse_mode="HTML",
+            )
+        finally:
+            if pdf_path:
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
+
+    asyncio.create_task(_runner())
+
+
+@router.callback_query(F.data == "admin_export_all_users_pdf")
+async def admin_export_all_users_pdf(callback: CallbackQuery):
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только супер-админ.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.answer("⏳ Готовлю единый PDF-отчёт по всем пользователям бота. Это может занять время...")
+
+    async def _runner() -> None:
+        pdf_path = None
+        try:
+            pdf_path, filename = await build_all_users_report_pdf()
+            await callback.bot.send_document(
+                callback.from_user.id,
+                FSInputFile(str(pdf_path), filename=filename),
+                caption="👥 PDF-отчёт по всем пользователям готов.",
+            )
+        except Exception as e:
+            logger.exception("Failed to build all users PDF report")
+            await callback.bot.send_message(
+                callback.from_user.id,
+                f"❌ Не удалось собрать PDF по всем пользователям. Ошибка: {escape(str(e))}",
                 parse_mode="HTML",
             )
         finally:
