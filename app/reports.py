@@ -198,6 +198,11 @@ def _build_styles(font_name: str):
     styles.add(ParagraphStyle(name="H3Custom", parent=styles["Heading3"], fontName=font_name, fontSize=11, leading=14, textColor=colors.HexColor("#475569"), spaceBefore=8, spaceAfter=4))
     styles.add(ParagraphStyle(name="BodyCustom", parent=styles["BodyText"], fontName=font_name, fontSize=9.5, leading=13))
     styles.add(ParagraphStyle(name="SmallCustom", parent=styles["BodyText"], fontName=font_name, fontSize=8, leading=11, textColor=colors.HexColor("#666666")))
+    styles.add(ParagraphStyle(name="BannerTitle", parent=styles["Heading1"], fontName=font_name, fontSize=20, leading=24, textColor=colors.white, spaceAfter=3))
+    styles.add(ParagraphStyle(name="BannerBody", parent=styles["BodyText"], fontName=font_name, fontSize=9, leading=12, textColor=colors.white))
+    styles.add(ParagraphStyle(name="KPILabel", parent=styles["BodyText"], fontName=font_name, fontSize=8.2, leading=10, textColor=colors.HexColor("#64748B")))
+    styles.add(ParagraphStyle(name="KPIValue", parent=styles["Heading2"], fontName=font_name, fontSize=15, leading=18, textColor=colors.HexColor("#0F172A")))
+    styles.add(ParagraphStyle(name="KPIFoot", parent=styles["BodyText"], fontName=font_name, fontSize=7.5, leading=9, textColor=colors.HexColor("#475569")))
     return styles
 
 
@@ -215,6 +220,82 @@ def _table(data, font_name: str, col_widths=None):
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return table
+
+
+def _section_banner(title: str, font_name: str, *, bg: str = "#0F172A", fg: str = "#FFFFFF"):
+    table = Table([[title]], colWidths=[18 * cm], hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor(fg)),
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, -1), 12),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    return table
+
+
+def _kpi_cards(cards: list[dict], font_name: str, styles, *, columns: int = 3):
+    normalized = list(cards)
+    while normalized and len(normalized) % columns != 0:
+        normalized.append({})
+
+    rows = []
+    for idx in range(0, len(normalized), columns):
+        row_cards = []
+        for card in normalized[idx:idx + columns]:
+            if not card:
+                empty = Table([[""]], colWidths=[5.7 * cm])
+                empty.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0, colors.white)]))
+                row_cards.append(empty)
+                continue
+            accent = colors.HexColor(card.get("accent", "#2563EB"))
+            soft = colors.HexColor(card.get("bg", "#F8FAFC"))
+            label = Paragraph(card.get("label", "—"), styles["KPILabel"])
+            value = Paragraph(f"<b>{card.get('value', '—')}</b>", styles["KPIValue"])
+            foot_text = card.get("foot")
+            body = [[label], [value]]
+            if foot_text:
+                body.append([Paragraph(str(foot_text), styles["KPIFoot"])])
+            card_table = Table(body, colWidths=[5.55 * cm])
+            card_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), soft),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#D7E0EA")),
+                ("LINEBEFORE", (0, 0), (0, -1), 5, accent),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            row_cards.append(card_table)
+        rows.append(row_cards)
+    outer = Table(rows, colWidths=[5.8 * cm] * columns, hAlign="LEFT")
+    outer.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    return outer
+
+
+def _hero_block(title: str, subtitle: str, meta_lines: list[str], font_name: str, styles, *, bg: str = "#0F172A"):
+    title_p = Paragraph(title, styles["BannerTitle"])
+    subtitle_p = Paragraph(subtitle, styles["BannerBody"])
+    meta = Paragraph("<br/>".join(meta_lines), styles["BannerBody"])
+    table = Table([[title_p], [subtitle_p], [meta]], colWidths=[18 * cm], hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
     ]))
     return table
 
@@ -307,6 +388,10 @@ def _bullet(text: str, styles):
     return Paragraph(f"• {text}", styles["BodyCustom"])
 
 
+def _chart_hint(text: str, styles):
+    return Paragraph(f"<b>Как читать:</b> {text}", styles["SmallCustom"])
+
+
 def _safe_div(numerator, denominator) -> float:
     if not denominator:
         return 0.0
@@ -335,10 +420,13 @@ def _describe_activity_segment(active_days_30: int) -> str:
 
 def _report_footer(canvas, doc, *, title: str, generated_at: str, font_name: str):
     canvas.saveState()
+    canvas.setStrokeColor(colors.HexColor("#CBD5E1"))
+    canvas.setLineWidth(0.6)
+    canvas.line(doc.leftMargin, 1.05 * cm, A4[0] - doc.rightMargin, 1.05 * cm)
     canvas.setFont(font_name, 8)
     canvas.setFillColor(colors.HexColor("#64748B"))
-    canvas.drawString(doc.leftMargin, 0.75 * cm, f"{title} • сгенерировано {generated_at}")
-    canvas.drawRightString(A4[0] - doc.rightMargin, 0.75 * cm, f"Стр. {canvas.getPageNumber()}")
+    canvas.drawString(doc.leftMargin, 0.72 * cm, f"{title} • сгенерировано {generated_at}")
+    canvas.drawRightString(A4[0] - doc.rightMargin, 0.72 * cm, f"Стр. {canvas.getPageNumber()}")
     canvas.restoreState()
 
 
@@ -1080,22 +1168,38 @@ def _render_user_report_sync(data: dict, output_path: Path):
 
     with tempfile.TemporaryDirectory(prefix="user_report_assets_") as tmpdir:
         tmp = Path(tmpdir)
-        story.append(Paragraph("1. Сводка и профиль", styles["H1Custom"]))
-        story.append(Paragraph("Подробный отчёт по активности, экономике и Секслото", styles["SmallCustom"]))
-        story.append(Paragraph(f"Собран: {data['generated_at']}", styles["SmallCustom"]))
-        story.append(Spacer(1, 0.25 * cm))
+        hero_meta = [
+            f"Собран: {data['generated_at']}",
+            f"Пользователь: {data['display_name']}",
+            f"Telegram ID: {data['user'].telegram_id}",
+        ]
+        story.append(_hero_block("Отчёт по пользователю", "Подробный mini-dashboard по активности, экономике и игровому поведению", hero_meta, font_name, styles, bg="#111827"))
+        story.append(Spacer(1, 0.22 * cm))
+        story.append(_kpi_cards([
+            {"label": "Текущий баланс", "value": _fmt_dec(data['user'].balance), "foot": "монет на счёте", "accent": "#2563EB", "bg": "#EFF6FF"},
+            {"label": "Активных дней / 30", "value": str(data['profile']['active_days_30']), "foot": data['profile']['activity_segment'], "accent": "#10B981", "bg": "#ECFDF5"},
+            {"label": "Уровень / XP", "value": f"{data['user'].level} / {data['user'].xp}", "foot": "уровень прогресса", "accent": "#8B5CF6", "bg": "#F5F3FF"},
+            {"label": "Потрачено Stars", "value": _fmt_dec(data['payments']['stars_total']), "foot": f"оплат: {data['payments']['count']}", "accent": "#F59E0B", "bg": "#FFFBEB"},
+            {"label": "Билеты Секслото", "value": str(data['lottery']['tickets_total']), "foot": f"ROI: {_fmt_pct(data['lottery']['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
+            {"label": "Рефералы", "value": str(data['referrals']['total']), "foot": f"активных: {data['referrals']['active']}", "accent": "#14B8A6", "bg": "#F0FDFA"},
+        ], font_name, styles, columns=3))
+        story.append(Spacer(1, 0.22 * cm))
+        story.append(_section_banner("Сводка профиля", font_name, bg="#1E293B"))
+        story.append(Spacer(1, 0.12 * cm))
         story.append(_table(_user_summary_table(data), font_name, col_widths=[5 * cm, 10.5 * cm]))
-        story.append(Spacer(1, 0.2 * cm))
+        story.append(Spacer(1, 0.18 * cm))
         story.append(_table([["Платёжная сводка", "Значение"], ["Успешных оплат", str(data["payments"]["count"])], ["Успешных оплат за 30 дней", str(data["payments"]["count_30"])], ["Всего потрачено Stars", _fmt_dec(data["payments"]["stars_total"])], ["Stars за 30 дней", _fmt_dec(data["payments"]["stars_30"])], ["Монет начислено покупками", _fmt_dec(data["payments"]["coins_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
-        story.append(Spacer(1, 0.2 * cm))
-        story.append(Paragraph("Короткие выводы", styles["H3Custom"]))
+        story.append(Spacer(1, 0.18 * cm))
+        story.append(_section_banner("Короткие выводы", font_name, bg="#334155"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_bullet(f"Главный паттерн поведения: <b>{data['insights']['dominant']}</b>", styles))
         story.append(_bullet(f"Сегмент активности: <b>{data['insights']['activity_segment']}</b>", styles))
         story.append(_bullet(data['insights']['balance_comment'], styles))
         story.append(_bullet(data['insights']['purchase_comment'], styles))
         story.append(PageBreak())
 
-        story.append(Paragraph("2. Экономика", styles["H2Custom"]))
+        story.append(_section_banner("2. Экономика", font_name, bg="#0F172A"))
+        story.append(Spacer(1, 0.1 * cm))
         eco_table = [["Период", "Заработано", "Потрачено", "Чистый результат", "Средний день"]]
         for row in data["economy_rows"]:
             eco_table.append([row["period"], _fmt_dec(row["earned"]), _fmt_dec(row["spent"]), _fmt_dec(row["net"]), _fmt_dec(row["avg_daily"])])
@@ -1104,6 +1208,8 @@ def _render_user_report_sync(data: dict, output_path: Path):
         story.append(Image(_chart_line("Динамика баланса за 30 дней", data["balance_labels_30"], data["balance_series_30"], tmp / "balance.png"), width=17 * cm, height=6.5 * cm))
         story.append(Spacer(1, 0.15 * cm))
         story.append(Image(_chart_dual_bar("Доходы и расходы по дням", data["balance_labels_30"], data["income_series_30"], data["expense_series_30"], tmp / "income_expense.png"), width=17 * cm, height=6.5 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("на графике баланса линия выше — баланс больше; на столбцах по дням зелёный показывает начисления, красный — траты. Чем выше столбец, тем сильнее движение монет в этот день.", styles))
         story.append(Spacer(1, 0.15 * cm))
         if data["source_income"]:
             story.append(Image(_chart_horizontal_bar("Топ источников дохода", data["source_income"], tmp / "income_sources.png", color="#16A34A"), width=17 * cm, height=6 * cm))
@@ -1122,7 +1228,8 @@ def _render_user_report_sync(data: dict, output_path: Path):
         story.append(PageBreak())
 
         content = data["content"]
-        story.append(Paragraph("3. Контент и активность", styles["H2Custom"]))
+        story.append(_section_banner("3. Контент и активность", font_name, bg="#1D4ED8"))
+        story.append(Spacer(1, 0.1 * cm))
         content_table = [["Метрика", "Значение"], ["Загружено видео", str(content["videos"])], ["Загружено фото", str(content["photos"])], ["Одобрено", str(content["approved"])], ["Отклонено", str(content["rejected"])], ["На модерации", str(content["pending"])], ["Доля одобрения", _fmt_pct(content["approval_rate_pct"])], ["Средний рейтинг", str(content["avg_rating"])], ["Просмотры вашего контента", str(content["own_content_views"])], ["Ваши просмотры", str(content["own_views"])], ["Комментарии", str(content["comments"])], ["Реакции", str(content["reactions"])]]
         story.append(_table(content_table, font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
@@ -1140,10 +1247,13 @@ def _render_user_report_sync(data: dict, output_path: Path):
         if data["activity_mix_30"]:
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_horizontal_bar("Микс активности за 30 дней", data["activity_mix_30"], tmp / "activity_mix.png", color="#8B5CF6"), width=17 * cm, height=5.8 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("в stacked-графике загрузок каждый цвет — свой тип контента; чем выше суммарный столбец, тем активнее день. На горизонтальных диаграммах длиннее полоса = заметно больший вклад метрики.", styles))
         story.append(PageBreak())
 
         lottery = data["lottery"]
-        story.append(Paragraph("4. Секслото", styles["H2Custom"]))
+        story.append(_section_banner("4. Секслото", font_name, bg="#7C3AED"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Метрика", "Значение"], ["Раундов участия", str(lottery["rounds_played"])], ["Куплено билетов", str(lottery["tickets_total"])], ["Выигрышных билетов (4+)", str(lottery["win_tickets"])], ["Частота выигрыша", _fmt_pct(lottery["win_rate_pct"])], ["Среднее совпадений на билет", _fmt_dec(lottery["avg_matches"])], ["Потрачено всего", _fmt_dec(lottery["spent_total"])], ["Выиграно всего", _fmt_dec(lottery["won_total"])], ["ROI", _fmt_pct(lottery["roi_pct"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         lot_table = [["Период", "Билетов", "Потрачено", "Выиграно", "Результат"]]
@@ -1162,10 +1272,13 @@ def _render_user_report_sync(data: dict, output_path: Path):
         story.append(Image(_chart_line("Чистый результат Секслото по дням", data["balance_labels_30"], data["lottery_net_series_30"], tmp / "lottery_net.png", color="#7C3AED"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
         story.append(Image(_chart_distribution("Распределение совпадений", data["match_distribution"], tmp / "lottery_dist.png"), width=16 * cm, height=5 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("линия «билеты по дням» показывает, когда пользователь входил в игру чаще. График чистого результата выше нуля означает прибыль, ниже нуля — убыток. В распределении совпадений самые высокие столбцы — самые частые исходы.", styles))
         story.append(PageBreak())
 
         ref = data["referrals"]
-        story.append(Paragraph("5. Рефералы", styles["H2Custom"]))
+        story.append(_section_banner("5. Рефералы", font_name, bg="#0F766E"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Метрика", "Значение"], ["Приглашено всего", str(ref["total"])], ["Активных рефералов", str(ref["active"])], ["Доля активных", _fmt_pct(ref["activation_rate_pct"])], ["Заработано с рефералов", _fmt_dec(ref["earned_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['referral_comment'], styles))
@@ -1176,10 +1289,13 @@ def _render_user_report_sync(data: dict, output_path: Path):
         story.append(_table(ref_period_table, font_name, col_widths=[4 * cm, 4 * cm, 4 * cm]))
         story.append(Spacer(1, 0.2 * cm))
         story.append(Image(_chart_dual_bar("Рефералы и доход от них (30 дней)", data["referral_labels_30"], data["referral_series_30"], data["referral_income_series_30"], tmp / "referrals.png", left_label="Новые рефералы", right_label="Доход"), width=17 * cm, height=6.5 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("синий/левый столбец — сколько новых людей пришло по реферальной ссылке, соседний столбец — сколько монет это принесло. Ищи дни, где людей мало, а доход высокий — это признак более качественных рефералов.", styles))
         story.append(PageBreak())
 
         ai = data["ai"]
-        story.append(Paragraph("6. ИИ-общение", styles["H2Custom"]))
+        story.append(_section_banner("6. ИИ-общение", font_name, bg="#DB2777"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Метрика", "Значение"], ["Чатов", str(ai["chat_count"])], ["Сообщений пользователя", str(ai["user_messages"])], ["Ответов ассистента", str(ai["assistant_messages"])], ["Среднее сообщений на чат", _fmt_dec(ai["avg_messages_per_chat"])], ["Средняя стоимость сообщения пользователя", _fmt_dec(ai["avg_cost_per_user_message"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         ai_table = [["Период", "Сообщений", "Потрачено"]]
         for row in ai["rows"]:
@@ -1192,9 +1308,12 @@ def _render_user_report_sync(data: dict, output_path: Path):
         if any(ai["daily_series_30"]):
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_line("Сообщения по дням", data["balance_labels_30"], ai["daily_series_30"], tmp / "ai_daily.png", color="#EC4899"), width=17 * cm, height=6 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("по персонажам видно, кого выбирали чаще всего: длиннее полоса — выше интерес. Линия по дням показывает, в какие дни пользователь сильнее всего общался с ИИ.", styles))
         story.append(PageBreak())
 
-        story.append(Paragraph("7. Сравнение с базой", styles["H2Custom"]))
+        story.append(_section_banner("7. Сравнение с базой", font_name, bg="#0F766E"))
+        story.append(Spacer(1, 0.1 * cm))
         comparison_rows = [["Метрика", "Пользователь", "Среднее", "Медиана", "Позиция"]]
         for row in data["comparison"]["rows"]:
             comparison_rows.append([
@@ -1209,13 +1328,16 @@ def _render_user_report_sync(data: dict, output_path: Path):
         if percentile_chart:
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_horizontal_bar("Процентили относительно базы", percentile_chart, tmp / "comparison_percentiles.png", color="#14B8A6"), width=17 * cm, height=5.8 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("процентиль показывает положение относительно всей базы: чем он выше, тем лучше пользователь выглядит по этой метрике по сравнению с большинством остальных.", styles))
         story.append(Spacer(1, 0.2 * cm))
         story.append(_bullet(f"Сильнее всего пользователь выделяется по метрике: <b>{data['comparison']['strongest']}</b>", styles))
         story.append(_bullet(f"Слабее всего относительно базы выглядит метрика: <b>{data['comparison']['weakest']}</b>", styles))
         story.append(_bullet(f"Размер базы для сравнения: <b>{data['comparison']['population']}</b> пользователей", styles))
         story.append(PageBreak())
 
-        story.append(Paragraph("8. Итоговый профиль", styles["H2Custom"]))
+        story.append(_section_banner("8. Итоговый профиль", font_name, bg="#1E293B"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_bullet(f"Вы больше похожи на: <b>{data['insights']['dominant']}</b>", styles))
         story.append(_bullet(f"Основной источник дохода: <b>{data['insights']['top_income']}</b>", styles))
         story.append(_bullet(f"Основной источник расходов: <b>{data['insights']['top_expense']}</b>", styles))
@@ -1236,17 +1358,32 @@ def _render_bot_report_sync(data: dict, output_path: Path):
 
     with tempfile.TemporaryDirectory(prefix="bot_report_assets_") as tmpdir:
         tmp = Path(tmpdir)
-        story.append(Paragraph("1. Общая сводка", styles["H1Custom"]))
-        story.append(Paragraph("Общая аналитика по пользователям, экономике, контенту и Секслото", styles["SmallCustom"]))
-        story.append(Paragraph(f"Собран: {data['generated_at']}", styles["SmallCustom"]))
-        story.append(Spacer(1, 0.25 * cm))
+        hero_meta = [
+            f"Собран: {data['generated_at']}",
+            f"Пользователей: {data['summary']['total_users']}",
+            f"Платящая конверсия: {_fmt_pct(data['summary']['payment_conversion_pct'])}",
+        ]
+        story.append(_hero_block("Отчёт по боту", "Mini-dashboard по росту, монетизации, удержанию и игровым механикам", hero_meta, font_name, styles, bg="#0B1220"))
+        story.append(Spacer(1, 0.22 * cm))
+        story.append(_kpi_cards([
+            {"label": "Всего пользователей", "value": str(data['summary']['total_users']), "foot": f"VIP: {_fmt_pct(data['summary']['vip_share_pct'])}", "accent": "#2563EB", "bg": "#EFF6FF"},
+            {"label": "Платящих пользователей", "value": str(data['summary']['payer_count']), "foot": _fmt_pct(data['summary']['payment_conversion_pct']), "accent": "#F59E0B", "bg": "#FFFBEB"},
+            {"label": "DAU / MAU", "value": f"{data['summary']['dau']} / {data['summary']['mau']}", "foot": f"Sticky: {_fmt_pct(data['summary']['sticky_pct'])}", "accent": "#10B981", "bg": "#ECFDF5"},
+            {"label": "Оплачено Stars", "value": _fmt_dec(data['summary']['paid_stars_total']), "foot": f"оплат: {data['summary']['payments_count']}", "accent": "#8B5CF6", "bg": "#F5F3FF"},
+            {"label": "Монет в системе", "value": _fmt_dec(data['summary']['total_balance']), "foot": f"средний баланс: {_fmt_dec(data['summary']['avg_balance'])}", "accent": "#14B8A6", "bg": "#F0FDFA"},
+            {"label": "Спящие 30+ дней", "value": _fmt_pct(data['summary']['dormant_30_pct']), "foot": "пользователи без недавней активности", "accent": "#EF4444", "bg": "#FEF2F2"},
+        ], font_name, styles, columns=3))
+        story.append(Spacer(1, 0.22 * cm))
+        story.append(_section_banner("1. Общая сводка", font_name, bg="#0F172A"))
+        story.append(Spacer(1, 0.12 * cm))
         story.append(_table(_bot_summary_table(data), font_name, col_widths=[7 * cm, 8.5 * cm]))
-        story.append(Spacer(1, 0.2 * cm))
+        story.append(Spacer(1, 0.18 * cm))
         story.append(_table([["Монетизация", "Значение"], ["Оплат всего", str(data["summary"]["payments_count"])], ["Средний чек на плательщика (Stars)", _fmt_dec(data["summary"]["avg_stars_per_payer"])], ["Средний чек на оплату (Stars)", _fmt_dec(data["summary"]["avg_stars_per_payment"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
-        story.append(Spacer(1, 0.2 * cm))
+        story.append(Spacer(1, 0.18 * cm))
         story.append(_table([["Период", "Новых пользователей"]] + [[row["period"], str(row["count"])] for row in data["summary"]["new_users"]], font_name, col_widths=[5 * cm, 5 * cm]))
-        story.append(Spacer(1, 0.2 * cm))
-        story.append(Paragraph("Ключевые выводы", styles["H3Custom"]))
+        story.append(Spacer(1, 0.18 * cm))
+        story.append(_section_banner("Ключевые выводы", font_name, bg="#334155"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_bullet(data['insights']['growth_comment'], styles))
         story.append(_bullet(data['insights']['monetization_comment'], styles))
         story.append(_bullet(data['insights']['content_comment'], styles))
@@ -1260,7 +1397,8 @@ def _render_bot_report_sync(data: dict, output_path: Path):
 
         segments = data["segments"]
         funnel = data["funnel"]
-        story.append(Paragraph("2. Сегменты и воронка", styles["H2Custom"]))
+        story.append(_section_banner("2. Сегменты и воронка", font_name, bg="#1D4ED8"))
+        story.append(Spacer(1, 0.1 * cm))
         segment_table = [["Сегмент", "Пользователей", "Доля базы"]]
         for row in segments["rows"]:
             segment_table.append([row["label"], str(row["count"]), _fmt_pct(row["share"])])
@@ -1278,16 +1416,22 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         if funnel["chart"]:
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_horizontal_bar("Базовая продуктовая воронка", funnel["chart"], tmp / "funnel.png", color="#7C3AED"), width=17 * cm, height=5.8 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("в сегментах длиннее полоса = больше пользователей в категории. Во воронке смотри не только абсолютные значения, но и столбцы «от прошлого шага»: именно они показывают, где сильнее всего теряется аудитория.", styles))
         story.append(PageBreak())
 
-        story.append(Paragraph("3. Рост аудитории", styles["H2Custom"]))
+        story.append(_section_banner("3. Рост аудитории", font_name, bg="#0F766E"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Метрика", "Значение"], ["Регистраций за последние 7 дней", str(data["growth"]["registrations_last_7"])], ["Регистраций за предыдущие 7 дней", str(data["growth"]["registrations_prev_7"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.2 * cm))
         story.append(Image(_chart_dual_bar("Новые пользователи и размер базы (30 дней)", data["growth"]["labels_30"], data["growth"]["registrations_30"], data["growth"]["cumulative_30"], tmp / "growth.png", left_label="Новые", right_label="Всего"), width=17 * cm, height=6.5 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("левые столбцы показывают новых пользователей за день, правые — накопленный размер базы. Если новые регистрации падают, а общая база растёт медленнее, значит темп набора аудитории замедляется.", styles))
         story.append(PageBreak())
 
         content = data["content"]
-        story.append(Paragraph("4. Контент", styles["H2Custom"]))
+        story.append(_section_banner("4. Контент", font_name, bg="#2563EB"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Метрика", "Значение"], ["Загружено всего", str(content["total"])], ["Одобрено", str(content["approved"])], ["Отклонено", str(content["rejected"])], ["На модерации", str(content["pending"])], ["Автоодобрено", str(content["auto_approved"])], ["Доля одобрения", _fmt_pct(content["approval_rate_pct"])], ["Просмотров", str(content["views"])], ["Средний рейтинг", str(content["avg_rating"])], ["Авторов всего", str(content["creators_total"])], ["Авторов за 30 дней", str(content["creators_30"])], ["Зрителей за 30 дней", str(content["viewers_30"])], ["Средне просмотров на загрузку", _fmt_dec(content["avg_views_per_upload"])], ["Средне загрузок на автора", _fmt_dec(content["avg_uploads_per_creator"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['content_comment'], styles))
@@ -1296,10 +1440,13 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         status_map = {"Одобрено": float(content["approved"]), "Отклонено": float(content["rejected"]), "На модерации": float(content["pending"]), "Автоодобрено": float(content["auto_approved"])}
         story.append(Spacer(1, 0.15 * cm))
         story.append(Image(_chart_distribution("Статусы контента", status_map, tmp / "content_status_bot.png"), width=16 * cm, height=5 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("линия загрузок показывает ритм публикаций по дням. В столбцах статусов высокий «На модерации» — сигнал о хвосте очереди, высокий «Отклонено» — возможная проблема качества входящего контента.", styles))
         story.append(PageBreak())
 
         econ = data["economy"]
-        story.append(Paragraph("5. Экономика бота", styles["H2Custom"]))
+        story.append(_section_banner("5. Экономика бота", font_name, bg="#059669"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Показатель", "Значение"], ["Сгенерировано монет", _fmt_dec(econ["positive_total"])], ["Сожжено монет", _fmt_dec(econ["negative_total"])], ["Чистый баланс экономики", _fmt_dec(econ["net_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.2 * cm))
         story.append(Image(_chart_line("Чистая динамика экономики (30 дней)", econ["labels_30"], econ["daily_net_30"], tmp / "economy_net.png", color="#10B981"), width=17 * cm, height=6 * cm))
@@ -1318,10 +1465,13 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         if econ["payment_type_counts"]:
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_horizontal_bar("Структура платных продуктов", econ["payment_type_counts"], tmp / "bot_payment_types.png", color="#F97316"), width=17 * cm, height=5.8 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("чистая динамика экономики выше нуля означает, что за день монет пришло больше, чем ушло. В продуктовых диаграммах длиннее полоса = больший вклад продукта в выручку или число оплат.", styles))
         story.append(PageBreak())
 
         payments_analytics = data["payments_analytics"]
-        story.append(Paragraph("6. Платежи и продукты", styles["H2Custom"]))
+        story.append(_section_banner("6. Платежи и продукты", font_name, bg="#C2410C"))
+        story.append(Spacer(1, 0.1 * cm))
         payment_rows = [["Продукт", "Оплат", "Stars", "Монет начислено", "Средний чек"]]
         for row in payments_analytics["rows"]:
             payment_rows.append([row["label"], str(row["count"]), _fmt_dec(row["stars_total"]), _fmt_dec(row["coins_total"]), _fmt_dec(row["avg_stars"])])
@@ -1332,10 +1482,13 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         if payments_analytics["count_chart"]:
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_horizontal_bar("Количество оплат по продуктам", payments_analytics["count_chart"], tmp / "payment_count_breakdown.png", color="#0EA5E9"), width=17 * cm, height=5.8 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("таблица показывает не только выручку в Stars, но и сколько монет реально начислялось пользователям. Это помогает видеть продукты с частыми дешёвыми покупками и продукты с редкими, но крупными чеками.", styles))
         story.append(PageBreak())
 
         lottery = data["lottery"]
-        story.append(Paragraph("7. Секслото", styles["H2Custom"]))
+        story.append(_section_banner("7. Секслото", font_name, bg="#7C3AED"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Метрика", "Значение"], ["Раундов в истории", str(lottery["rounds_total"])], ["Билетов всего", str(lottery["total_tickets"])], ["Игроков всего", str(lottery["players_total"])], ["Игроков за 30 дней", str(lottery["players_30"])], ["Проникновение в базу", _fmt_pct(lottery["penetration_pct"])], ["Среднее билетов на игрока", _fmt_dec(lottery["avg_tickets_per_player"])], ["RTP (грубая оценка)", _fmt_pct(lottery["rtp"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_table([["Период", "Билетов"]] + [[row["period"], str(row["tickets"])] for row in lottery["rows"]], font_name, col_widths=[5 * cm, 5 * cm]))
@@ -1351,11 +1504,14 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         story.append(Image(_chart_line("Средний призовой фонд по дням", lottery["labels_30"], lottery["prize_pool_series_30"], tmp / "lottery_pool_bot.png", color="#7C3AED"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
         story.append(Image(_chart_distribution("Распределение совпадений", lottery["match_distribution"], tmp / "lottery_match_bot.png"), width=16 * cm, height=5 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("график билетов показывает игровой объём, график игроков — реальный охват аудитории, а график призового фонда — насколько крупными были розыгрыши. В распределении совпадений самые высокие столбцы — самые типичные исходы игры.", styles))
         story.append(PageBreak())
 
         retention = data["retention"]
         cohorts = data["cohorts"]
-        story.append(Paragraph("8. Рефералы, удержание и когорты", styles["H2Custom"]))
+        story.append(_section_banner("8. Рефералы, удержание и когорты", font_name, bg="#0F766E"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(_table([["Показатель", "Значение"], ["Retention push-уведомлений", str(retention["retention_pushes"])], ["Активаций weekly promo", str(retention["weekly_promo_activations"])], ["Пользователей по рефералке", str(retention["referred_total"])], ["Доля реферальной базы", _fmt_pct(retention["referred_share_pct"])], ["Sticky factor DAU/MAU", _fmt_pct(data["summary"]["sticky_pct"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['retention_comment'], styles))
@@ -1382,10 +1538,13 @@ def _render_bot_report_sync(data: dict, output_path: Path):
             story.append(_table(weekly_rows_table, font_name, col_widths=[4 * cm, 3 * cm, 4 * cm, 4 * cm]))
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_distribution("D7 retention по последним когортам", cohorts["weekly_chart"], tmp / "cohorts_weekly.png"), width=16 * cm, height=5 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("линия активных пользователей показывает, как меняется ядро аудитории день ко дню. Когортные таблицы D1/D7/D30 отвечают на вопрос: какой процент людей вернулся спустя 1, 7 или 30 дней после регистрации.", styles))
         story.append(PageBreak())
 
         leaders = data["leaders"]
-        story.append(Paragraph("9. Топ-10 пользователей", styles["H2Custom"]))
+        story.append(_section_banner("9. Топ-10 пользователей", font_name, bg="#1E293B"))
+        story.append(Spacer(1, 0.1 * cm))
         leader_sections = [
             ("По балансу", leaders["balance"]),
             ("По XP", leaders["xp"]),
@@ -1405,7 +1564,8 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         story.append(PageBreak())
 
         churn = data["churn"]
-        story.append(Paragraph("10. Отток и провалы", styles["H2Custom"]))
+        story.append(_section_banner("10. Отток и провалы", font_name, bg="#B91C1C"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(Paragraph("Здесь показаны зоны, где пользователи доходят до одного шага, но не переходят к следующему важному действию.", styles["SmallCustom"]))
         churn_table = [["Зона риска", "Пользователей", "Доля базы"]]
         for row in churn["rows"]:
@@ -1416,15 +1576,20 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         if churn["chart"]:
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_horizontal_bar("Крупнейшие зоны продуктового оттока", churn["chart"], tmp / "churn.png", color="#DC2626"), width=17 * cm, height=6.2 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("здесь длинная полоса — это большой пласт пользователей, который застрял между соседними шагами. Этот раздел лучше читать вместе с воронкой: воронка показывает общий поток, а отток — конкретную проблемную группу.", styles))
         story.append(PageBreak())
 
         heatmap = data["activity_heatmap"]
-        story.append(Paragraph("11. Тепловая карта активности", styles["H2Custom"]))
+        story.append(_section_banner("11. Тепловая карта активности", font_name, bg="#0F172A"))
+        story.append(Spacer(1, 0.1 * cm))
         story.append(Paragraph("Чем ярче ячейка, тем больше действий пользователей в этот день недели и час суток за последние 30 дней.", styles["SmallCustom"]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['heatmap_comment'], styles))
         story.append(Spacer(1, 0.15 * cm))
         story.append(Image(_chart_heatmap("Активность по дням недели и часам", heatmap["matrix"], heatmap["hours"], heatmap["weekdays"], tmp / "activity_heatmap.png"), width=18 * cm, height=6.8 * cm))
+        story.append(Spacer(1, 0.08 * cm))
+        story.append(_chart_hint("по горизонтали — часы суток, по вертикали — дни недели. Чем темнее/ярче клетка, тем больше действий пользователей в этот слот времени. Это удобно для поиска лучшего времени рассылок и пиков нагрузки.", styles))
         doc = SimpleDocTemplate(str(output_path), pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.2 * cm, bottomMargin=1.4 * cm)
         footer = lambda canvas, doc: _report_footer(canvas, doc, title="Отчёт по боту", generated_at=data["generated_at"], font_name=font_name)
         doc.build(story, onFirstPage=footer, onLaterPages=footer)
