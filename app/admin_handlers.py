@@ -38,11 +38,7 @@ from app.keyboards import (
     admin_db_keyboard,
 )
 from app.logger import get_logger
-<<<<<<< HEAD
-from app.reports import build_bot_report_pdf
-=======
 from app.reports import build_bot_report_pdf, build_user_report_pdf
->>>>>>> 13f18dc (Add PDF reports and multi-ticket Sexlotto buying)
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
 logger = get_logger(__name__)
