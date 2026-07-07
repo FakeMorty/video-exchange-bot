@@ -493,9 +493,6 @@ async def send_welcome_banner(message_or_callback, session, user):
     target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
     admin_flag = is_any_admin(user.telegram_id, user)
     vip_str = " 👑" if is_vip(user) else ""
-    import os
-    from aiogram.types import FSInputFile
-
     styled_name = await get_styled_display_name(session, user)
     msg_text = (
         f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"

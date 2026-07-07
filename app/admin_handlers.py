@@ -38,7 +38,11 @@ from app.keyboards import (
     admin_db_keyboard,
 )
 from app.logger import get_logger
+<<<<<<< HEAD
 from app.reports import build_bot_report_pdf
+=======
+from app.reports import build_bot_report_pdf, build_user_report_pdf
+>>>>>>> 13f18dc (Add PDF reports and multi-ticket Sexlotto buying)
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
 logger = get_logger(__name__)
@@ -796,7 +800,7 @@ async def show_user_profile(callback: CallbackQuery, user_id: int):
     
     ban_label = "✅ Разбанить" if user.status == "banned" else "🚫 Забанить"
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    kb_rows = [
         [
             InlineKeyboardButton(text="✏️ Поменять ник", callback_data=f"admin_user_edit_nick_start:{user_id}"),
             InlineKeyboardButton(text="💰 Выдать монеты", callback_data=f"admin_user_give_coins_start:{user_id}"),
@@ -806,8 +810,11 @@ async def show_user_profile(callback: CallbackQuery, user_id: int):
             InlineKeyboardButton(text="✉️ Личное сообщение", callback_data=f"admin_user_send_msg_start:{user_id}"),
         ],
         [InlineKeyboardButton(text="🔎 Всеобъемлющее досье", callback_data=f"admin_user_dossier_detailed:{user_id}")],
-        [InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_manage_users:0")]
-    ])
+    ]
+    if is_super_admin(callback.from_user.id):
+        kb_rows.append([InlineKeyboardButton(text="📄 Экспорт PDF", callback_data=f"admin_user_export_pdf:{user_id}")])
+    kb_rows.append([InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_manage_users:0")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     return True
@@ -853,7 +860,7 @@ async def admin_select_user(callback: CallbackQuery):
     
     ban_label = "✅ Разбанить" if user.status == "banned" else "🚫 Забанить"
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    kb_rows = [
         [
             InlineKeyboardButton(text="✏️ Поменять ник", callback_data=f"admin_user_edit_nick_start:{user_id}"),
             InlineKeyboardButton(text="💰 Выдать монеты", callback_data=f"admin_user_give_coins_start:{user_id}"),
@@ -863,11 +870,58 @@ async def admin_select_user(callback: CallbackQuery):
             InlineKeyboardButton(text="✉️ Личное сообщение", callback_data=f"admin_user_send_msg_start:{user_id}"),
         ],
         [InlineKeyboardButton(text="🔎 Всеобъемлющее досье", callback_data=f"admin_user_dossier_detailed:{user_id}")],
-        [InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_manage_users:0")]
-    ])
+    ]
+    if is_super_admin(callback.from_user.id):
+        kb_rows.append([InlineKeyboardButton(text="📄 Экспорт PDF", callback_data=f"admin_user_export_pdf:{user_id}")])
+    kb_rows.append([InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_manage_users:0")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_user_export_pdf:"))
+async def admin_user_export_pdf(callback: CallbackQuery):
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("Только супер-админ.", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":", 1)[1])
+    await callback.answer()
+    await callback.message.answer("⏳ Готовлю подробный PDF-отчёт по пользователю...")
+
+    async def _runner() -> None:
+        pdf_path = None
+        try:
+            async with async_session() as session:
+                user = await get_user_by_id(session, user_id)
+                if not user:
+                    await callback.bot.send_message(callback.from_user.id, "❌ Пользователь не найден.")
+                    return
+                telegram_id = user.telegram_id
+
+            pdf_path, filename = await build_user_report_pdf(telegram_id)
+            await callback.bot.send_document(
+                callback.from_user.id,
+                FSInputFile(str(pdf_path), filename=filename),
+                caption=f"📄 PDF-отчёт по пользователю <code>{telegram_id}</code> готов.",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.exception("Failed to build admin user PDF report")
+            await callback.bot.send_message(
+                callback.from_user.id,
+                f"❌ Не удалось собрать PDF по пользователю. Ошибка: {escape(str(e))}",
+                parse_mode="HTML",
+            )
+        finally:
+            if pdf_path:
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
+
+    asyncio.create_task(_runner())
 
 
 @router.callback_query(F.data.startswith("admin_user_edit_nick_start:"))
