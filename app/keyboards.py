@@ -284,14 +284,10 @@ def forced_offer_done_keyboard(offer_id: int) -> InlineKeyboardMarkup:
 
 def low_balance_offer_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="💰 Перейти к офферам",
-            callback_data="offers_participation"
-        )],
-        [InlineKeyboardButton(
-            text="❌ Закрыть",
-            callback_data="dismiss_low_balance_hint"
-        )],
+        [InlineKeyboardButton(text="⚡ Пополнить и смотреть дальше", callback_data="btn_buy")],
+        [InlineKeyboardButton(text="💰 Перейти к офферам", callback_data="offers_participation")],
+        [InlineKeyboardButton(text="👥 Открыть рефералку", callback_data="low_balance_referrals")],
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="dismiss_low_balance_hint")],
     ])
 
 
@@ -331,7 +327,23 @@ def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
 
 def buy_coins_keyboard(packs: dict) -> InlineKeyboardMarkup:
     buttons = []
+    priority = ["pack_50", "pack_100", "pack_200"]
+    seen = set()
+    for p_id in priority:
+        if p_id in packs:
+            p_data = packs[p_id]
+            badge = ""
+            if p_id == "pack_50":
+                badge = "⚡ Быстрый старт — "
+            elif p_id == "pack_100":
+                badge = "🔥 Популярный — "
+            elif p_id == "pack_200":
+                badge = "💎 Выгодно — "
+            buttons.append([InlineKeyboardButton(text=f"{badge}{p_data['coins']} монет / {p_data['stars']} Stars", callback_data=f"buy:{p_id}")])
+            seen.add(p_id)
     for p_id, p_data in packs.items():
+        if p_id in seen:
+            continue
         buttons.append([InlineKeyboardButton(text=f"💎 {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
     buttons.append([InlineKeyboardButton(text="⚡ Своя сумма Stars", callback_data="buy_custom")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -68,10 +68,16 @@ INCOME_SOURCE_LABELS = {
     "freebie_reward": "Еженедельная халява",
     "welcome_lootbox": "Стартовый лутбокс",
     "promocode_activation": "Промокоды",
+    "content_views_milestone": "Контент: порог просмотров",
+    "content_quality_bonus": "Контент: бонус за качество",
+    "referral_milestone": "Рефералы: этапы",
+    "lottery_win_2": "Секслото: 2 совпадения",
+    "lottery_win_3": "Секслото: 3 совпадения",
     "lottery_win_4": "Секслото: 4 совпадения",
     "lottery_win_5": "Секслото: 5 совпадений",
     "lottery_win_6": "Секслото: 6 совпадений",
     "lottery_bet_win": "Секслото: ставки",
+    "lottery_weekly_leaderboard": "Секслото: недельный рейтинг",
 }
 
 EXPENSE_SOURCE_LABELS = {
@@ -93,9 +99,12 @@ LOTTERY_BALANCE_SOURCES = {
     "lottery_ticket_admin_free",
     "lottery_bet",
     "lottery_bet_win",
+    "lottery_win_2",
+    "lottery_win_3",
     "lottery_win_4",
     "lottery_win_5",
     "lottery_win_6",
+    "lottery_weekly_leaderboard",
 }
 
 PAYMENT_TYPE_LABELS = {
@@ -975,9 +984,15 @@ async def collect_bot_report_data() -> dict:
         avg_prize_pool = Decimal(str((await session.execute(select(func.avg(LotteryRound.prize_pool)))).scalar_one() or 0))
         lottery_ticket_subq = (select(LotteryRound.id.label("round_id"), func.count(LotteryTicket.id).label("ticket_count")).join(LotteryTicket, LotteryTicket.round_id == LotteryRound.id, isouter=True).group_by(LotteryRound.id).subquery())
         avg_tickets_per_round = Decimal(str((await session.execute(select(func.avg(lottery_ticket_subq.c.ticket_count)))).scalar_one() or 0))
-        win_counts = {"6 совпадений": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_6")), "5 совпадений": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_5")), "4 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_4"))}
+        win_counts = {
+            "6 совпадений": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_6")),
+            "5 совпадений": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_5")),
+            "4 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_4")),
+            "3 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_3")),
+            "2 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_2")),
+        }
         lottery_spent = await _sum_balance(session, None, positive=False, sources={"lottery_ticket_purchase"})
-        lottery_paid = await _sum_balance(session, None, positive=True, sources={"lottery_win_4", "lottery_win_5", "lottery_win_6", "lottery_bet_win"})
+        lottery_paid = await _sum_balance(session, None, positive=True, sources={"lottery_win_2", "lottery_win_3", "lottery_win_4", "lottery_win_5", "lottery_win_6", "lottery_bet_win", "lottery_weekly_leaderboard"})
         rtp = float((lottery_paid / lottery_spent) * 100) if lottery_spent > 0 else 0.0
         penetration_pct = _safe_div(players_total * 100, total_users)
         avg_tickets_per_player = _safe_div(total_tickets, players_total)

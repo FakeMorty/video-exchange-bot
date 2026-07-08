@@ -34,7 +34,7 @@ async def test_stars_discount_affects_displayed_vip_and_pack_prices():
 
         assert discount == 0.25
         assert vip_price == 75
-        assert packs["pack_10"]["stars"] == 8
-        assert packs["pack_1"]["stars"] == 1
+        assert packs["pack_50"]["stars"] == 38
+        assert packs["pack_100"]["stars"] == 75
 
     await engine.dispose()

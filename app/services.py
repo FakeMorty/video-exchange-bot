@@ -30,7 +30,10 @@ logger = get_logger(__name__)
 
 from app.config import (
     STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD,
-    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, STARS_PACKAGES, STARS_TO_COINS_RATE,
+    CONTENT_VIEWS_MILESTONE_THRESHOLD, VIDEO_VIEWS_MILESTONE_REWARD, PHOTO_VIEWS_MILESTONE_REWARD,
+    CONTENT_QUALITY_MIN_AVG_RATING, CONTENT_QUALITY_MIN_RATINGS, CONTENT_QUALITY_BONUS,
+    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES,
+    STARS_PACKAGES, STARS_TO_COINS_RATE,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     DAILY_BONUS_STREAK_BASE, DAILY_BONUS_STREAK_INCREASE,
     MAX_BONUS_STREAK,
@@ -50,8 +53,9 @@ from app.config import (
     SMART_AD_LOW_BALANCE_THRESHOLD,
     SMART_AD_LOW_BALANCE_HINT_INTERVAL_MINUTES,
     SMART_AD_VIDEO_CHANCE, SMART_AD_FORCED_WATCH_SECONDS,
-    OFFER_DAILY_REWARD_CAP,
+    OFFER_DAILY_REWARD_CAP, OFFER_UNSUBSCRIBE_GRACE_MINUTES,
     LOTTERY_TICKET_PRICE, LOTTERY_NUMBERS_POOL, LOTTERY_NUMBERS_PER_TICKET,
+    LOTTERY_MATCH2_REWARD, LOTTERY_MATCH3_REWARD, LOTTERY_WEEKLY_LEADERBOARD_REWARDS,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
     ENABLE_AUTO_MODERATION,
     VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT,
@@ -553,6 +557,86 @@ async def calculate_upload_reward(
     return round_coin(reward * to_decimal(multiplier))
 
 
+async def _get_runtime_content_milestone_reward(session: AsyncSession, content_type: str) -> Decimal:
+    if content_type == "photo":
+        return to_decimal(PHOTO_VIEWS_MILESTONE_REWARD)
+    return to_decimal(VIDEO_VIEWS_MILESTONE_REWARD)
+
+
+async def _apply_content_view_milestone_reward(session: AsyncSession, video_id: int) -> None:
+    video = (await session.execute(select(Video).where(Video.id == video_id))).scalar_one_or_none()
+    if not video or video.status != "approved":
+        return
+    views_count = (await session.execute(select(func.count(VideoView.id)).where(VideoView.video_id == video_id))).scalar_one() or 0
+    if int(views_count) < int(CONTENT_VIEWS_MILESTONE_THRESHOLD):
+        return
+    already = (await session.execute(
+        select(BalanceLog).where(
+            BalanceLog.user_id == video.uploader_user_id,
+            BalanceLog.source == "content_views_milestone",
+            BalanceLog.source_id == video_id,
+        )
+    )).scalar_one_or_none()
+    if already:
+        return
+    reward = await _get_runtime_content_milestone_reward(session, video.content_type)
+    if reward <= 0:
+        return
+    await change_balance_atomic(
+        session,
+        video.uploader_user_id,
+        reward,
+        "content_views_milestone",
+        source_id=video_id,
+        details=f"views={views_count}; threshold={CONTENT_VIEWS_MILESTONE_THRESHOLD}",
+    )
+    await log_user_action(
+        session,
+        video.uploader_user_id,
+        "content_views_milestone",
+        f"video_id={video_id}; views={views_count}; reward={reward}",
+        auto_commit=False,
+    )
+
+
+async def _apply_content_quality_bonus_if_needed(session: AsyncSession, video_id: int) -> None:
+    video = (await session.execute(select(Video).where(Video.id == video_id))).scalar_one_or_none()
+    if not video or video.status != "approved":
+        return
+    ratings = (await session.execute(select(func.count(VideoRating.id), func.avg(VideoRating.rating)).where(VideoRating.video_id == video_id))).one()
+    ratings_count = int(ratings[0] or 0)
+    avg_rating = float(ratings[1] or 0)
+    if ratings_count < int(CONTENT_QUALITY_MIN_RATINGS) or avg_rating < float(CONTENT_QUALITY_MIN_AVG_RATING):
+        return
+    already = (await session.execute(
+        select(BalanceLog).where(
+            BalanceLog.user_id == video.uploader_user_id,
+            BalanceLog.source == "content_quality_bonus",
+            BalanceLog.source_id == video_id,
+        )
+    )).scalar_one_or_none()
+    if already:
+        return
+    reward = to_decimal(CONTENT_QUALITY_BONUS)
+    if reward <= 0:
+        return
+    await change_balance_atomic(
+        session,
+        video.uploader_user_id,
+        reward,
+        "content_quality_bonus",
+        source_id=video_id,
+        details=f"avg_rating={avg_rating:.2f}; ratings_count={ratings_count}",
+    )
+    await log_user_action(
+        session,
+        video.uploader_user_id,
+        "content_quality_bonus",
+        f"video_id={video_id}; avg={avg_rating:.2f}; ratings={ratings_count}; reward={reward}",
+        auto_commit=False,
+    )
+
+
 async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
     v = (await session.execute(
         select(Video).where(Video.id == video_id)
@@ -727,6 +811,8 @@ async def record_view_and_charge_with_cost(
         await session.rollback()
         session.expunge_all()
         return False
+    await _apply_content_view_milestone_reward(session, video_id)
+    await session.commit()
     return True
 
 
@@ -777,6 +863,8 @@ async def record_photo_view(session: AsyncSession, user_id: int, photo_id: int) 
         view = VideoView(user_id=user_id, video_id=photo_id, watched_at=utc_now())
         session.add(view)
         await session.commit()
+        await _apply_content_view_milestone_reward(session, photo_id)
+        await session.commit()
     return True
 
 
@@ -807,6 +895,8 @@ async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating:
         existing.rating = rating
     else:
         session.add(VideoRating(user_id=user_id, video_id=video_id, rating=rating))
+    await session.commit()
+    await _apply_content_quality_bonus_if_needed(session, video_id)
     await session.commit()
     return True
 
@@ -869,6 +959,37 @@ async def count_referrals(session: AsyncSession, user_id: int) -> int:
     )).scalar_one()
 
 
+async def _apply_referral_milestones(session: AsyncSession, inviter: "User", active_referrals_total: int) -> None:
+    milestones = sorted(REFERRAL_MILESTONES.items(), key=lambda item: item[0])
+    last_level = int(inviter.referral_milestone_level or 0)
+    for threshold, reward_cfg in milestones:
+        if active_referrals_total < threshold or threshold <= last_level:
+            continue
+        if reward_cfg.get("type") != "coins":
+            continue
+        reward_amount = to_decimal(reward_cfg.get("amount", 0))
+        if reward_amount <= 0:
+            inviter.referral_milestone_level = threshold
+            continue
+        await change_balance_atomic(
+            session,
+            inviter.id,
+            reward_amount,
+            "referral_milestone",
+            details=f"threshold={threshold}; active_referrals={active_referrals_total}",
+        )
+        inviter.referral_earnings += reward_amount
+        inviter.referral_milestone_level = threshold
+        await log_user_action(
+            session,
+            inviter.id,
+            "referral_milestone",
+            f"threshold={threshold}; reward={reward_amount}",
+            auto_commit=False,
+        )
+    await session.commit()
+
+
 async def process_referral_reward(session: AsyncSession, referrer_id: int):
     """Начисляем награду, если реферал посмотрел 5 видео.
 
@@ -877,6 +998,7 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
     refs = (await session.execute(
         select(User).where(User.referred_by_user_id == referrer_id)
     )).scalars().all()
+    active_referrals_total = 0
     for ref in refs:
         views = (await session.execute(
             select(func.count(VideoView.id))
@@ -887,6 +1009,7 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
             )
         )).scalar_one()
         if views >= 5:
+            active_referrals_total += 1
             inviter = await get_user_by_id(session, referrer_id)
             if inviter:
                 already = (await session.execute(
@@ -907,6 +1030,9 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
                     )
                     inviter.referral_earnings += reward
                     await session.commit()
+    inviter = await get_user_by_id(session, referrer_id)
+    if inviter and active_referrals_total > 0:
+        await _apply_referral_milestones(session, inviter, active_referrals_total)
 
 
 # ============================
@@ -1175,16 +1301,27 @@ async def verify_offer_subscription(
     return True, additional
 
 
-def calculate_offer_unsubscribe_amounts(offer: "Offer", part: "OfferParticipation") -> tuple[Decimal, Decimal, Decimal]:
+def calculate_offer_unsubscribe_amounts(
+    offer: "Offer",
+    part: "OfferParticipation",
+    *,
+    repeat_offender: bool,
+    in_grace_period: bool,
+    current_balance: Decimal,
+) -> tuple[Decimal, Decimal, Decimal]:
     rewarded_total = max(to_decimal(part.reward_given), Decimal("0"))
     if rewarded_total <= 0:
         return Decimal("0"), Decimal("0"), Decimal("0")
 
-    max_extra_penalty = round_coin(rewarded_total * Decimal("0.5"))
-    requested_penalty = max(to_decimal(offer.penalty_unsubscribe), Decimal("0"))
-    extra_penalty = min(requested_penalty, max_extra_penalty)
-    total_charge = round_coin(rewarded_total + extra_penalty)
-    return round_coin(rewarded_total), round_coin(extra_penalty), total_charge
+    extra_penalty = Decimal("0")
+    if repeat_offender and not in_grace_period:
+        max_extra_penalty = round_coin(rewarded_total * Decimal("0.5"))
+        requested_penalty = max(to_decimal(offer.penalty_unsubscribe), Decimal("0"))
+        extra_penalty = min(requested_penalty, max_extra_penalty)
+    requested_total = round_coin(rewarded_total + extra_penalty)
+    available_balance = max(to_decimal(current_balance), Decimal("0"))
+    total_charge = min(requested_total, available_balance)
+    return round_coin(rewarded_total), round_coin(extra_penalty), round_coin(total_charge)
 
 
 async def apply_offer_unsubscribe_penalty(
@@ -1193,19 +1330,33 @@ async def apply_offer_unsubscribe_penalty(
     offer: "Offer",
     part: "OfferParticipation",
 ) -> tuple[Decimal, Decimal, Decimal]:
-    rewarded_total, extra_penalty, total_charge = calculate_offer_unsubscribe_amounts(offer, part)
-    if total_charge <= 0:
-        return rewarded_total, extra_penalty, total_charge
-
-    await change_balance_atomic(
+    previous_penalties = await _count_query(
         session,
-        user.id,
-        -total_charge,
-        "offer_unsubscribe_penalty",
-        source_id=offer.id,
-        details=f"reward_revoke={rewarded_total}; extra_penalty={extra_penalty}",
+        select(func.count(BalanceLog.id)).where(
+            BalanceLog.user_id == user.id,
+            BalanceLog.source == "offer_unsubscribe_penalty",
+        ),
     )
-    # user.balance -= total_charge # Handled by change_balance_atomic
+    in_grace_period = (utc_now() - part.created_at) <= timedelta(minutes=OFFER_UNSUBSCRIBE_GRACE_MINUTES)
+    rewarded_total, extra_penalty, total_charge = calculate_offer_unsubscribe_amounts(
+        offer,
+        part,
+        repeat_offender=previous_penalties > 0,
+        in_grace_period=in_grace_period,
+        current_balance=user.balance,
+    )
+    if total_charge > 0:
+        await change_balance_atomic(
+            session,
+            user.id,
+            -total_charge,
+            "offer_unsubscribe_penalty",
+            source_id=offer.id,
+            details=(
+                f"reward_revoke={rewarded_total}; extra_penalty={extra_penalty}; "
+                f"grace={int(in_grace_period)}; repeat={int(previous_penalties > 0)}"
+            ),
+        )
     part.status = "unsubscribed"
     part.unsubscribed_penalized_at = utc_now()
     await session.commit()
@@ -1786,6 +1937,37 @@ async def get_user_lottery_tickets(
     )).scalars().all()
 
 
+async def get_weekly_lottery_leaderboard(session: AsyncSession, limit: int = 10) -> list[dict]:
+    now_msk = utc_now() + timedelta(hours=3)
+    week_start_msk = datetime(now_msk.year, now_msk.month, now_msk.day) - timedelta(days=now_msk.weekday())
+    week_start_utc = week_start_msk - timedelta(hours=3)
+    week_end_utc = week_start_utc + timedelta(days=7)
+    rows = (await session.execute(
+        select(
+            LotteryTicket.user_id,
+            func.count(LotteryTicket.id).label("tickets_count"),
+            func.max(LotteryTicket.matched_count).label("best_match"),
+        )
+        .where(LotteryTicket.created_at >= week_start_utc, LotteryTicket.created_at < week_end_utc)
+        .group_by(LotteryTicket.user_id)
+        .order_by(desc("tickets_count"), desc("best_match"), LotteryTicket.user_id.asc())
+        .limit(limit)
+    )).all()
+    result = []
+    for place, row in enumerate(rows, start=1):
+        user = await get_user_by_id(session, row.user_id)
+        if not user:
+            continue
+        result.append({
+            "place": place,
+            "user": user,
+            "tickets": int(row.tickets_count or 0),
+            "best_match": int(row.best_match or 0),
+            "reward": to_decimal(LOTTERY_WEEKLY_LEADERBOARD_REWARDS.get(place, 0)),
+        })
+    return result
+
+
 def get_lottery_state_dict(round_obj: LotteryRound | None) -> dict:
     if not round_obj:
         return {"status": "no_round"}
@@ -1825,6 +2007,54 @@ async def draw_next_lottery_number(session: AsyncSession, round_obj: LotteryRoun
     return next_num
 
 
+async def award_weekly_lottery_leaderboard_if_due(session: AsyncSession, draw_dt: datetime) -> list[dict]:
+    draw_msk = draw_dt + timedelta(hours=3)
+    if draw_msk.weekday() != 6:
+        return []
+    iso_year, iso_week, _ = draw_msk.isocalendar()
+    marker = f"year={iso_year};week={iso_week}"
+    existing = (await session.execute(
+        select(UserActionLog).where(
+            UserActionLog.action == "lottery_weekly_leaderboard_award",
+            UserActionLog.details == marker,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        return []
+
+    week_start_msk = datetime(draw_msk.year, draw_msk.month, draw_msk.day) - timedelta(days=draw_msk.weekday())
+    week_start_utc = week_start_msk - timedelta(hours=3)
+    week_end_utc = week_start_utc + timedelta(days=7)
+
+    rows = (await session.execute(
+        select(LotteryTicket.user_id, func.count(LotteryTicket.id).label("tickets_count"))
+        .where(LotteryTicket.created_at >= week_start_utc, LotteryTicket.created_at < week_end_utc)
+        .group_by(LotteryTicket.user_id)
+        .order_by(desc("tickets_count"), LotteryTicket.user_id.asc())
+        .limit(3)
+    )).all()
+    if not rows:
+        return []
+    awards = []
+    for place, row in enumerate(rows, start=1):
+        reward = to_decimal(LOTTERY_WEEKLY_LEADERBOARD_REWARDS.get(place, 0))
+        if reward <= 0:
+            continue
+        user = await get_user_by_id(session, row.user_id)
+        if not user:
+            continue
+        await change_balance_atomic(
+            session,
+            user.id,
+            reward,
+            "lottery_weekly_leaderboard",
+            details=f"place={place}; tickets={row.tickets_count}; {marker}",
+        )
+        awards.append({"user_id": user.id, "place": place, "reward": float(reward), "tickets": int(row.tickets_count)})
+    session.add(UserActionLog(user_id=rows[0].user_id, action="lottery_weekly_leaderboard_award", details=marker))
+    return awards
+
+
 async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -> dict:
     drawn = set(_deserialize_numbers(round_obj.drawn_numbers))
     tickets = (await session.execute(
@@ -1838,6 +2068,8 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
     winners_6: list[LotteryTicket] = []
     winners_5: list[LotteryTicket] = []
     winners_4: list[LotteryTicket] = []
+    winners_3: list[LotteryTicket] = []
+    winners_2: list[LotteryTicket] = []
     for t in tickets:
         matched = len(set(_deserialize_numbers(t.numbers)) & drawn)
         t.matched_count = matched
@@ -1848,6 +2080,10 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
             winners_5.append(t)
         elif matched == n - 2:
             winners_4.append(t)
+        elif matched == n - 3:
+            winners_3.append(t)
+        elif matched == n - 4:
+            winners_2.append(t)
 
     pool = to_decimal(round_obj.prize_pool)
     payout_map = [
@@ -1875,6 +2111,28 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
             )
             t.reward_paid = True
             paid_total += per_ticket
+
+    consolation_map = [
+        (winners_3, to_decimal(LOTTERY_MATCH3_REWARD), "lottery_win_3"),
+        (winners_2, to_decimal(LOTTERY_MATCH2_REWARD), "lottery_win_2"),
+    ]
+    for winner_group, fixed_reward, source in consolation_map:
+        if not winner_group or fixed_reward <= 0:
+            continue
+        for t in winner_group:
+            user = await get_user_by_id(session, t.user_id)
+            if not user or t.reward_paid:
+                continue
+            await change_balance_atomic(
+                session,
+                user.id,
+                fixed_reward,
+                source,
+                source_id=round_obj.id,
+                details=f"ticket_id={t.id}; matched={t.matched_count}",
+            )
+            t.reward_paid = True
+            paid_total += fixed_reward
 
     # Рассчитываем ставки на первый/последний бочонок Секслото.
     # Берём данные напрямую из drawn_numbers текущего раунда,
@@ -1924,11 +2182,13 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
         logger.warning(f"Error settling lottery bets: {e}")
 
     round_obj.status = "completed"
+    weekly_awards = await award_weekly_lottery_leaderboard_if_due(session, round_obj.draw_starts_at)
     await session.commit()
     return {
         "tickets": len(tickets),
-        "winners": len(winners_6) + len(winners_5) + len(winners_4),
+        "winners": len(winners_6) + len(winners_5) + len(winners_4) + len(winners_3) + len(winners_2),
         "paid_total": float(paid_total),
+        "weekly_awards": weekly_awards,
     }
 
 # ============================

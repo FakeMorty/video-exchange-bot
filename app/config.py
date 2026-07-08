@@ -60,30 +60,39 @@ PORT = _get_int("PORT", 10000)
 # ============================
 
 # Стартовый баланс
-STARTING_BALANCE = _get_float("STARTING_BALANCE", 100.0)
+STARTING_BALANCE = _get_float("STARTING_BALANCE", 150.0)
 
 # Просмотр видео
 WATCH_COST = _get_float("WATCH_COST", 10.0)
 
-# Награда за загрузку
-UPLOAD_REWARD = _get_float("UPLOAD_REWARD", 30.0)
-PHOTO_UPLOAD_REWARD = _get_float("PHOTO_UPLOAD_REWARD", 15.0)
+# Награда за одобренную загрузку (базовая)
+UPLOAD_REWARD = _get_float("UPLOAD_REWARD", 10.0)
+PHOTO_UPLOAD_REWARD = _get_float("PHOTO_UPLOAD_REWARD", 10.0)
+CONTENT_VIEWS_MILESTONE_THRESHOLD = _get_int("CONTENT_VIEWS_MILESTONE_THRESHOLD", 10)
+VIDEO_VIEWS_MILESTONE_REWARD = _get_float("VIDEO_VIEWS_MILESTONE_REWARD", 10.0)
+PHOTO_VIEWS_MILESTONE_REWARD = _get_float("PHOTO_VIEWS_MILESTONE_REWARD", 10.0)
+CONTENT_QUALITY_MIN_AVG_RATING = _get_float("CONTENT_QUALITY_MIN_AVG_RATING", 4.0)
+CONTENT_QUALITY_MIN_RATINGS = _get_int("CONTENT_QUALITY_MIN_RATINGS", 5)
+CONTENT_QUALITY_BONUS = _get_float("CONTENT_QUALITY_BONUS", 10.0)
 
 # Рефералы
-REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 150.0)
-REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 50.0)
+REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 20.0)
+REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 10.0)
+REFERRAL_MILESTONES = {
+    1: {"type": "coins", "amount": 20.0, "desc": "20 монет"},
+    3: {"type": "coins", "amount": 30.0, "desc": "30 монет"},
+    5: {"type": "coins", "amount": 50.0, "desc": "50 монет"},
+    10: {"type": "coins", "amount": 100.0, "desc": "100 монет"},
+}
 
 # Курс Stars → монеты
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 10.0)
 
-# Пакеты Stars (С прогрессивным бонусом)
+# Viewer-friendly пакеты Stars
 STARS_PACKAGES = {
-    "pack_1":   {"stars": 1,   "coins": 10,    "title": "10 монет"},
-    "pack_5":   {"stars": 5,   "coins": 55,   "title": "55 монет"},
-    "pack_10":  {"stars": 10,  "coins": 120,   "title": "120 монет"},
-    "pack_25":  {"stars": 25,  "coins": 320,  "title": "320 монет"},
-    "pack_50":  {"stars": 50,  "coins": 700,  "title": "700 монет"},
-    "pack_100": {"stars": 100, "coins": 1600,  "title": "1 600 монет"},
+    "pack_50":  {"stars": 50,  "coins": 500,  "title": "500 монет"},
+    "pack_100": {"stars": 100, "coins": 1000, "title": "1 000 монет"},
+    "pack_200": {"stars": 200, "coins": 2200, "title": "2 200 монет"},
 }
 
 # Пакеты за реальные деньги (Примерно 1 Star = 2 RUB)
@@ -95,17 +104,7 @@ MONEY_PACKAGES = {
 
 # Интервал показа офферов
 OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.5)
-
-# ============================
-# ПРОГРЕССИВНЫЕ РЕФЕРАЛЫ (BATTLE PASS)
-# ============================
-REFERRAL_MILESTONES = {
-    3: {"type": "coins", "amount": 20.0, "desc": "20 монет"},
-    5: {"type": "lootbox", "amount": 1, "desc": "1 Лутбокс"},
-    10: {"type": "vip", "amount": 1, "desc": "VIP на 1 день"},
-    15: {"type": "lootbox", "amount": 3, "desc": "3 Лутбокса"},
-    20: {"type": "vip", "amount": 7, "desc": "VIP на 7 дней"},
-}
+OFFER_UNSUBSCRIBE_GRACE_MINUTES = _get_int("OFFER_UNSUBSCRIBE_GRACE_MINUTES", 15)
 
 DAILY_PHOTO_LIMIT = _get_int("DAILY_PHOTO_LIMIT", 10)
 
@@ -259,6 +258,13 @@ ENABLE_LOTTERY = _get_bool("ENABLE_LOTTERY", True)
 LOTTERY_TICKET_PRICE = _get_float("LOTTERY_TICKET_PRICE", 30.0)
 LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
 LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
+LOTTERY_MATCH2_REWARD = _get_float("LOTTERY_MATCH2_REWARD", 10.0)
+LOTTERY_MATCH3_REWARD = _get_float("LOTTERY_MATCH3_REWARD", 20.0)
+LOTTERY_WEEKLY_LEADERBOARD_REWARDS = {
+    1: _get_float("LOTTERY_WEEKLY_LEADERBOARD_REWARD_1", 100.0),
+    2: _get_float("LOTTERY_WEEKLY_LEADERBOARD_REWARD_2", 50.0),
+    3: _get_float("LOTTERY_WEEKLY_LEADERBOARD_REWARD_3", 20.0),
+}
 LOTTERY_DRAW_HOUR_MSK = _get_int("LOTTERY_DRAW_HOUR_MSK", 20)
 LOTTERY_SECONDS_PER_BALL = _get_int("LOTTERY_SECONDS_PER_BALL", 15)
 LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "")

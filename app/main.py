@@ -154,10 +154,12 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                         await bot.send_message(
                             user.telegram_id,
                             (
-                                "⚠️ Вы отписались от оффера после получения награды.\n\n"
-                                f"Списано бонусов: {rewarded_total} монет\n"
+                                "⚠️ Оффер завершён с возвратом награды.\n\n"
+                                "Вы отписались от канала после получения бонуса, поэтому ранее начисленная награда была отозвана.\n\n"
+                                f"Возврат награды: {rewarded_total} монет\n"
                                 f"Доп. штраф: {extra_penalty} монет\n"
-                                f"Итого списано: {total_charge} монет"
+                                f"Итого списано: {total_charge} монет\n"
+                                f"Текущий баланс: {max(user.balance, 0)} монет"
                             ),
                         )
                     except Exception:
@@ -839,23 +841,19 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     <div class="modal-content">
       <span class="modal-close" onclick="closeStarsModal()">&times;</span>
       <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;">💎 Монеты за звёзды</h3>
-      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);">Выберите пакет монет для моментального пополнения баланса:</p>
+      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);">3 понятных пакета, чтобы быстро вернуться к просмотру:</p>
       <div style="display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto;">
         <div class="package-item">
-          <div><b>10 монет</b><br><small style="color: var(--tg-theme-hint-color);">Цена: 1 ★</small></div>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_1')">Купить</button>
+          <div><b>⚡ 500 монет</b><br><small style="color: var(--tg-theme-hint-color);">Быстрый старт · 50 ★</small></div>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_50')">Купить</button>
         </div>
         <div class="package-item">
-          <div><b>55 монет</b><br><small style="color: var(--tg-theme-hint-color);">Цена: 5 ★</small></div>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_5')">Купить</button>
+          <div><b>🔥 1 000 монет</b><br><small style="color: var(--tg-theme-hint-color);">Популярный пакет · 100 ★</small></div>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_100')">Купить</button>
         </div>
         <div class="package-item">
-          <div><b>120 монет</b><br><small style="color: var(--tg-theme-hint-color);">Цена: 10 ★</small></div>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_10')">Купить</button>
-        </div>
-        <div class="package-item">
-          <div><b>320 монет</b><br><small style="color: var(--tg-theme-hint-color);">Цена: 25 ★</small></div>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_25')">Купить</button>
+          <div><b>💎 2 200 монет</b><br><small style="color: var(--tg-theme-hint-color);">Самый выгодный · 200 ★</small></div>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_200')">Купить</button>
         </div>
       </div>
     </div>

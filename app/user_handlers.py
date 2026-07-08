@@ -45,7 +45,7 @@ from app.config import (
     COMMENTS_PER_10_MIN,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
-    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, DAILY_PHOTO_LIMIT,
+    REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES, DAILY_PHOTO_LIMIT,
     PROMOCODE_CREATION_STAR_RATE,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
@@ -91,7 +91,7 @@ from app.services import (
     calculate_promocode_star_cost,
     create_feedback, process_referral_reward,
     ensure_current_lottery_round, buy_lottery_ticket, buy_lottery_tickets,
-    get_latest_lottery_round, get_user_lottery_tickets, get_lottery_state_dict,
+    get_latest_lottery_round, get_user_lottery_tickets, get_weekly_lottery_leaderboard, get_lottery_state_dict,
     get_lottery_draw_duration_seconds, get_lottery_max_tickets_for_balance,
     LOTTERY_MAX_TICKETS_PER_PURCHASE,
     is_admin_or_super, is_admin_free_eligible,
@@ -408,6 +408,44 @@ def _fmt_coins(value) -> str:
     if amount == amount.to_integral_value():
         return f"{amount:,.0f}".replace(',', ' ')
     return f"{amount:,.2f}".replace(',', ' ')
+
+
+def _build_referral_milestone_text(refs: int) -> str:
+    milestones = sorted((int(level), cfg) for level, cfg in REFERRAL_MILESTONES.items())
+    completed = []
+    next_goal = None
+    for level, cfg in milestones:
+        if refs >= level:
+            completed.append(f"• {level} друзей — {_fmt_coins(cfg.get('amount', 0))} монет")
+        elif next_goal is None:
+            next_goal = (level, cfg)
+    text = ""
+    if completed:
+        text += "\n\n🏁 <b>Открытые этапы:</b>\n" + "\n".join(completed[-3:])
+    if next_goal:
+        need_more = max(0, next_goal[0] - refs)
+        text += (
+            f"\n\n🎯 <b>Следующая цель:</b> {next_goal[0]} друзей\n"
+            f"Награда: <b>{_fmt_coins(next_goal[1].get('amount', 0))}</b> монет\n"
+            f"Осталось пригласить: <b>{need_more}</b>"
+        )
+    return text
+
+
+def _suggest_viewer_pack(packs: dict, *, need: Decimal | None = None) -> dict | None:
+    priority = ["pack_50", "pack_100", "pack_200"]
+    ordered = [packs[p] for p in priority if p in packs]
+    if not ordered:
+        ordered = list(packs.values())
+    if not ordered:
+        return None
+    if need is None:
+        return ordered[0]
+    need_value = float(need)
+    for pack in ordered:
+        if float(pack.get("coins", 0)) >= need_value:
+            return pack
+    return ordered[-1]
 
 
 def _best_event_badge(events: list, target: str) -> str:
@@ -861,15 +899,28 @@ async def watch_video_content(callback: CallbackQuery):
             if user.balance < cost:
                 bot_info = await callback.bot.get_me()
                 ref_link = f"https://t.me/{bot_info.username}?start={user.referral_code}"
+                missing = max(to_decimal(cost) - to_decimal(user.balance), Decimal("0"))
+                _, packs, _ = await get_current_prices(session, user.id)
+                suggested_pack = _suggest_viewer_pack(packs, need=missing + to_decimal(cost * 8))
+                suggested_text = ""
+                if suggested_pack:
+                    approx_views = int(float(suggested_pack.get("coins", 0)) // max(float(cost), 1.0))
+                    suggested_text = (
+                        f"\n⚡ <b>Быстрый вариант:</b> {suggested_pack['coins']} монет за {suggested_pack['stars']} Stars"
+                        f" — хватит примерно на <b>{approx_views}</b> просмотров."
+                    )
                 if await should_show_low_balance_hint(session, user):
                     await mark_low_balance_hint_shown(session, user.id)
                     await callback.message.answer(
-                        f"💸 <b>Монеток маловато!</b>\n\n"
-                        f"На счету: <b>{user.balance}</b> монет, "
-                        f"а нужно <b>{cost}</b> для просмотра.\n\n"
-                        f"🔥 Быстрые варианты вернуть баланс:\n"
-                        f"• <b>Офферы</b> — подписки за монеты\n"
-                        f"• <b>Рефералка</b> — разошли друзьям свою ссылку и получи <b>+{REFERRAL_REWARD_INVITER}</b> монет\n\n"
+                        f"💸 <b>Монет не хватает</b>\n\n"
+                        f"Для просмотра нужно: <b>{_fmt_coins(cost)}</b> монет\n"
+                        f"У вас сейчас: <b>{_fmt_coins(user.balance)}</b> монет\n"
+                        f"Не хватает: <b>{_fmt_coins(missing)}</b> монет\n"
+                        f"{suggested_text}\n\n"
+                        f"Что можно сделать прямо сейчас:\n"
+                        f"• <b>пополнить баланс</b> и сразу вернуться к просмотру\n"
+                        f"• <b>взять оффер</b> и быстро добрать монеты\n"
+                        f"• <b>позвать друга</b> и получить <b>+{_fmt_coins(REFERRAL_REWARD_INVITER)}</b> монет\n\n"
                         f"Твоя ссылка:\n<code>{ref_link}</code>",
                         parse_mode="HTML",
                         reply_markup=low_balance_offer_keyboard()
@@ -877,10 +928,11 @@ async def watch_video_content(callback: CallbackQuery):
                 else:
                     await callback.message.answer(
                         f"❌ <b>Недостаточно монет.</b>\n\n"
-                        f"Нужно: <b>{cost}</b>, у вас: <b>{user.balance}</b>.\n\n"
-                        f"Разошли друзьям свою ссылку и получи <b>+{REFERRAL_REWARD_INVITER}</b> монет:\n"
-                        f"<code>{ref_link}</code>",
+                        f"Нужно: <b>{_fmt_coins(cost)}</b>, у вас: <b>{_fmt_coins(user.balance)}</b>."
+                        f"{suggested_text}\n\n"
+                        f"Реферальная ссылка:\n<code>{ref_link}</code>",
                         parse_mode="HTML",
+                        reply_markup=low_balance_offer_keyboard(),
                     )
                 return
 
@@ -1440,14 +1492,17 @@ async def btn_referrals(message: Message, state: FSMContext):
 
     bot_info = await message.bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user.referral_code}"
+    milestone_text = _build_referral_milestone_text(refs)
     await message.answer(
         f"👥 <b>Рефералы</b>\n\n"
+        f"Приглашай друзей и получай монеты.\n"
+        f"• за каждого друга: <b>+{_fmt_coins(REFERRAL_REWARD_INVITER)}</b> монет\n"
+        f"• друг тоже получает стартовый бонус: <b>+{_fmt_coins(REFERRAL_REWARD_NEW_USER)}</b> монет\n"
+        f"• ссылку можно отправить в 1 тап любому знакомому\n\n"
         f"Ваша ссылка:\n<code>{ref_link}</code>\n\n"
         f"Приглашено: <b>{refs}</b>\n"
-        f"Заработано: <b>{user.referral_earnings}</b> монет\n\n"
-        f"За каждого приглашённого:\n"
-        f"• Вы получаете: +{REFERRAL_REWARD_INVITER} монет\n"
-        f"• Новый пользователь: +{REFERRAL_REWARD_NEW_USER} монет",
+        f"Заработано: <b>{_fmt_coins(user.referral_earnings)}</b> монет"
+        f"{milestone_text}",
         parse_mode="HTML"
     )
 
@@ -1494,7 +1549,12 @@ async def btn_buy(message: Message, state: FSMContext):
         bonus_text += f"\n🎁 Первая покупка дня: +{FIRST_PURCHASE_DAILY_BONUS} монет бонусом."
 
         await message.answer(
-            f"💳 <b>Пополнение баланса</b>{sale_badge}{admin_free_badge}{bonus_text}\n\nВыберите пакет:",
+            f"💳 <b>Пополнение баланса</b>{sale_badge}{admin_free_badge}{bonus_text}\n\n"
+            f"Собрали 3 понятных пакета под тех, кто хочет быстро вернуться к просмотру:\n"
+            f"• <b>500 монет</b> — быстрый старт\n"
+            f"• <b>1 000 монет</b> — популярный пакет\n"
+            f"• <b>2 200 монет</b> — самый выгодный\n\n"
+            f"Выберите пакет:",
             parse_mode="HTML",
             reply_markup=buy_coins_keyboard(packs)
         )
@@ -2152,7 +2212,7 @@ async def cb_offer_open(callback: CallbackQuery):
         )],
         [InlineKeyboardButton(
             text="▶️ Участвовать",
-            callback_data=f"offer_start:{offer_id}"
+            callback_data=f"offer_start_confirm:{offer_id}"
         )],
         [InlineKeyboardButton(
             text="✅ Проверить подписку",
@@ -2173,6 +2233,33 @@ async def cb_offer_open(callback: CallbackQuery):
         text, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("offer_start_confirm:"))
+async def cb_offer_start_confirm(callback: CallbackQuery):
+    offer_id = int(callback.data.split(":")[1])
+    async with async_session() as session:
+        offer = await get_offer_by_id(session, offer_id)
+        if not offer:
+            await callback.answer("Оффер не найден.", show_alert=True)
+            return
+    text = (
+        "⚠️ <b>Важно перед участием</b>\n\n"
+        "Вы получите монеты за участие в оффере.\n"
+        "Если после получения награды вы отпишетесь:\n"
+        "• награда будет забрана назад\n"
+        "• при повторных нарушениях может быть дополнительный штраф\n"
+        "• первые 15 минут после входа считаются grace period без доп. штрафа\n\n"
+        f"Оффер: <b>{offer.title}</b>\n"
+        f"Предварительная награда: <b>{_fmt_coins(offer.reward_preview)}</b> монет\n"
+        f"Финальная награда: <b>{_fmt_coins(offer.reward_final)}</b> монет"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Понятно, участвовать", callback_data=f"offer_start:{offer_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"offer_open:{offer_id}")],
+    ])
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
@@ -2824,6 +2911,12 @@ async def dismiss_low_balance_hint(callback: CallbackQuery):
     await callback.answer("Хорошо! Офферы всегда доступны в меню 💰")
 
 
+@router.callback_query(F.data == "low_balance_referrals")
+async def low_balance_referrals(callback: CallbackQuery, state: FSMContext):
+    await btn_referrals(callback.message, state)
+    await callback.answer()
+
+
 # =========================
 # ЛОТЕРЕЯ-ЛОТО
 # =========================
@@ -2843,6 +2936,7 @@ def _lottery_menu_kb() -> InlineKeyboardMarkup:
     buttons.extend([
         [InlineKeyboardButton(text="🎫 Купить билеты", callback_data="lottery_buy")],
         [InlineKeyboardButton(text="📋 Мои билеты", callback_data="lottery_my_tickets")],
+        [InlineKeyboardButton(text="🏆 Рейтинг недели", callback_data="lottery_weekly_leaderboard")],
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="lottery_menu")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -2907,9 +3001,13 @@ async def _send_lottery_menu(message_or_callback_message: Message, telegram_user
         f"• в одном билете — <b>{round_obj.numbers_per_ticket} чисел из {round_obj.numbers_pool}</b>\n"
         f"• каждый день в <b>{LOTTERY_DRAW_HOUR_MSK}:00 по МСК</b> начинается розыгрыш\n"
         f"• на каждый бочонок уходит около <b>{LOTTERY_SECONDS_PER_BALL} секунд</b>, весь розыгрыш длится примерно <b>{duration_text}</b>\n"
-        "• выигрыши получают билеты с <b>4, 5 или 6 совпадениями</b>\n"
+        "• <b>1 совпадение — не выигрыш</b>\n"
+        "• <b>2 совпадения — 10 монет</b>\n"
+        "• <b>3 совпадения — 20 монет</b>\n"
+        "• <b>4, 5 и 6 совпадений</b> делят основной призовой фонд\n"
         "• призовой фонд делится так: <b>6 совпадений — 70%</b>, <b>5 совпадений — 20%</b>, <b>4 совпадения — 10%</b>\n"
-        "• если в одной категории несколько выигрышных билетов, её доля делится между ними поровну\n\n"
+        "• если в одной категории несколько выигрышных билетов, её доля делится между ними поровну\n"
+        "• каждую неделю действует <b>рейтинг активности</b> с дополнительными призами для топ-3 игроков\n\n"
         + (f"🔴 <b>Live:</b> <a href=\"{live_url}\">открыть трансляцию</a>\n" if live_url else "")
         + f"{draw_line}\n\n"
         "Нажми «🎫 Купить билеты», чтобы выбрать количество билетов, или открой Live и следи за розыгрышем в реальном времени."
@@ -3086,6 +3184,26 @@ async def lottery_my_tickets(callback: CallbackQuery):
     text = "📋 <b>Ваши билеты</b>\n\n"
     for t in tickets:
         text += f"#{t.id}: {t.numbers} | совпадений: {t.matched_count}\n"
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "lottery_weekly_leaderboard")
+async def lottery_weekly_leaderboard(callback: CallbackQuery):
+    async with async_session() as session:
+        rows = await get_weekly_lottery_leaderboard(session, limit=10)
+    if not rows:
+        await callback.message.answer("🏆 Пока нет недельного рейтинга — как только появятся участники, здесь появится таблица лидеров.")
+        await callback.answer()
+        return
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    text = "🏆 <b>Рейтинг недели в Секслото</b>\n\n"
+    text += "Топ формируется по количеству купленных билетов за текущую неделю. При равенстве выше тот, у кого лучшее совпадение.\n\n"
+    for row in rows:
+        icon = medals.get(row["place"], f"{row['place']}.")
+        name = row["user"].display_name or row["user"].username or str(row["user"].telegram_id)
+        reward_text = f" | приз: { _fmt_coins(row['reward']) }" if row["reward"] else ""
+        text += f"{icon} <b>{escape(str(name))}</b> — {row['tickets']} бил. | лучший матч: {row['best_match']}{reward_text}\n"
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3592,7 +3710,7 @@ async def btn_faq(message: Message, state: FSMContext):
         "<b>3. Что дает подписка VIP?</b>\n"
         "Удвоенные награды за просмотры, скидки в магазине и бонусы в экономике.\n\n"
         "<b>4. Что такое Секслото?</b>\n"
-        "Это ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. Выигрыши получают билеты с 4, 5 или 6 совпадениями.\n\n"
+        "Это ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n"
         "<b>5. Как общаться с ИИ?</b>\n"
         f"Нажмите кнопку 💋 ИИ-общение. Одно сообщение стоит {AI_ASSISTANT_PRICE} монет.\n\n"
         "<b>6. Как работают промокоды?</b>\n"

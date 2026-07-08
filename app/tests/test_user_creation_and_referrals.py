@@ -16,9 +16,9 @@ async def test_new_user_gets_single_starting_balance_not_double_counted():
         await conn.run_sync(Base.metadata.create_all)
 
     async with Session() as session:
-        user, created = await get_or_create_user(session, telegram_id=5001, username="newbie")
-        assert created is True
-        assert user.balance == Decimal("100.00")
+            user, created = await get_or_create_user(session, telegram_id=5001, username="newbie")
+            assert created is True
+            assert user.balance == Decimal("150.00")
 
     await engine.dispose()
 
@@ -49,7 +49,7 @@ async def test_referred_user_gets_bonus_and_inviter_counter_increments():
         )
 
         assert created is True
-        assert referred.balance == Decimal("150.00")
+        assert referred.balance == Decimal("160.00")
 
         await session.refresh(inviter)
         assert inviter.referrals_count == 1
