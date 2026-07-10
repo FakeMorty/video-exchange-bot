@@ -151,14 +151,21 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                     penalized_count += 1
                     penalized_total += float(total_charge)
                     try:
+                        msg = (
+                            "⚠️ <b>Оффер завершён с возвратом награды</b>\n\n"
+                            "Вы отписались от канала после получения бонуса, поэтому ранее начисленная награда была отозвана."
+                        )
+                        if extra_penalty > 0:
+                            msg += f"\n\n⚠️ Дополнительно списан штраф за отписку: <b>{extra_penalty}</b> монет."
+                        
+                        msg += (
+                            f"\n\nСписано всего: <b>{total_charge}</b> монет\n"
+                            f"Текущий баланс: <b>{max(user.balance, 0)}</b> монет"
+                        )
                         await bot.send_message(
                             user.telegram_id,
-                            (
-                                "⚠️ Оффер завершён с возвратом награды.\n\n"
-                                "Вы отписались от канала после получения бонуса, поэтому ранее начисленная награда была отозвана.\n\n"
-                                f"Возврат награды: {rewarded_total} монет\n"
-                                f"Текущий баланс: {max(user.balance, 0)} монет"
-                            ),
+                            msg,
+                            parse_mode="HTML",
                         )
                     except Exception:
                         pass
