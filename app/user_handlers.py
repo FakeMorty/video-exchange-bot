@@ -2201,7 +2201,6 @@ async def cb_offer_open(callback: CallbackQuery):
         f"{offer.description}\n\n"
         f"💰 Предварительно: <b>{offer.reward_preview}</b> монет\n"
         f"🎁 После подтверждения: <b>{offer.reward_final}</b> монет\n"
-        f"⚠️ Штраф за отписку: <b>{offer.penalty_unsubscribe}</b> монет\n"
         f"👥 Участников: {participants}"
     )
 
