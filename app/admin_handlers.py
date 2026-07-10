@@ -2742,10 +2742,18 @@ async def cb_admin_create_offer_start(callback: CallbackQuery, state: FSMContext
         return
         
     await state.set_state(AdminOfferCreateState.waiting_title)
+    
+    text = (
+        "📝 <b>Создание оффера (Шаг 1/6)</b>\n\n"
+        "⚠️ <b>Важно:</b> Бот <b>обязательно</b> должен быть добавлен "
+        "в канал в качестве администратора (с минимальными правами). "
+        "Это необходимо для того, чтобы бот мог следить, не отписался ли человек от канала.\n\n"
+        "Введите <b>название оффера</b> (например, <i>Подписка на игровой канал</i>):"
+    )
+    
     await _safe_edit(
         callback,
-        "📝 <b>Создание оффера (Шаг 1/6)</b>\n\n"
-        "Введите <b>название оффера</b> (например, <i>Подписка на игровой канал</i>):",
+        text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
