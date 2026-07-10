@@ -43,7 +43,6 @@ class UserOfferState(StatesGroup):
     waiting_url = State()
     waiting_reward_preview = State()
     waiting_reward_final = State()
-    waiting_penalty = State()
     waiting_duration = State()
     waiting_payment_method = State()
 
@@ -142,39 +141,14 @@ async def user_offer_final(message: Message, state: FSMContext):
         await message.answer("❌ Введите число ≥ 50")
         return
     await state.update_data(reward_final=val)
-    await state.set_state(UserOfferState.waiting_penalty)
-    
-    data = await state.get_data()
-    max_penalty = (data["reward_preview"] + val) * Decimal("0.5")
-    await message.answer(
-        f"Шаг 6/7: Введите штраф за отписку (макс {max_penalty:.0f}):\n\n"
-        "Рекомендуется: 4000-6000",
-        parse_mode="HTML"
-    )
-
-
-@router.message(UserOfferState.waiting_penalty)
-async def user_offer_penalty(message: Message, state: FSMContext):
-    try:
-        penalty = Decimal(message.text.strip())
-        if penalty < 0:
-            raise ValueError
-    except Exception:
-        await message.answer("❌ Введите число ≥ 0")
-        return
-    
-    data = await state.get_data()
-    max_penalty = (data["reward_preview"] + data["reward_final"]) * Decimal("0.5")
-    if penalty > max_penalty:
-        await message.answer(f"❌ Слишком большой штраф. Максимум: {max_penalty:.0f}")
-        return
-    
-    await state.update_data(penalty_unsubscribe=penalty)
     await state.set_state(UserOfferState.waiting_duration)
     await message.answer(
-        "Шаг 7/7: На сколько дней сделать оффер активным?\n\n"
+        "Шаг 6/7: На сколько дней сделать оффер активным?\n\n"
         "Рекомендуется: 30, 60, 90"
     )
+
+
+# Remove the user_offer_penalty function completely
 
 
 @router.message(UserOfferState.waiting_duration)
@@ -249,7 +223,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 channel_url=data["url"],
                 reward_preview=data["reward_preview"],
                 reward_final=data["reward_final"],
-                penalty_unsubscribe=data["penalty_unsubscribe"],
+                penalty_unsubscribe=Decimal("0"),
                 duration_days=data["duration_days"],
                 placement_cost=cost,
                 status="pending",
@@ -274,7 +248,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 channel_url=data["url"],
                 reward_preview=data["reward_preview"],
                 reward_final=data["reward_final"],
-                penalty_unsubscribe=data["penalty_unsubscribe"],
+                penalty_unsubscribe=Decimal("0"),
                 duration_days=data["duration_days"],
                 placement_cost=cost,
                 status="payment_pending",
@@ -323,7 +297,7 @@ async def _create_user_offer(session, user_id: int, data: dict, cost: Decimal):
         channel_url=data["url"],
         reward_preview=data["reward_preview"],
         reward_final=data["reward_final"],
-        penalty_unsubscribe=data["penalty_unsubscribe"],
+        penalty_unsubscribe=Decimal("0"),
         duration_days=data["duration_days"],
         placement_cost=cost,
         status="pending",

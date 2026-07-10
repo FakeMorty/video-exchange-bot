@@ -94,7 +94,6 @@ class AdminOfferCreateState(StatesGroup):
     waiting_url = State()
     waiting_reward_preview = State()
     waiting_reward_final = State()
-    waiting_penalty_unsubscribe = State()
     waiting_rentable = State()
     waiting_rent_cost = State()
     waiting_max_rentals = State()
@@ -2857,28 +2856,7 @@ async def process_offer_reward_final(message: Message, state: FSMContext):
         return
         
     await state.update_data(reward_final=str(reward))
-    await state.set_state(AdminOfferCreateState.waiting_penalty_unsubscribe)
-    await message.answer(
-        "⚠️ <b>Создание оффера (Шаг 6/6)</b>\n\n"
-        "Введите <b>штраф за отписку от канала</b> (число монет, например, <code>400</code>):",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
-        ])
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_penalty_unsubscribe)
-async def process_offer_penalty_unsubscribe(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id): return
-    val = (message.text or "").strip().replace(",", ".")
-    try:
-        penalty = Decimal(val)
-        if penalty < 0: raise ValueError()
-    except Exception:
-        await message.answer("❌ Некорректное число монет. Введите положительное число:")
-        return
-        
+    
     data = await state.get_data()
     async with async_session() as session:
         from app.services import admin_create_offer
@@ -2890,7 +2868,6 @@ async def process_offer_penalty_unsubscribe(message: Message, state: FSMContext)
             reward_preview=Decimal(data["reward_preview"]),
             reward_final=Decimal(data["reward_final"]),
             is_rentable=False,
-            penalty_unsubscribe=penalty,
             rent_cost_per_day=Decimal("0"),
             max_simultaneous_rentals=1
         )
@@ -2900,7 +2877,6 @@ async def process_offer_penalty_unsubscribe(message: Message, state: FSMContext)
         f"🎉 <b>Оффер успешно создан!</b>\n\n"
         f"• Название: <b>{offer.title}</b>\n"
         f"• Награда: {offer.reward_preview} + {offer.reward_final} монет\n"
-        f"• Штраф: {offer.penalty_unsubscribe} монет\n"
         f"• Ссылка: {offer.channel_url}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -2908,3 +2884,6 @@ async def process_offer_penalty_unsubscribe(message: Message, state: FSMContext)
         ])
     )
     await state.clear()
+
+
+# Remove the process_offer_penalty_unsubscribe function completely

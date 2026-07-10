@@ -157,8 +157,6 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                                 "⚠️ Оффер завершён с возвратом награды.\n\n"
                                 "Вы отписались от канала после получения бонуса, поэтому ранее начисленная награда была отозвана.\n\n"
                                 f"Возврат награды: {rewarded_total} монет\n"
-                                f"Доп. штраф: {extra_penalty} монет\n"
-                                f"Итого списано: {total_charge} монет\n"
                                 f"Текущий баланс: {max(user.balance, 0)} монет"
                             ),
                         )

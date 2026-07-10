@@ -1314,11 +1314,7 @@ def calculate_offer_unsubscribe_amounts(
         return Decimal("0"), Decimal("0"), Decimal("0")
 
     extra_penalty = Decimal("0")
-    if repeat_offender and not in_grace_period:
-        max_extra_penalty = round_coin(rewarded_total * Decimal("0.5"))
-        requested_penalty = max(to_decimal(offer.penalty_unsubscribe), Decimal("0"))
-        extra_penalty = min(requested_penalty, max_extra_penalty)
-    requested_total = round_coin(rewarded_total + extra_penalty)
+    requested_total = round_coin(rewarded_total)
     available_balance = max(to_decimal(current_balance), Decimal("0"))
     total_charge = min(requested_total, available_balance)
     return round_coin(rewarded_total), round_coin(extra_penalty), round_coin(total_charge)
@@ -1382,7 +1378,6 @@ async def get_offer_participations_for_subscription_audit(
 async def admin_create_offer(session: AsyncSession, title: str, description: str,
                              channel_url: str, reward_preview: Decimal,
                              reward_final: Decimal, is_rentable: bool = False,
-                             penalty_unsubscribe: Decimal = Decimal("0"),
                              rent_cost_per_day: Decimal = Decimal("0"),
                              max_simultaneous_rentals: int = 1) -> "Offer":
     offer = Offer(
@@ -1392,7 +1387,7 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
         channel_url=channel_url,
         reward_preview=reward_preview,
         reward_final=reward_final,
-        penalty_unsubscribe=penalty_unsubscribe,
+        penalty_unsubscribe=Decimal("0"),
         is_active=True,
         status="approved",
         is_rentable=is_rentable,
