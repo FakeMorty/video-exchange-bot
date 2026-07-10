@@ -13,11 +13,8 @@ BTN_PROFILE    = "👤 Профиль"
 BTN_BUY        = "💳 Купить монеты"
 BTN_OFFERS     = "📢 Офферы"
 BTN_REFERRALS  = "👥 Рефералы"
-BTN_BONUS      = "🎁 Бонус"
 BTN_ADMIN      = "🔧 Админка"
-BTN_GAMES      = "🎮 Игры"
 BTN_TOPS       = "🏆 Топы"
-BTN_QUESTS     = "📋 Квесты"
 BTN_VIP        = "👑 VIP"
 BTN_LEVEL      = "📊 Уровень"
 BTN_PROMO      = "🎟 Промокоды"
@@ -37,7 +34,6 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_UPLOAD), KeyboardButton(text=BTN_PROFILE)],
         [KeyboardButton(text=BTN_BUY), KeyboardButton(text=BTN_PROMO)],
         [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
-        [KeyboardButton(text=BTN_GAMES)],
         [KeyboardButton(text=BTN_FEEDBACK), KeyboardButton(text=BTN_TOPS)],
         [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
         [KeyboardButton(text=BTN_FAQ)],
@@ -173,76 +169,17 @@ def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup
         [InlineKeyboardButton(text="📢 Перейти в канал", url=channel_url)],
         [InlineKeyboardButton(text="▶️ Начать", callback_data=f"offer_start:{offer_id}")],
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data=f"offer_check:{offer_id}")],
-        [InlineKeyboardButton(text="📣 Арендовать слот", callback_data=f"rent_offer:{offer_id}")],
     ])
 
 
-def offer_rent_keyboard(offer_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📣 Арендовать слот", callback_data=f"rent_offer:{offer_id}")],
-        [InlineKeyboardButton(text="🔙 К офферам", callback_data="back_to_offers")],
-    ])
-
-
-def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1 день", callback_data=f"rent_days:{offer_id}:1"),
-            InlineKeyboardButton(text="3 дня", callback_data=f"rent_days:{offer_id}:3"),
-        ],
-        [
-            InlineKeyboardButton(text="7 дней", callback_data=f"rent_days:{offer_id}:7"),
-            InlineKeyboardButton(text="14 дней", callback_data=f"rent_days:{offer_id}:14"),
-        ],
-        [InlineKeyboardButton(text="30 дней", callback_data=f"rent_days:{offer_id}:30")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"offer_open:{offer_id}")],
-    ])
-
-
-# =========================
-# ИГРЫ
-# =========================
-def games_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
-        [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
-    ])
-
-
-# =========================
-# ТОПЫ
-# =========================
 def tops_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎬 Топ загрузчиков", callback_data="top_uploaders")],
         [InlineKeyboardButton(text="👁 Топ зрителей", callback_data="top_viewers")],
         [InlineKeyboardButton(text="⭐ Топ по XP", callback_data="top_levels")],
         [InlineKeyboardButton(text="💰 Топ богатых", callback_data="top_richest")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="btn_main_menu")],
     ])
-
-
-# =========================
-# КВЕСТЫ
-# =========================
-def quests_keyboard(quests: list) -> InlineKeyboardMarkup:
-    buttons = []
-    for q in quests:
-        if q.completed and not q.reward_claimed:
-            buttons.append([InlineKeyboardButton(
-                text=f"🎁 Получить награду: {q.quest_type} ({q.reward} монет)",
-                callback_data=f"quest_claim:{q.id}"
-            )])
-        elif q.completed:
-            buttons.append([InlineKeyboardButton(
-                text=f"✅ {q.quest_type}: {q.progress}/{q.target} — Выполнено",
-                callback_data=f"quest_done:{q.id}"
-            )])
-        else:
-            buttons.append([InlineKeyboardButton(
-                text=f"⏳ {q.quest_type}: {q.progress}/{q.target}",
-                callback_data=f"quest_info:{q.id}"
-            )])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def reaction_menu_keyboard(video_id: int) -> InlineKeyboardMarkup:
