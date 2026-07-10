@@ -94,6 +94,7 @@ class AdminOfferCreateState(StatesGroup):
     waiting_url = State()
     waiting_reward_preview = State()
     waiting_reward_final = State()
+    waiting_penalty = State()
     waiting_rentable = State()
     waiting_rent_cost = State()
     waiting_max_rentals = State()
@@ -2856,7 +2857,69 @@ async def process_offer_reward_final(message: Message, state: FSMContext):
         return
         
     await state.update_data(reward_final=str(reward))
-    
+    await state.set_state(AdminOfferCreateState.waiting_penalty)
+    await message.answer(
+        "💰 <b>Создание оффера (Шаг 6/9)</b>\n\n"
+        "Введите <b>штраф за отписку</b> (сколько монет спишется дополнительно, если пользователь отпишется):\n"
+        "<i>Рекомендуется: сумма, превышающая награду, чтобы отписка была невыгодной.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_penalty)
+async def process_offer_penalty(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
+    try:
+        penalty = Decimal(val)
+        if penalty < 0: raise ValueError()
+    except Exception:
+        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        return
+        
+    await state.update_data(penalty_unsubscribe=str(penalty))
+    await state.set_state(AdminOfferCreateState.waiting_rentable)
+    await message.answer(
+        "📣 <b>Создание оффера (Шаг 7/9)</b>\n\n"
+        "Будет ли этот оффер доступен для <b>аренды</b> обычными пользователями?\n"
+        "Если да, любой пользователь сможет заплатить, чтобы рекламировать свой канал в этом оффере.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да", callback_data="offer_rent_yes")],
+            [InlineKeyboardButton(text="❌ Нет", callback_data="offer_rent_no")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rent_yes")
+async def process_offer_rentable_yes(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    await state.update_data(is_rentable=True)
+    await state.set_state(AdminOfferCreateState.waiting_rent_cost)
+    await callback.message.answer(
+        "💰 <b>Создание оффера (Шаг 8/9)</b>\n\n"
+        "Введите <b>стоимость аренды одного слота в день</b> (монеты):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rent_no")
+async def process_offer_rentable_no(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    await state.update_data(is_rentable=False, rent_cost=0, max_rentals=1)
+    await finalize_admin_offer(callback, state)
+    await callback.answer()
+
+
+async def finalize_admin_offer(callback_or_message, state: FSMContext):
     data = await state.get_data()
     async with async_session() as session:
         from app.services import admin_create_offer
@@ -2867,6 +2930,72 @@ async def process_offer_reward_final(message: Message, state: FSMContext):
             channel_url=data["channel_url"],
             reward_preview=Decimal(data["reward_preview"]),
             reward_final=Decimal(data["reward_final"]),
+            penalty_unsubscribe=Decimal(data.get("penalty_unsubscribe", 0)),
+            is_rentable=data.get("is_rentable", False),
+            rent_cost_per_day=Decimal(data.get("rent_cost", 0)),
+            max_simultaneous_rentals=int(data.get("max_rentals", 1)),
+        )
+        await session.commit()
+        
+    text = (
+        f"🎉 <b>Оффер успешно создан!</b>\n\n"
+        f"• Название: <b>{offer.title}</b>\n"
+        f"• Награды: {offer.reward_preview} + {offer.reward_final} монет\n"
+        f"• Штраф отписки: {offer.penalty_unsubscribe} монет\n"
+        f"• Ссылка: {offer.channel_url}"
+    )
+    
+    if isinstance(callback_or_message, CallbackQuery):
+        await callback_or_message.message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К офферам", callback_data="admin_offers_menu")]
+            ])
+        )
+    else:
+        await callback_or_message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К офферам", callback_data="admin_offers_menu")]
+            ])
+        )
+    await state.clear()
+
+
+@router.message(AdminOfferCreateState.waiting_rent_cost)
+async def process_offer_rent_cost(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
+    try:
+        cost = Decimal(val)
+        if cost < 0: raise ValueError()
+    except Exception:
+        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        return
+        
+    await state.update_data(rent_cost=str(cost))
+    await state.set_state(AdminOfferCreateState.waiting_max_rentals)
+    await message.answer(
+        "🔢 <b>Создание оффера (Шаг 9/9)</b>\n\n"
+        "Введите <b>максимальное количество рекламных слотов</b> (сколько каналов может рекламироваться одновременно):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
+        ])
+    )
+
+
+@router.message(AdminOfferCreateState.waiting_max_rentals)
+async def process_offer_max_rentals(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Введите целое число слотов:")
+        return
+        
+    await state.update_data(max_rentals=int(message.text))
+    await finalize_admin_offer(message, state)
             is_rentable=False,
             rent_cost_per_day=Decimal("0"),
             max_simultaneous_rentals=1

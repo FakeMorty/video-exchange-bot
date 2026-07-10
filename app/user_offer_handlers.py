@@ -43,6 +43,7 @@ class UserOfferState(StatesGroup):
     waiting_url = State()
     waiting_reward_preview = State()
     waiting_reward_final = State()
+    waiting_penalty = State()
     waiting_duration = State()
     waiting_payment_method = State()
 
@@ -141,14 +142,31 @@ async def user_offer_final(message: Message, state: FSMContext):
         await message.answer("❌ Введите число ≥ 50")
         return
     await state.update_data(reward_final=val)
-    await state.set_state(UserOfferState.waiting_duration)
+    await state.set_state(UserOfferState.waiting_penalty)
     await message.answer(
-        "Шаг 6/7: На сколько дней сделать оффер активным?\n\n"
-        "Рекомендуется: 30, 60, 90"
+        "💰 <b>Шаг 6/8: Штраф за отписку</b>\n\n"
+        "Введите сумму штрафа (монеты), которая будет списана дополнительно, если пользователь отпишется от канала.\n"
+        "Рекомендуется установить сумму больше награды, чтобы отписка была в убыток пользователю.",
+        parse_mode="HTML"
     )
 
 
-# Remove the user_offer_penalty function completely
+@router.message(UserOfferState.waiting_penalty)
+async def user_offer_penalty(message: Message, state: FSMContext):
+    try:
+        val = Decimal(message.text.strip())
+        if val < 0:
+            raise ValueError
+    except Exception:
+        await message.answer("❌ Введите положительное число.")
+        return
+    await state.update_data(penalty_unsubscribe=val)
+    await state.set_state(UserOfferState.waiting_duration)
+    await message.answer(
+        "📅 <b>Шаг 7/8: Срок активности</b>\n\n"
+        "На сколько дней сделать оффер активным?\n\n"
+        "Рекомендуется: 30, 60, 90"
+    )
 
 
 @router.message(UserOfferState.waiting_duration)
@@ -173,6 +191,7 @@ async def user_offer_duration(message: Message, state: FSMContext):
     text = (
         f"💰 <b>Стоимость размещения:</b> <b>{cost:.0f} монет</b>\n\n"
         f"• Награды: {data['reward_preview']} + {data['reward_final']}\n"
+        f"• Штраф: {data['penalty_unsubscribe']}\n"
         f"• Длительность: {days} дней\n"
         f"• Коэффициент: 20%\n\n"
         "Выберите способ оплаты:"
@@ -223,7 +242,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 channel_url=data["url"],
                 reward_preview=data["reward_preview"],
                 reward_final=data["reward_final"],
-                penalty_unsubscribe=Decimal("0"),
+                penalty_unsubscribe=Decimal(data.get("penalty_unsubscribe", 0)),
                 duration_days=data["duration_days"],
                 placement_cost=cost,
                 status="pending",
@@ -248,7 +267,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 channel_url=data["url"],
                 reward_preview=data["reward_preview"],
                 reward_final=data["reward_final"],
-                penalty_unsubscribe=Decimal("0"),
+                penalty_unsubscribe=Decimal(data.get("penalty_unsubscribe", 0)),
                 duration_days=data["duration_days"],
                 placement_cost=cost,
                 status="payment_pending",

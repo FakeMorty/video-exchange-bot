@@ -169,6 +169,7 @@ def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup
         [InlineKeyboardButton(text="📢 Перейти в канал", url=channel_url)],
         [InlineKeyboardButton(text="▶️ Начать", callback_data=f"offer_start:{offer_id}")],
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data=f"offer_check:{offer_id}")],
+        [InlineKeyboardButton(text="📣 Арендовать слот", callback_data=f"rent_offer:{offer_id}")],
     ])
 
 

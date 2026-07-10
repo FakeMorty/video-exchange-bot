@@ -1313,8 +1313,12 @@ def calculate_offer_unsubscribe_amounts(
     if rewarded_total <= 0:
         return Decimal("0"), Decimal("0"), Decimal("0")
 
-    extra_penalty = Decimal("0")
-    requested_total = round_coin(rewarded_total)
+    # Штраф за отписку (из настроек оффера)
+    extra_penalty = to_decimal(offer.penalty_unsubscribe)
+    if in_grace_period:
+        extra_penalty = Decimal("0")
+
+    requested_total = round_coin(rewarded_total + extra_penalty)
     available_balance = max(to_decimal(current_balance), Decimal("0"))
     total_charge = min(requested_total, available_balance)
     return round_coin(rewarded_total), round_coin(extra_penalty), round_coin(total_charge)
@@ -1377,7 +1381,8 @@ async def get_offer_participations_for_subscription_audit(
 
 async def admin_create_offer(session: AsyncSession, title: str, description: str,
                              channel_url: str, reward_preview: Decimal,
-                             reward_final: Decimal, is_rentable: bool = False,
+                             reward_final: Decimal, penalty_unsubscribe: Decimal = Decimal("0"),
+                             is_rentable: bool = False,
                              rent_cost_per_day: Decimal = Decimal("0"),
                              max_simultaneous_rentals: int = 1) -> "Offer":
     offer = Offer(
@@ -1387,7 +1392,7 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
         channel_url=channel_url,
         reward_preview=reward_preview,
         reward_final=reward_final,
-        penalty_unsubscribe=Decimal("0"),
+        penalty_unsubscribe=penalty_unsubscribe,
         is_active=True,
         status="approved",
         is_rentable=is_rentable,
@@ -2795,19 +2800,85 @@ async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
 
 
 # ============================
-# STUBS FOR DISABLED RENTAL SYSTEM (to prevent import errors)
+# АРЕНДА СЛОТОВ (OfferRental)
 # ============================
-async def count_active_rentals(session):
-    return 0
+async def count_active_rentals(session: AsyncSession, offer_id: int) -> int:
+    """Считает количество активных аренд для конкретного оффера"""
+    from app.models import OfferRental
+    count = (await session.execute(
+        select(func.count(OfferRental.id)).where(
+            OfferRental.offer_id == offer_id,
+            OfferRental.status == "active",
+            OfferRental.expires_at > utc_now(),
+        )
+    )).scalar_one()
+    return count or 0
 
-async def expire_old_rentals(session):
-    return 0
 
-async def create_offer_rental(session, offer_id, user_id, channel_title, channel_url, rent_days):
-    return None, "Rental system is disabled in this version."
+async def expire_old_rentals(session: AsyncSession) -> int:
+    """Завершает аренды, срок которых истек"""
+    from app.models import OfferRental
+    now = utc_now()
+    result = await session.execute(
+        update(OfferRental)
+        .where(OfferRental.status == "active", OfferRental.expires_at < now)
+        .values(status="expired")
+    )
+    await session.commit()
+    return result.rowcount
 
-async def get_user_rentals(session, user_id):
-    return []
+
+async def create_offer_rental(
+    session: AsyncSession,
+    offer_id: int,
+    user_id: int,
+    channel_title: str,
+    channel_url: str,
+    rent_days: int,
+) -> tuple["OfferRental | None", str | None]:
+    """Создаёт заявку на аренду рекламного слота"""
+    from app.models import OfferRental
+    offer = await get_offer_by_id(session, offer_id)
+    if not offer or not offer.is_rentable:
+        return None, "Аренда в этом оффере недоступна."
+    
+    active_count = await count_active_rentals(session, offer_id)
+    if active_count >= offer.max_simultaneous_rentals:
+        return None, "Все рекламные слоты в этом оффере заняты."
+    
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return None, "Пользователь не найден."
+    
+    cost = to_decimal(offer.rent_cost_per_day) * rent_days
+    if user.balance < cost:
+        return None, f"Недостаточно монет. Нужно {cost:.0f}, у вас {user.balance:.0f}."
+    
+    await change_balance_atomic(session, user.id, -cost, "offer_rental_pay",
+                                 source_id=offer_id, details=f"days={rent_days}")
+    
+    rental = OfferRental(
+        offer_id=offer_id,
+        renter_user_id=user_id,
+        renter_channel_title=channel_title,
+        renter_channel_url=channel_url,
+        rent_days=rent_days,
+        cost_paid=cost,
+        status="pending",
+    )
+    session.add(rental)
+    await session.commit()
+    return rental, None
+
+
+async def get_user_rentals(session: AsyncSession, user_id: int) -> list["OfferRental"]:
+    """Получает все аренды пользователя"""
+    from app.models import OfferRental
+    return (await session.execute(
+        select(OfferRental).where(OfferRental.renter_user_id == user_id)
+        .order_by(desc(OfferRental.created_at))
+    )).scalars().all()
+
 
 # ============================
 # BOT SETTINGS
