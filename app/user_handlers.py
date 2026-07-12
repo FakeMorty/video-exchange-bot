@@ -106,17 +106,18 @@ from app.keyboards import (
     main_menu,
     video_rating_keyboard, photo_actions_keyboard,
     watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard,
-    offers_list_keyboard,
+    offers_list_keyboard, games_menu_keyboard,
     tops_menu_keyboard,
     reaction_menu_keyboard,
     low_balance_offer_keyboard, BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_ADMIN,
-    BTN_TOPS, BTN_VIP, BTN_LEVEL,
-    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_FAQ, BTN_AI,
+    BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
+    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_RULES, BTN_FAQ, BTN_AI,
 )
 from app.user_offer_handlers import user_offers_menu
 from app.logger import get_logger
 from app.release_notes import build_version_text
+from app.rules_text import FULL_RULES_TEXT, SHORT_RULES_TEXT
 from app.utils.messaging import format_time_for_user
 
 logger = get_logger(__name__)
@@ -164,11 +165,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             if not user.agreed_to_rules:
                 from app.keyboards import rules_keyboard
                 await message.answer(
-                    "📋 <b>Правила бота</b>\n\n"
-                    "1. Нельзя публиковать запрещённый или шок-контент.\n"
-                    "2. Нельзя использовать баги и накручивать награды.\n"
-                    "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
-                    "Нажмите кнопку ниже, чтобы принять правила.",
+                    SHORT_RULES_TEXT,
                     parse_mode="HTML",
                     reply_markup=rules_keyboard()
                 )
@@ -201,11 +198,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         if not user.agreed_to_rules:
             from app.keyboards import rules_keyboard
             await message.answer(
-                "📋 <b>Правила бота</b>\n\n"
-                "1. Нельзя публиковать запрещённый или шок-контент.\n"
-                "2. Нельзя использовать баги и накручивать награды.\n"
-                "3. Уважайте других пользователей и соблюдайте правила Telegram.\n\n"
-                "Нажмите кнопку ниже, чтобы принять правила.",
+                SHORT_RULES_TEXT,
                 parse_mode="HTML",
                 reply_markup=rules_keyboard()
             )
@@ -329,6 +322,12 @@ class CommentState(StatesGroup):
 
 class CustomBuyState(StatesGroup):
     waiting_stars = State()
+
+
+class RentOfferState(StatesGroup):
+    waiting_channel_title = State()
+    waiting_channel_url = State()
+    waiting_days = State()
 
 
 class PromoCreateState(StatesGroup):
@@ -592,6 +591,12 @@ async def send_welcome_banner(message_or_callback, session, user):
         )
 
 
+@router.callback_query(F.data == "show_full_rules")
+async def show_full_rules_callback(callback: CallbackQuery):
+    await callback.message.answer(FULL_RULES_TEXT, parse_mode="HTML")
+    await callback.answer()
+
+
 @router.callback_query(F.data == "accept_rules")
 async def accept_rules(callback: CallbackQuery):
     async with async_session() as session:
@@ -643,6 +648,12 @@ async def cmd_admin_redirect(message: Message):
 # =========================
 # PROFILE
 # =========================
+@router.message(F.text == BTN_RULES)
+async def show_rules(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(FULL_RULES_TEXT, parse_mode="HTML")
+
+
 @router.message(F.text == BTN_PROFILE)
 async def show_profile(message: Message, state: FSMContext):
     await state.clear()

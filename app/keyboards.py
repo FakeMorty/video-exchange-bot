@@ -14,6 +14,7 @@ BTN_BUY        = "💳 Купить монеты"
 BTN_OFFERS     = "📢 Офферы"
 BTN_REFERRALS  = "👥 Рефералы"
 BTN_ADMIN      = "🔧 Админка"
+BTN_GAMES      = "🎮 Игры"
 BTN_TOPS       = "🏆 Топы"
 BTN_VIP        = "👑 VIP"
 BTN_LEVEL      = "📊 Уровень"
@@ -22,6 +23,7 @@ BTN_FEEDBACK   = "💬 Жалобы и предложения"
 BTN_LOTTERY    = "🎰 Секслото"
 BTN_LOOTBOXES  = "🎁 Лутбоксы"
 BTN_AI         = "💋 ИИ-Общение"
+BTN_RULES      = "📜 Правила"
 BTN_FAQ        = "ℹ️ FAQ / Помощь"
 
 
@@ -34,9 +36,10 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_UPLOAD), KeyboardButton(text=BTN_PROFILE)],
         [KeyboardButton(text=BTN_BUY), KeyboardButton(text=BTN_PROMO)],
         [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
-        [KeyboardButton(text=BTN_FEEDBACK), KeyboardButton(text=BTN_TOPS)],
+        [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_TOPS)],
+        [KeyboardButton(text=BTN_FEEDBACK)],
         [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
-        [KeyboardButton(text=BTN_FAQ)],
+        [KeyboardButton(text=BTN_RULES), KeyboardButton(text=BTN_FAQ)],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=BTN_ADMIN)])
@@ -111,6 +114,7 @@ def rejection_reason_keyboard(video_id: int) -> InlineKeyboardMarkup:
 # =========================
 def rules_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📜 Полные правила", callback_data="show_full_rules")],
         [InlineKeyboardButton(text="✅ Принимаю правила", callback_data="accept_rules")],
     ])
 
@@ -170,6 +174,13 @@ def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup
         [InlineKeyboardButton(text="▶️ Начать", callback_data=f"offer_start:{offer_id}")],
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data=f"offer_check:{offer_id}")],
         [InlineKeyboardButton(text="📣 Арендовать слот", callback_data=f"rent_offer:{offer_id}")],
+    ])
+
+
+def games_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
+        [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
 
 

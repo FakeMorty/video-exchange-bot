@@ -74,6 +74,10 @@ class AdminUserState(StatesGroup):
     waiting_new_nickname = State()
 
 
+class ModerationRejectState(StatesGroup):
+    waiting_comment = State()
+
+
 class AdminManageState(StatesGroup):
     waiting_new_admin = State()
     waiting_remove_admin = State()
@@ -301,21 +305,65 @@ async def mod_reject(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("reject_reason:"))
-async def reject_reason(callback: CallbackQuery):
+async def reject_reason(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     parts = callback.data.split(":")
     video_id, reason_key = int(parts[1]), parts[2]
     reasons = {"duplicate": "Дубликат", "off_topic": "Не по теме", "forbidden": "Запрещёнка", "other": "Другое"}
     reason_text = reasons.get(reason_key, reason_key)
+    await state.set_state(ModerationRejectState.waiting_comment)
+    await state.update_data(reject_video_id=video_id, reject_reason_text=reason_text)
+    await _safe_edit(
+        callback,
+        f"❌ <b>Отклонение #{video_id}</b>\n\n"
+        f"Базовая причина: <b>{reason_text}</b>\n\n"
+        f"Теперь отправьте <b>комментарий для пользователя</b>, где объясните, что именно не так с публикацией.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_get_pending")]
+        ])
+    )
+    await callback.answer()
+
+
+@router.message(ModerationRejectState.waiting_comment)
+async def reject_reason_comment(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    comment = (message.text or "").strip()
+    if len(comment) < 3:
+        await message.answer("❌ Комментарий слишком короткий. Напишите понятное объяснение для пользователя.")
+        return
+
+    data = await state.get_data()
+    video_id = data.get("reject_video_id")
+    reason_text = data.get("reject_reason_text")
+    if not video_id or not reason_text:
+        await state.clear()
+        await message.answer("❌ Сессия отклонения потеряна. Начните заново.")
+        return
+
     async with async_session() as session:
-        video = await reject_video(session, video_id, reason_text)
+        video = await reject_video(session, int(video_id), str(reason_text), comment)
         if video:
             uploader = await get_user_by_id(session, video.uploader_user_id)
             if uploader:
-                try: await callback.bot.send_message(uploader.telegram_id, f"❌ Публикация #{video_id} отклонена: {reason_text}")
-                except Exception: pass
-    await _safe_edit(callback, f"❌ #{video_id} ОТКЛОНЕНО ({reason_text})", reply_markup=admin_after_action_keyboard())
-    await callback.answer()
+                try:
+                    await message.bot.send_message(
+                        uploader.telegram_id,
+                        f"❌ Публикация #{video_id} отклонена.\n"
+                        f"Причина: {reason_text}\n"
+                        f"Комментарий модератора: {comment}",
+                    )
+                except Exception:
+                    pass
+    await state.clear()
+    await message.answer(
+        f"❌ #{video_id} отклонено\n"
+        f"Причина: {reason_text}\n"
+        f"Комментарий: {comment}",
+        reply_markup=admin_after_action_keyboard(),
+    )
 
 
 # =========================
@@ -2993,26 +3041,9 @@ async def process_offer_max_rentals(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
         await message.answer("❌ Введите целое число слотов:")
         return
-        
+
     await state.update_data(max_rentals=int(message.text))
     await finalize_admin_offer(message, state)
-            is_rentable=False,
-            rent_cost_per_day=Decimal("0"),
-            max_simultaneous_rentals=1
-        )
-        await session.commit()
-        
-    await message.answer(
-        f"🎉 <b>Оффер успешно создан!</b>\n\n"
-        f"• Название: <b>{offer.title}</b>\n"
-        f"• Награда: {offer.reward_preview} + {offer.reward_final} монет\n"
-        f"• Ссылка: {offer.channel_url}",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ К офферам", callback_data="admin_offers_menu")]
-        ])
-    )
-    await state.clear()
 
 
 # Remove the process_offer_penalty_unsubscribe function completely

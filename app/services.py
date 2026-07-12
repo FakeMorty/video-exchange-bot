@@ -654,17 +654,29 @@ async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
     return v
 
 
-async def reject_video(session: AsyncSession, video_id: int, reason: str) -> "Video | None":
+async def reject_video(
+    session: AsyncSession,
+    video_id: int,
+    reason: str,
+    admin_comment: str | None = None,
+) -> "Video | None":
     v = (await session.execute(
         select(Video).where(Video.id == video_id)
     )).scalar_one_or_none()
     if not v:
         return None
     v.status = "rejected"
-    v.rejection_reason = reason
+    full_reason = reason.strip()
+    if admin_comment:
+        full_reason = f"{full_reason}. Комментарий модератора: {admin_comment.strip()}"
+    v.rejection_reason = full_reason
     await session.commit()
-    await log_user_action(session, v.uploader_user_id, "video_rejected",
-                          f"video_id={v.id}, reason={reason}")
+    await log_user_action(
+        session,
+        v.uploader_user_id,
+        "video_rejected",
+        f"video_id={v.id}, reason={reason}, comment={admin_comment or ''}",
+    )
     return v
 
 
@@ -2007,9 +2019,10 @@ async def draw_next_lottery_number(session: AsyncSession, round_obj: LotteryRoun
     return next_num
 
 
-async def award_weekly_lottery_leaderboard_if_due(session: AsyncSession, draw_dt: datetime) -> list[dict]:
+async def award_weekly_lottery_leaderboard_if_due(session: AsyncSession, round_obj: "LotteryRound") -> list[dict]:
+    draw_dt = round_obj.draw_starts_at
     draw_msk = draw_dt + timedelta(hours=3)
-    if draw_msk.weekday() != 6:
+    if draw_msk.weekday() != 6 or not str(round_obj.week_key).startswith("lottery_"):
         return []
     iso_year, iso_week, _ = draw_msk.isocalendar()
     marker = f"year={iso_year};week={iso_week}"
@@ -2182,7 +2195,7 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
         logger.warning(f"Error settling lottery bets: {e}")
 
     round_obj.status = "completed"
-    weekly_awards = await award_weekly_lottery_leaderboard_if_due(session, round_obj.draw_starts_at)
+    weekly_awards = await award_weekly_lottery_leaderboard_if_due(session, round_obj)
     await session.commit()
     return {
         "tickets": len(tickets),
