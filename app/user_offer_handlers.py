@@ -19,6 +19,7 @@ from app.models import Offer, utc_now
 from app.services import (
     get_user, change_balance_atomic,
     ensure_payment_pending, get_stars_discount,
+    notify_admins, classify_offer_url,
 )
 from app.config import STARS_TO_COINS_RATE
 
@@ -68,14 +69,12 @@ async def user_create_offer_start(callback: CallbackQuery, state: FSMContext):
     
     text = (
         "➕ <b>Создание своего оффера</b>\n\n"
-        "Бот поможет вам создать привлекательный оффер.\n\n"
-        "⚠️ <b>Важно:</b> Бот <b>обязательно</b> должен быть добавлен "
-        "администратором в ваш канал. Это нужно для:\n"
-        "• Автоматического контроля подписок\n"
-        "• Штрафования тех, кто отписался\n"
-        "• Честной работы системы\n\n"
-        "Без этого ваш оффер не будет опубликован.\n\n"
-        "Шаг 1/7: Введите название канала/оффера:"
+        "Можно рекламировать каналы, группы, чаты и ботов Telegram.\n\n"
+        "⚠️ <b>Важно:</b>\n"
+        "• публичные каналы/группы/чаты с username бот может проверять автоматически\n"
+        "• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна, поэтому подтверждение будет ручным по кнопке пользователя\n"
+        "• мутные, серые и запрещённые проекты в модерацию не пройдут\n\n"
+        "Шаг 1/7: Введите название проекта/оффера:"
     )
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -95,16 +94,17 @@ async def user_offer_title(message: Message, state: FSMContext):
 async def user_offer_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text.strip())
     await state.set_state(UserOfferState.waiting_url)
-    await message.answer("Шаг 3/7: Введите ссылку на канал (https://t.me/...):")
+    await message.answer("Шаг 3/7: Введите ссылку на Telegram-проект (канал / группа / чат / бот / invite link):")
 
 
 @router.message(UserOfferState.waiting_url)
 async def user_offer_url(message: Message, state: FSMContext):
     url = message.text.strip()
-    if not (url.startswith("https://t.me/") or url.startswith("t.me/")):
-        await message.answer("❌ Ссылка должна начинаться с https://t.me/ или t.me/")
+    if not (url.startswith("https://t.me/") or url.startswith("t.me/") or url.startswith("@")):
+        await message.answer("❌ Ссылка должна вести на Telegram-проект: https://t.me/..., t.me/... или @username")
         return
-    await state.update_data(url=url)
+    meta = classify_offer_url(url)
+    await state.update_data(url=url, target_label=meta["label"], auto_verify=meta["auto_verify"])
     await state.set_state(UserOfferState.waiting_reward_preview)
     
     await message.answer(
@@ -145,8 +145,8 @@ async def user_offer_final(message: Message, state: FSMContext):
     await state.set_state(UserOfferState.waiting_penalty)
     await message.answer(
         "💰 <b>Шаг 6/8: Штраф за отписку</b>\n\n"
-        "Введите сумму штрафа (монеты), которая будет списана дополнительно, если пользователь отпишется от канала.\n"
-        "Рекомендуется установить сумму больше награды, чтобы отписка была в убыток пользователю.",
+        "Введите сумму штрафа (монеты), которая будет списана дополнительно, если пользователь прекратит участие в оффере там, где это можно проверить автоматически.\n"
+        "Рекомендуется установить сумму больше награды, чтобы нарушение было в убыток пользователю.",
         parse_mode="HTML"
     )
 
@@ -253,6 +253,17 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
 
             from app.services import schedule_mod_notification
             await schedule_mod_notification(session, "offer")
+            try:
+                await notify_admins(
+                    callback.bot,
+                    f"📣 <b>Новый пользовательский оффер</b>\n"
+                    f"Автор: <code>{user.telegram_id}</code>\n"
+                    f"Название: <b>{offer.title}</b>\n"
+                    f"Тип цели: {classify_offer_url(offer.channel_url)['label']}\n"
+                    f"Статус: отправлен на модерацию",
+                )
+            except Exception:
+                pass
 
             await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
             await state.clear()

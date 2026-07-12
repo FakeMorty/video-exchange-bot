@@ -38,6 +38,8 @@ from app.services import (
     get_offer_by_id,
     get_user_by_id,
     apply_offer_unsubscribe_penalty,
+    classify_offer_url,
+    notify_admins,
     ensure_current_lottery_round,
     get_latest_lottery_round,
     get_lottery_state_dict,
@@ -94,6 +96,9 @@ def _get_webapp_user_id(request: web.Request, payload: dict | None = None) -> in
 
 
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
+    meta = classify_offer_url(channel_url)
+    if not meta.get("auto_verify"):
+        return None
     if not channel_url:
         return None
     url = channel_url.strip()
@@ -139,6 +144,9 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                     if not offer or not user:
                         continue
 
+                    target_meta = classify_offer_url(offer.channel_url)
+                    if not target_meta.get("auto_verify"):
+                        continue
                     subscribed = await _is_subscribed(bot, user.telegram_id, offer.channel_url)
                     if subscribed:
                         continue
@@ -178,6 +186,17 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                         f"total_charged={penalized_total:.2f}"
                     ),
                 )
+                if penalized_count > 0:
+                    try:
+                        await notify_admins(
+                            bot,
+                            f"⚠️ <b>Сработали штрафы по офферам</b>\n"
+                            f"Проверено участий: <b>{checked_count}</b>\n"
+                            f"Ошибочных/наказанных: <b>{penalized_count}</b>\n"
+                            f"Списано суммарно: <b>{penalized_total:.2f}</b> монет",
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             log_info(logger, f"Subscription audit warning: {e}")
 

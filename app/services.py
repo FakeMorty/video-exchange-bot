@@ -63,6 +63,54 @@ from app.config import (
     ADMINS,
 )
 
+OFFER_MANUAL_TARGET_TYPES = {"bot", "invite"}
+
+
+def classify_offer_url(target_url: str) -> dict:
+    url = (target_url or "").strip()
+    lowered = url.lower()
+    username = ""
+    if "t.me/" in lowered:
+        username = lowered.split("t.me/", 1)[1]
+    elif lowered.startswith("@"):
+        username = lowered[1:]
+    username = username.strip("/")
+    username_base = username.split("?")[0]
+
+    if "/+" in lowered or "joinchat/" in lowered or username_base.startswith("+"):
+        return {
+            "kind": "invite",
+            "label": "Группа / чат / приватный инвайт",
+            "auto_verify": False,
+            "cta": "🚀 Открыть проект",
+            "claim_text": "✅ Получить награду",
+        }
+    if username_base.endswith("bot") or "start=" in lowered or "startapp=" in lowered:
+        return {
+            "kind": "bot",
+            "label": "Telegram-бот",
+            "auto_verify": False,
+            "cta": "🤖 Открыть бота",
+            "claim_text": "✅ Я выполнил условие",
+        }
+    return {
+        "kind": "channel_like",
+        "label": "Канал / группа / чат",
+        "auto_verify": True,
+        "cta": "📢 Открыть проект",
+        "claim_text": "✅ Проверить подписку",
+    }
+
+
+async def notify_admins(bot, text: str, *, parse_mode: str = "HTML") -> int:
+    sent = 0
+    for admin_tid in ADMINS:
+        try:
+            await bot.send_message(admin_tid, text, parse_mode=parse_mode)
+            sent += 1
+        except Exception:
+            pass
+    return sent
 
 
 # ============================

@@ -2793,9 +2793,10 @@ async def cb_admin_create_offer_start(callback: CallbackQuery, state: FSMContext
     
     text = (
         "📝 <b>Создание оффера (Шаг 1/6)</b>\n\n"
-        "⚠️ <b>Важно:</b> Бот <b>обязательно</b> должен быть добавлен "
-        "в канал в качестве администратора (с минимальными правами). "
-        "Это необходимо для того, чтобы бот мог следить, не отписался ли человек от канала.\n\n"
+        "⚠️ <b>Важно:</b> можно рекламировать каналы, группы, чаты и ботов Telegram.\n"
+        "• публичные каналы / группы / чаты с username бот может проверять автоматически\n"
+        "• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна — там подтверждение будет ручным\n"
+        "• серые, мутные и запрещённые проекты не допускаются\n\n"
         "Введите <b>название оффера</b> (например, <i>Подписка на игровой канал</i>):"
     )
     
@@ -2842,7 +2843,8 @@ async def process_offer_description(message: Message, state: FSMContext):
     await state.set_state(AdminOfferCreateState.waiting_url)
     await message.answer(
         "🔗 <b>Создание оффера (Шаг 3/6)</b>\n\n"
-        "Введите <b>ссылку на Telegram-канал</b> (например, <code>https://t.me/my_channel</code>):",
+        "Введите <b>ссылку на Telegram-проект</b> — канал, группу, чат или бота\n"
+        "(например, <code>https://t.me/my_channel</code>, <code>https://t.me/MyBot?start=promo</code>, <code>https://t.me/+invite</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
@@ -2854,8 +2856,8 @@ async def process_offer_description(message: Message, state: FSMContext):
 async def process_offer_url(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     url = (message.text or "").strip()
-    if not url or "t.me/" not in url:
-        await message.answer("❌ Ссылка должна вести на Telegram-канал (содержать t.me/). Введите ссылку:")
+    if not url or ("t.me/" not in url and not url.startswith("@")):
+        await message.answer("❌ Ссылка должна вести на Telegram-проект: канал, группу, чат или бота. Используйте t.me/... или @username")
         return
         
     await state.update_data(channel_url=url)

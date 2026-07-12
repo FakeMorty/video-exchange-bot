@@ -93,6 +93,7 @@ from app.services import (
     get_latest_lottery_round, get_user_lottery_tickets, get_weekly_lottery_leaderboard, get_lottery_state_dict,
     get_lottery_draw_duration_seconds, get_lottery_max_tickets_for_balance,
     LOTTERY_MAX_TICKETS_PER_PURCHASE,
+    classify_offer_url, notify_admins,
     is_admin_or_super, is_admin_free_eligible,
     should_show_low_balance_hint, mark_low_balance_hint_shown,
     can_show_offer_to_user, mark_offer_shown,
@@ -195,6 +196,21 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             await message.answer("🚫 Вы заблокированы в боте.")
             return
 
+        if is_new:
+            try:
+                username_line = f"Username: @{escape(message.from_user.username)}\n" if message.from_user.username else ""
+                ref_line = f"Реф-код: <code>{escape(referral_code)}</code>\n" if referral_code else ""
+                await notify_admins(
+                    message.bot,
+                    f"🆕 <b>Новый пользователь</b>\n"
+                    f"ID: <code>{message.from_user.id}</code>\n"
+                    f"{username_line}"
+                    f"{ref_line}"
+                    f"Имя: {escape(message.from_user.first_name or '—')}",
+                )
+            except Exception:
+                pass
+
         if not user.agreed_to_rules:
             from app.keyboards import rules_keyboard
             await message.answer(
@@ -268,6 +284,9 @@ async def _safe_callback_answer(callback: CallbackQuery) -> None:
 
 
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
+    meta = classify_offer_url(channel_url)
+    if not meta.get("auto_verify"):
+        return None
     if not channel_url:
         return None
     url = channel_url.strip()
@@ -439,6 +458,27 @@ def _suggest_viewer_pack(packs: dict, *, need: Decimal | None = None) -> dict | 
         if float(pack.get("coins", 0)) >= need_value:
             return pack
     return ordered[-1]
+
+
+async def _notify_admins_about_first_payment(bot, user: User, *, stars: int, payload: str) -> None:
+    try:
+        await notify_admins(
+            bot,
+            f"💳 <b>Первая успешная оплата</b>\n"
+            f"Пользователь: <code>{user.telegram_id}</code>\n"
+            f"Ник: {escape(user.display_name or user.username or '—')}\n"
+            f"Stars: <b>{stars}</b>\n"
+            f"Payload: <code>{escape(payload)}</code>",
+        )
+    except Exception:
+        pass
+
+
+async def _is_first_paid_payment(session, user_id: int) -> bool:
+    paid_count = (await session.execute(
+        select(func.count(Payment.id)).where(Payment.user_id == user_id, Payment.status == "paid")
+    )).scalar_one()
+    return int(paid_count or 0) == 1
 
 
 def _best_event_badge(events: list, target: str) -> str:
@@ -1487,9 +1527,14 @@ async def btn_referrals(message: Message, state: FSMContext):
     await message.answer(
         f"👥 <b>Рефералы</b>\n\n"
         f"Приглашай друзей и получай монеты.\n"
-        f"• за каждого друга: <b>+{_fmt_coins(REFERRAL_REWARD_INVITER)}</b> монет\n"
-        f"• друг тоже получает стартовый бонус: <b>+{_fmt_coins(REFERRAL_REWARD_NEW_USER)}</b> монет\n"
+        f"• за каждого активного друга: <b>+{_fmt_coins(REFERRAL_REWARD_INVITER)}</b> монет\n"
+        f"• новый пользователь тоже получает стартовый бонус: <b>+{_fmt_coins(REFERRAL_REWARD_NEW_USER)}</b> монет\n"
         f"• ссылку можно отправить в 1 тап любому знакомому\n\n"
+        f"Статусы реферала:\n"
+        f"• перешёл по ссылке\n"
+        f"• зарегистрировался\n"
+        f"• стал активным\n"
+        f"• награда начислена\n\n"
         f"Ваша ссылка:\n<code>{ref_link}</code>\n\n"
         f"Приглашено: <b>{refs}</b>\n"
         f"Заработано: <b>{_fmt_coins(user.referral_earnings)}</b> монет"
@@ -1772,6 +1817,8 @@ async def successful_payment(message: Message):
                     auto_commit=False,
                 )
                 await session.commit()
+                if await _is_first_paid_payment(session, user.id):
+                    await _notify_admins_about_first_payment(message.bot, user, stars=paid_stars, payload=payload)
         await message.answer(
             f"👑 VIP активирован на {VIP_DURATION_DAYS} дней!"
         )
@@ -1829,6 +1876,8 @@ async def successful_payment(message: Message):
                     # Фиксируем фактически оплаченные Stars, чтобы учёт не врал при скидках.
                     promo.stars_paid = paid_stars
                     await session.commit()
+                    if await _is_first_paid_payment(session, user.id):
+                        await _notify_admins_about_first_payment(message.bot, user, stars=paid_stars, payload=payload)
                     bot = await message.bot.get_me()
                     await message.answer(
                         f"✅ Промокод создан:\n"
@@ -1876,6 +1925,8 @@ async def successful_payment(message: Message):
             # Keep Payment status aligned with idempotent lootbox processing.
             if await mark_payment_paid_once(session, payload):
                 await session.commit()
+                if await _is_first_paid_payment(session, user.id):
+                    await _notify_admins_about_first_payment(message.bot, user, stars=paid_stars, payload=payload)
         if reward is None:
             await message.answer(f"⚠️ {rarity_or_err}")
         else:
@@ -1918,9 +1969,22 @@ async def successful_payment(message: Message):
 
                 offer.status = "pending"
                 await session.commit()
+                if await _is_first_paid_payment(session, user.id):
+                    await _notify_admins_about_first_payment(message.bot, user, stars=paid_stars, payload=payload)
 
                 from app.services import schedule_mod_notification
                 await schedule_mod_notification(session, "offer")
+                try:
+                    await notify_admins(
+                        message.bot,
+                        f"📣 <b>Новый оффер после оплаты</b>\n"
+                        f"Автор: <code>{user.telegram_id}</code>\n"
+                        f"Название: <b>{offer.title}</b>\n"
+                        f"Тип цели: {classify_offer_url(offer.channel_url)['label']}\n"
+                        f"Статус: отправлен на модерацию",
+                    )
+                except Exception:
+                    pass
 
                 await message.answer(
                     "✅ Оплата прошла успешно! Ваш оффер отправлен на модерацию.\n"
@@ -1929,6 +1993,8 @@ async def successful_payment(message: Message):
         except Exception as e:
             await message.answer(f"⚠️ Ошибка при обработке оффера: {e}")
     else:
+        notify_first_payment = False
+        notify_user = None
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if not user:
@@ -1942,7 +2008,12 @@ async def successful_payment(message: Message):
                 await message.answer("Ошибка платежа: сумма не совпадает.")
                 return
             payment, credited_total = await apply_successful_payment(session, payload)
+            if payment and await _is_first_paid_payment(session, user.id):
+                notify_first_payment = True
+                notify_user = user
         if payment:
+            if notify_first_payment and notify_user is not None:
+                await _notify_admins_about_first_payment(message.bot, notify_user, stars=paid_stars, payload=payload)
             await message.answer(
                 f"✅ Оплата успешна!\n"
                 f"💰 Начислено: <b>{_fmt_coins(credited_total)}</b> монет",
@@ -2187,17 +2258,25 @@ async def cb_offer_open(callback: CallbackQuery):
             )
         )).scalar_one()
 
+    target_meta = classify_offer_url(offer.channel_url)
+    verify_text = (
+        "Финальная награда выдаётся после автоматической проверки участия."
+        if target_meta["auto_verify"]
+        else "Финальная награда выдаётся по кнопке подтверждения: для ботов, приватных инвайтов и некоторых чатов авто-проверка недоступна."
+    )
     text = (
         f"📢 <b>{offer.title}</b>\n\n"
         f"{offer.description}\n\n"
+        f"🔗 <b>Тип цели:</b> {target_meta['label']}\n"
         f"💰 Предварительно: <b>{offer.reward_preview}</b> монет\n"
         f"🎁 После подтверждения: <b>{offer.reward_final}</b> монет\n"
-        f"👥 Участников: {participants}"
+        f"👥 Участников: {participants}\n\n"
+        f"ℹ️ {verify_text}"
     )
 
     kb_rows = [
         [InlineKeyboardButton(
-            text="📢 Перейти в канал",
+            text=target_meta["cta"],
             url=offer.channel_url
         )],
         [InlineKeyboardButton(
@@ -2205,7 +2284,7 @@ async def cb_offer_open(callback: CallbackQuery):
             callback_data=f"offer_start_confirm:{offer_id}"
         )],
         [InlineKeyboardButton(
-            text="✅ Проверить подписку",
+            text=target_meta["claim_text"],
             callback_data=f"offer_check:{offer_id}"
         )],
     ]
@@ -2234,14 +2313,22 @@ async def cb_offer_start_confirm(callback: CallbackQuery):
         if not offer:
             await callback.answer("Оффер не найден.", show_alert=True)
             return
+    target_meta = classify_offer_url(offer.channel_url)
+    verification_block = (
+        "• после участия бот сам проверит подписку и выдаст финальную награду\n"
+        if target_meta["auto_verify"]
+        else "• для этого типа цели авто-проверка недоступна, поэтому финальная награда выдаётся по кнопке подтверждения\n"
+    )
     text = (
         "⚠️ <b>Важно перед участием</b>\n\n"
         "Вы получите монеты за участие в оффере.\n"
         "Если после получения награды вы отпишетесь:\n"
         "• награда будет забрана назад\n"
         "• при повторных нарушениях может быть дополнительный штраф\n"
-        "• первые 15 минут после входа считаются grace period без доп. штрафа\n\n"
+        "• первые 15 минут после входа считаются grace period без доп. штрафа\n"
+        f"{verification_block}\n"
         f"Оффер: <b>{offer.title}</b>\n"
+        f"Тип цели: <b>{target_meta['label']}</b>\n"
         f"Предварительная награда: <b>{_fmt_coins(offer.reward_preview)}</b> монет\n"
         f"Финальная награда: <b>{_fmt_coins(offer.reward_final)}</b> монет"
     )
@@ -2278,10 +2365,12 @@ async def cb_offer_start(callback: CallbackQuery):
         offer = await get_offer_by_id(session, offer_id)
 
     paid = to_decimal(part.reward_given)
+    target_meta = classify_offer_url(offer.channel_url)
     cap_note = "" if paid == to_decimal(offer.reward_preview) else "\n⚠️ Сработал дневной лимит наград."
+    next_step = "Откройте проект и потом нажмите кнопку подтверждения." if not target_meta["auto_verify"] else "Подпишитесь и нажмите кнопку проверки."
     await callback.answer(
         f"✅ Получено {paid} монет!\n"
-        f"Подпишитесь и нажмите «Проверить».{cap_note}",
+        f"{next_step}{cap_note}",
         show_alert=True
     )
 
@@ -2305,27 +2394,25 @@ async def cb_offer_check(callback: CallbackQuery):
         if not offer:
             await callback.answer("Оффер не найден.", show_alert=True)
             return
-        if not await _check_user_offer_subscription(callback, offer):
-            await callback.answer(
-                "❌ Подписка не найдена. Подпишитесь на канал и попробуйте снова.",
-                show_alert=True,
-            )
-            return
+        target_meta = classify_offer_url(offer.channel_url)
+        if target_meta["auto_verify"]:
+            if not await _check_user_offer_subscription(callback, offer):
+                await callback.answer(
+                    "❌ Подписка не найдена. Подпишитесь на проект и попробуйте снова.",
+                    show_alert=True,
+                )
+                return
         ok, paid = await verify_offer_subscription(session, user.id, offer_id)
         if ok:
             if paid > 0:
-                await callback.answer(
-                    f"✅ Подтверждено! Получено {paid} монет!",
-                    show_alert=True
-                )
+                success_text = "✅ Подтверждено! Получено {paid} монет!" if target_meta["auto_verify"] else "✅ Подтверждение принято! Получено {paid} монет!"
+                await callback.answer(success_text.format(paid=paid), show_alert=True)
             else:
-                await callback.answer(
-                    "✅ Подписка подтверждена. Награда уже выдана или дневной лимит исчерпан.",
-                    show_alert=True
-                )
+                neutral_text = "✅ Подписка подтверждена. Награда уже выдана или дневной лимит исчерпан." if target_meta["auto_verify"] else "✅ Участие уже подтверждено или дневной лимит исчерпан."
+                await callback.answer(neutral_text, show_alert=True)
         else:
             await callback.answer(
-                "❌ Не удалось подтвердить подписку.",
+                "❌ Не удалось подтвердить участие.",
                 show_alert=True
             )
 
