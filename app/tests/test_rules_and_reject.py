@@ -10,11 +10,14 @@ from app.services import reject_video
 
 def test_rules_text_contains_key_sections():
     full = FULL_RULES_TEXT.lower()
-    assert "18+" in SHORT_RULES_TEXT
+    short = SHORT_RULES_TEXT.lower()
+    assert "шок-контент" in short
+    assert "чётко видно" in short
+    assert "умников найдём и оштрафуем" in short
     assert "некрофилия" in full
     assert "зоофилия" in full
     assert "копрофилия" in full
-    assert "эмодзи" in full
+    assert "эмодзи" in short
     assert "мультиакки" in full
     assert "каналы, группы, чаты и ботов" in full
 
