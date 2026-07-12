@@ -602,6 +602,27 @@ async def admin_sale_finish(message: Message, state: FSMContext):
 # =========================
 # BROADCAST
 # =========================
+@router.callback_query(F.data == "admin_direct_message_all")
+async def admin_direct_message_all(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        return
+    await state.clear()
+    await state.set_state(AdminBroadcastState.waiting_text)
+    await state.update_data(broadcast_mode="admin_direct")
+    await _safe_edit(
+        callback,
+        "📨 <b>Сообщение всем от админа</b>\n\n"
+        "Напишите текст, который бот отправит всем активным пользователям.\n\n"
+        "Пользователь увидит это в формате:\n"
+        "<code>📢 Вам сообщение от админа: ...</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_center")]
+        ])
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
@@ -676,7 +697,7 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка шаблона", show_alert=True)
         return
         
-    await state.update_data(broadcast_text=tpl_text)
+    await state.update_data(broadcast_text=tpl_text, broadcast_mode="promo")
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin_broadcast_confirm")],
@@ -700,25 +721,45 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
 async def cb_admin_broadcast_custom(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     await state.set_state(AdminBroadcastState.waiting_text)
-    await callback.message.answer("📢 Введите ваш пользовательский текст для рассылки (поддерживается HTML-разметка):")
+    await state.update_data(broadcast_mode="promo")
+    await callback.message.answer("📢 Введите ваш пользовательский текст для промо-рассылки (поддерживается HTML-разметка):")
     await callback.answer()
 
 
 @router.message(AdminBroadcastState.waiting_text)
 async def process_broadcast(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id): return
-    text_val = message.text
+    if not await check_admin(message.from_user.id):
+        return
+    text_val = (message.text or "").strip()
+    if not text_val:
+        await message.answer("❌ Текст не может быть пустым.")
+        return
+
+    data = await state.get_data()
+    mode = data.get("broadcast_mode", "promo")
     await state.update_data(broadcast_text=text_val)
-    
+
+    if mode == "admin_direct":
+        preview_text = (
+            "📢 <b>Вам сообщение от админа:</b>\n\n"
+            f"{text_val}"
+        )
+        cancel_target = "admin_center"
+        header = "📨 <b>Предпросмотр сообщения от админа:</b>"
+    else:
+        preview_text = text_val
+        cancel_target = "admin_broadcast"
+        header = "📢 <b>Предпросмотр вашей рассылки:</b>"
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin_broadcast_confirm")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_broadcast")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=cancel_target)]
     ])
-    
+
     await message.answer(
-        f"📢 <b>Предпросмотр вашей рассылки:</b>\n\n"
+        f"{header}\n\n"
         f"----------------------------------\n"
-        f"{text_val}\n"
+        f"{preview_text}\n"
         f"----------------------------------\n\n"
         f"Вы действительно хотите отправить это сообщение всем активным пользователям?",
         parse_mode="HTML",
@@ -728,43 +769,54 @@ async def process_broadcast(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_broadcast_confirm")
 async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot):
-    if not await check_admin(callback.from_user.id): return
-    
+    if not await check_admin(callback.from_user.id):
+        return
+
     data = await state.get_data()
     text_val = data.get("broadcast_text")
+    mode = data.get("broadcast_mode", "promo")
     await state.clear()
-    
+
     if not text_val:
         await callback.answer("Ошибка: Текст пуст.", show_alert=True)
         return
-        
-    await callback.message.edit_text("⏳ <b>Рассылка запущена в фоновом режиме...</b>", parse_mode="HTML")
+
+    if mode == "admin_direct":
+        outgoing_text = f"📢 <b>Вам сообщение от админа:</b>\n\n{text_val}"
+        start_text = "⏳ <b>Сообщение от админа отправляется всем активным пользователям...</b>"
+        done_text = "✅ <b>Сообщение от админа успешно отправлено!</b>"
+    else:
+        outgoing_text = text_val
+        start_text = "⏳ <b>Рассылка запущена в фоновом режиме...</b>"
+        done_text = "✅ <b>Рассылка успешно завершена!</b>"
+
+    await callback.message.edit_text(start_text, parse_mode="HTML")
     await callback.answer()
-    
+
     async def run_broadcast_task():
         async with async_session() as session:
             users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
-            
+
         sent = 0
         for tid in users:
             try:
-                await bot.send_message(tid, text_val, parse_mode="HTML")
+                await bot.send_message(tid, outgoing_text, parse_mode="HTML")
                 sent += 1
                 if sent % 30 == 0:
                     await asyncio.sleep(0.5)
             except Exception:
                 pass
-                
+
         try:
             await bot.send_message(
                 callback.from_user.id,
-                f"✅ <b>Рассылка успешно завершена!</b>\n\n"
+                f"{done_text}\n\n"
                 f"Сообщение доставлено <b>{sent}</b> активным пользователям.",
                 parse_mode="HTML"
             )
         except Exception:
             pass
-            
+
     asyncio.create_task(run_broadcast_task())
 
 
