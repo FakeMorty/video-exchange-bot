@@ -65,7 +65,7 @@ from app.config import (
 from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
-    DailyQuestProgress, GameHistory, Offer, Promocode,
+    DailyQuestProgress, GameHistory, Offer, Payment, Promocode,
     LootboxOpen, LotteryTicket, UserActionLog,
     utc_now,
 )
@@ -79,8 +79,10 @@ from app.services import (
     create_payment, create_custom_payment, apply_successful_payment,
     ensure_payment_pending, mark_payment_paid_once,
     get_payment_by_payload,
-    get_active_offers, get_offer_by_id,
-    start_offer_participation, verify_offer_subscription,
+    get_active_offers, get_offer_by_id, get_rentable_offers,
+    start_offer_participation, verify_offer_subscription, is_offer_available,
+    create_offer_rental, get_user_rentals, count_reserved_rentals,
+    get_active_rentals_for_offer, normalize_telegram_url,
     change_balance_atomic, log_user_action, to_decimal,
     set_display_name, get_display_name, get_styled_display_name, log_balance_change,
     has_valid_nickname,
@@ -113,6 +115,7 @@ from app.keyboards import (
     reaction_menu_keyboard,
     low_balance_offer_keyboard,
     video_error_keyboard, photo_error_keyboard, photo_limit_reached_keyboard,
+    rent_days_keyboard,
     BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
@@ -2082,9 +2085,10 @@ async def successful_payment(message: Message):
                         message.bot,
                         f"📣 <b>Новый оффер после оплаты</b>\n"
                         f"Автор: <code>{user.telegram_id}</code>\n"
-                        f"Название: <b>{offer.title}</b>\n"
+                        f"Название: <b>{escape(offer.title)}</b>\n"
                         f"Тип цели: {classify_offer_url(offer.channel_url)['label']}\n"
-                        f"Статус: отправлен на модерацию",
+                        f"Статус: отправлен на модерацию\n\n"
+                        f"Открыть очередь: /admin",
                     )
                 except Exception:
                     pass
@@ -2093,8 +2097,9 @@ async def successful_payment(message: Message):
                     "✅ Оплата прошла успешно! Ваш оффер отправлен на модерацию.\n"
                     "Он появится в списке, как только администратор его одобрит."
                 )
-        except Exception as e:
-            await message.answer(f"⚠️ Ошибка при обработке оффера: {e}")
+        except Exception:
+            logger.exception("Failed to process paid user offer")
+            await message.answer("⚠️ Не удалось обработать оплату оффера. Администраторы уже могут проверить журнал ошибок.")
     else:
         notify_first_payment = False
         notify_user = None
@@ -2349,8 +2354,8 @@ async def cb_offer_open(callback: CallbackQuery):
     offer_id = int(callback.data.split(":")[1])
     async with async_session() as session:
         offer = await get_offer_by_id(session, offer_id)
-        if not offer:
-            await callback.answer("Оффер не найден.", show_alert=True)
+        if not is_offer_available(offer):
+            await callback.answer("Оффер больше не активен.", show_alert=True)
             return
 
         from sqlalchemy import select as sa_select
@@ -2360,27 +2365,34 @@ async def cb_offer_open(callback: CallbackQuery):
                 OfferParticipation.offer_id == offer_id
             )
         )).scalar_one()
+        rented_ads = await get_active_rentals_for_offer(session, offer_id, limit=10)
 
     target_meta = classify_offer_url(offer.channel_url)
+    target_url = normalize_telegram_url(offer.channel_url)
+    if not target_url:
+        await callback.answer("У оффера некорректная ссылка. Сообщите администратору.", show_alert=True)
+        return
     verify_text = (
         "Финальная награда выдаётся после автоматической проверки участия."
         if target_meta["auto_verify"]
         else "Финальная награда выдаётся по кнопке подтверждения: для ботов, приватных инвайтов и некоторых чатов авто-проверка недоступна."
     )
     text = (
-        f"📢 <b>{offer.title}</b>\n\n"
-        f"{offer.description}\n\n"
+        f"📢 <b>{escape(offer.title)}</b>\n\n"
+        f"{escape(offer.description)}\n\n"
         f"🔗 <b>Тип цели:</b> {target_meta['label']}\n"
         f"💰 Предварительно: <b>{offer.reward_preview}</b> монет\n"
         f"🎁 После подтверждения: <b>{offer.reward_final}</b> монет\n"
         f"👥 Участников: {participants}\n\n"
         f"ℹ️ {verify_text}"
     )
+    if rented_ads:
+        text += "\n\n📣 <b>Реклама партнёров:</b>"
 
     kb_rows = [
         [InlineKeyboardButton(
             text=target_meta["cta"],
-            url=offer.channel_url
+            url=target_url
         )],
         [InlineKeyboardButton(
             text="▶️ Участвовать",
@@ -2391,6 +2403,13 @@ async def cb_offer_open(callback: CallbackQuery):
             callback_data=f"offer_check:{offer_id}"
         )],
     ]
+    for rental in rented_ads:
+        rental_url = normalize_telegram_url(rental.renter_channel_url)
+        if rental_url:
+            kb_rows.append([InlineKeyboardButton(
+                text=f"📣 {rental.renter_channel_title[:45]}",
+                url=rental_url,
+            )])
     if getattr(offer, "is_rentable", False):
         kb_rows.append([InlineKeyboardButton(
             text="📣 Арендовать слот",
@@ -2413,8 +2432,8 @@ async def cb_offer_start_confirm(callback: CallbackQuery):
     offer_id = int(callback.data.split(":")[1])
     async with async_session() as session:
         offer = await get_offer_by_id(session, offer_id)
-        if not offer:
-            await callback.answer("Оффер не найден.", show_alert=True)
+        if not is_offer_available(offer):
+            await callback.answer("Оффер больше не активен.", show_alert=True)
             return
     target_meta = classify_offer_url(offer.channel_url)
     verification_block = (
@@ -2430,7 +2449,7 @@ async def cb_offer_start_confirm(callback: CallbackQuery):
         "• при повторных нарушениях может быть дополнительный штраф\n"
         "• первые 15 минут после входа считаются grace period без доп. штрафа\n"
         f"{verification_block}\n"
-        f"Оффер: <b>{offer.title}</b>\n"
+        f"Оффер: <b>{escape(offer.title)}</b>\n"
         f"Тип цели: <b>{target_meta['label']}</b>\n"
         f"Предварительная награда: <b>{_fmt_coins(offer.reward_preview)}</b> монет\n"
         f"Финальная награда: <b>{_fmt_coins(offer.reward_final)}</b> монет"
@@ -2494,8 +2513,8 @@ async def cb_offer_check(callback: CallbackQuery):
             await callback.answer()
             return
         offer = await get_offer_by_id(session, offer_id)
-        if not offer:
-            await callback.answer("Оффер не найден.", show_alert=True)
+        if not is_offer_available(offer):
+            await callback.answer("Оффер больше не активен.", show_alert=True)
             return
         target_meta = classify_offer_url(offer.channel_url)
         if target_meta["auto_verify"]:
@@ -2527,6 +2546,10 @@ async def cb_offer_check(callback: CallbackQuery):
 async def offers_rent_list(callback: CallbackQuery):
     async with async_session() as session:
         offers = await get_rentable_offers(session)
+        offer_rows = [
+            (offer, await count_reserved_rentals(session, offer.id))
+            for offer in offers
+        ]
 
     if not offers:
         await callback.message.answer(
@@ -2542,19 +2565,15 @@ async def offers_rent_list(callback: CallbackQuery):
         "Выберите оффер:"
     )
     kb_buttons = []
-    for o in offers:
-        # Count active rentals to see if slots are available
-        from app.services import count_active_rentals
-        async with async_session() as session_inner:
-            active_count = await count_active_rentals(session_inner, o.id)
-        slots_left = o.max_simultaneous_rentals - active_count
+    for offer, reserved_count in offer_rows:
+        slots_left = max(0, int(offer.max_simultaneous_rentals or 1) - reserved_count)
         kb_buttons.append([InlineKeyboardButton(
             text=(
-                f"📣 {o.title[:30]} | "
-                f"{o.rent_cost_per_day} монет/день | "
-                f"Слотов: {slots_left}/{o.max_simultaneous_rentals}"
+                f"📣 {offer.title[:30]} | "
+                f"{offer.rent_cost_per_day} монет/день | "
+                f"Слотов: {slots_left}/{offer.max_simultaneous_rentals}"
             ),
-            callback_data=f"rent_offer:{o.id}"
+            callback_data=f"rent_offer:{offer.id}"
         )])
 
     kb_buttons.append([InlineKeyboardButton(
@@ -2585,13 +2604,12 @@ async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
     offer_id = int(callback.data.split(":")[1])
     async with async_session() as session:
         offer = await get_offer_by_id(session, offer_id)
-        if not offer or not offer.is_rentable:
+        if not is_offer_available(offer) or not offer.is_rentable:
             await callback.answer("Аренда недоступна.", show_alert=True)
             return
 
-        from app.services import count_active_rentals
-        active_count = await count_active_rentals(session, offer_id)
-        slots_left = offer.max_simultaneous_rentals - active_count
+        reserved_count = await count_reserved_rentals(session, offer_id)
+        slots_left = int(offer.max_simultaneous_rentals or 1) - reserved_count
 
     if slots_left <= 0:
         await callback.answer(
@@ -2603,7 +2621,7 @@ async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RentOfferState.waiting_channel_title)
     await state.update_data(offer_id=offer_id)
     await callback.message.answer(
-        f"📣 <b>Аренда слота в: {offer.title}</b>\n\n"
+        f"📣 <b>Аренда слота в: {escape(offer.title)}</b>\n\n"
         f"💰 Стоимость: {offer.rent_cost_per_day} монет/день\n"
         f"Свободных слотов: {slots_left}/{offer.max_simultaneous_rentals}\n\n"
         f"Шаг 1/3: Введите название вашего канала:",
@@ -2627,11 +2645,9 @@ async def rent_channel_title(message: Message, state: FSMContext):
 
 @router.message(RentOfferState.waiting_channel_url)
 async def rent_channel_url(message: Message, state: FSMContext):
-    url = (message.text or "").strip()
-    if not (url.startswith("https://t.me/") or url.startswith("t.me/")):
-        await message.answer(
-            "❌ Ссылка должна начинаться с https://t.me/ или t.me/"
-        )
+    url = normalize_telegram_url(message.text or "")
+    if not url:
+        await message.answer("❌ Нужна корректная ссылка t.me/... или @username.")
         return
     await state.update_data(channel_url=url)
     await state.set_state(RentOfferState.waiting_days)
@@ -2653,13 +2669,17 @@ async def rent_days_selected(callback: CallbackQuery, state: FSMContext):
     days = int(parts[2])
 
     data = await state.get_data()
+    if data.get("offer_id") != offer_id or not (OFFER_MIN_RENT_DAYS <= days <= OFFER_MAX_RENT_DAYS):
+        await callback.answer("Некорректные параметры аренды.", show_alert=True)
+        await state.clear()
+        return
     channel_title = data.get("channel_title", "")
     channel_url = data.get("channel_url", "")
 
     async with async_session() as session:
         offer = await get_offer_by_id(session, offer_id)
-        if not offer:
-            await callback.answer("Оффер не найден.", show_alert=True)
+        if not is_offer_available(offer) or not offer.is_rentable:
+            await callback.answer("Оффер больше не доступен для аренды.", show_alert=True)
             await state.clear()
             return
 
@@ -2684,9 +2704,9 @@ async def rent_days_selected(callback: CallbackQuery, state: FSMContext):
     ])
     await callback.message.answer(
         f"📣 <b>Подтверждение аренды</b>\n\n"
-        f"Оффер: {offer.title}\n"
-        f"Ваш канал: {channel_title}\n"
-        f"Ссылка: {channel_url}\n"
+        f"Оффер: {escape(offer.title)}\n"
+        f"Ваш канал: {escape(channel_title)}\n"
+        f"Ссылка: {escape(channel_url)}\n"
         f"Дней: {days}\n"
         f"Стоимость: <b>{cost} монет</b>\n"
         f"Ваш баланс: {user.balance} монет\n\n"
@@ -2704,6 +2724,14 @@ async def confirm_rent(callback: CallbackQuery, state: FSMContext):
     offer_id, days = int(parts[1]), int(parts[2])
 
     data = await state.get_data()
+    if (
+        data.get("offer_id") != offer_id
+        or data.get("days") != days
+        or not (OFFER_MIN_RENT_DAYS <= days <= OFFER_MAX_RENT_DAYS)
+    ):
+        await callback.answer("Сессия аренды устарела. Начните заново.", show_alert=True)
+        await state.clear()
+        return
     channel_title = data.get("channel_title", "")
     channel_url = data.get("channel_url", "")
 
@@ -2722,6 +2750,8 @@ async def confirm_rent(callback: CallbackQuery, state: FSMContext):
             channel_url=channel_url,
             rent_days=days,
         )
+        if rental:
+            await schedule_mod_notification(session, "offer")
 
     if error:
         await callback.message.answer(error)
@@ -2729,9 +2759,21 @@ async def confirm_rent(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
+    try:
+        await notify_admins(
+            callback.bot,
+            f"🧾 <b>Новая аренда на модерации</b>\n"
+            f"Заявка: <b>#{rental.id}</b>\n"
+            f"Канал: <b>{escape(rental.renter_channel_title)}</b>\n"
+            f"Автор: <code>{callback.from_user.id}</code>\n\n"
+            "Открыть очередь: /admin",
+        )
+    except Exception:
+        logger.warning("Failed to notify admins about rental_id=%s", rental.id)
+
     await callback.message.answer(
         f"✅ <b>Заявка на аренду отправлена!</b>\n\n"
-        f"Канал: {channel_title}\n"
+        f"Канал: {escape(channel_title)}\n"
         f"Дней: {days}\n"
         f"Стоимость: {rental.cost_paid} монет\n\n"
         f"После одобрения администратором ваш канал будет активен в оффере.\n"
@@ -2771,11 +2813,14 @@ async def my_rentals(callback: CallbackQuery):
             }.get(r.status, "❓")
             expires = r.expires_at.strftime('%d.%m.%Y') if r.expires_at else "—"
             text += (
-                f"{status_icon} {offer_name}\n"
-                f"   Канал: {r.renter_channel_title}\n"
+                f"{status_icon} {escape(offer_name)}\n"
+                f"   Канал: {escape(r.renter_channel_title)}\n"
                 f"   Дней: {r.rent_days} | Стоимость: {r.cost_paid}\n"
-                f"   Статус: {r.status} | До: {expires}\n\n"
+                f"   Статус: {escape(r.status)} | До: {expires}\n"
             )
+            if r.status == "rejected" and r.rejection_reason:
+                text += f"   Причина: {escape(r.rejection_reason)}\n"
+            text += "\n"
 
     if len(text) > 4000:
         text = text[:4000] + "\n..."

@@ -1,9 +1,6 @@
-"""
-Система пользовательских офферов (от обычных пользователей)
-Полностью переработанная версия без аренды слотов.
-"""
+"""Пользовательское создание офферов и просмотр своих заявок."""
 
-from datetime import timedelta
+from html import escape
 from decimal import Decimal, ROUND_CEILING
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -15,11 +12,11 @@ from aiogram.types import (
 from sqlalchemy import select
 
 from app.db import async_session
-from app.models import Offer, utc_now
+from app.models import Offer
 from app.services import (
     get_user, change_balance_atomic,
     ensure_payment_pending, get_stars_discount,
-    notify_admins, classify_offer_url,
+    notify_admins, classify_offer_url, normalize_telegram_url,
 )
 from app.config import STARS_TO_COINS_RATE
 
@@ -57,6 +54,8 @@ def user_offers_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📢 Офферы (участие)", callback_data="offers_participation")],
         [InlineKeyboardButton(text="➕ Создать свой оффер", callback_data="user_create_offer")],
         [InlineKeyboardButton(text="📋 Мои офферы", callback_data="user_my_offers")],
+        [InlineKeyboardButton(text="📣 Арендовать рекламный слот", callback_data="offers_rent_list")],
+        [InlineKeyboardButton(text="🧾 Мои аренды", callback_data="my_rentals")],
     ])
 
 
@@ -74,7 +73,7 @@ async def user_create_offer_start(callback: CallbackQuery, state: FSMContext):
         "• публичные каналы/группы/чаты с username бот может проверять автоматически\n"
         "• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна, поэтому подтверждение будет ручным по кнопке пользователя\n"
         "• мутные, серые и запрещённые проекты в модерацию не пройдут\n\n"
-        "Шаг 1/7: Введите название проекта/оффера:"
+        "Шаг 1/8: Введите название проекта/оффера:"
     )
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -82,33 +81,38 @@ async def user_create_offer_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(UserOfferState.waiting_title)
 async def user_offer_title(message: Message, state: FSMContext):
-    if len(message.text) > 100:
-        await message.answer("❌ Название слишком длинное (макс 100 символов)")
+    title = (message.text or "").strip()
+    if not title or len(title) > 100:
+        await message.answer("❌ Введите название длиной от 1 до 100 символов.")
         return
-    await state.update_data(title=message.text.strip())
+    await state.update_data(title=title)
     await state.set_state(UserOfferState.waiting_description)
-    await message.answer("Шаг 2/7: Введите описание оффера (что получат подписчики):")
+    await message.answer("Шаг 2/8: Введите описание оффера (что получат подписчики):")
 
 
 @router.message(UserOfferState.waiting_description)
 async def user_offer_description(message: Message, state: FSMContext):
-    await state.update_data(description=message.text.strip())
+    description = (message.text or "").strip()
+    if not description or len(description) > 1500:
+        await message.answer("❌ Введите описание длиной от 1 до 1500 символов.")
+        return
+    await state.update_data(description=description)
     await state.set_state(UserOfferState.waiting_url)
-    await message.answer("Шаг 3/7: Введите ссылку на Telegram-проект (канал / группа / чат / бот / invite link):")
+    await message.answer("Шаг 3/8: Введите ссылку на Telegram-проект (канал / группа / чат / бот / invite link):")
 
 
 @router.message(UserOfferState.waiting_url)
 async def user_offer_url(message: Message, state: FSMContext):
-    url = message.text.strip()
-    if not (url.startswith("https://t.me/") or url.startswith("t.me/") or url.startswith("@")):
-        await message.answer("❌ Ссылка должна вести на Telegram-проект: https://t.me/..., t.me/... или @username")
+    url = normalize_telegram_url(message.text or "")
+    if not url:
+        await message.answer("❌ Нужна корректная ссылка t.me/... или @username Telegram-проекта.")
         return
     meta = classify_offer_url(url)
     await state.update_data(url=url, target_label=meta["label"], auto_verify=meta["auto_verify"])
     await state.set_state(UserOfferState.waiting_reward_preview)
     
     await message.answer(
-        "Шаг 4/7: Введите <b>предварительную награду</b> (монеты, выдаётся сразу):\n\n"
+        "Шаг 4/8: Введите <b>предварительную награду</b> (монеты, выдаётся сразу):\n\n"
         "Рекомендуется: 10, 20, 30",
         parse_mode="HTML"
     )
@@ -118,7 +122,7 @@ async def user_offer_url(message: Message, state: FSMContext):
 async def user_offer_preview(message: Message, state: FSMContext):
     try:
         val = Decimal(message.text.strip())
-        if val < 10:
+        if not val.is_finite() or val < 10:
             raise ValueError
     except Exception:
         await message.answer("❌ Введите число ≥ 10")
@@ -126,7 +130,7 @@ async def user_offer_preview(message: Message, state: FSMContext):
     await state.update_data(reward_preview=val)
     await state.set_state(UserOfferState.waiting_reward_final)
     await message.answer(
-        "Шаг 5/7: Введите <b>итоговую награду</b> (после проверки подписки):\n\n"
+        "Шаг 5/8: Введите <b>итоговую награду</b> (после проверки подписки):\n\n"
         "Рекомендуется: 70, 100, 160",
         parse_mode="HTML"
     )
@@ -136,7 +140,7 @@ async def user_offer_preview(message: Message, state: FSMContext):
 async def user_offer_final(message: Message, state: FSMContext):
     try:
         val = Decimal(message.text.strip())
-        if val < 50:
+        if not val.is_finite() or val < 50:
             raise ValueError
     except Exception:
         await message.answer("❌ Введите число ≥ 50")
@@ -155,7 +159,7 @@ async def user_offer_final(message: Message, state: FSMContext):
 async def user_offer_penalty(message: Message, state: FSMContext):
     try:
         val = Decimal(message.text.strip())
-        if val < 0:
+        if not val.is_finite() or val < 0:
             raise ValueError
     except Exception:
         await message.answer("❌ Введите положительное число.")
@@ -258,9 +262,10 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                     callback.bot,
                     f"📣 <b>Новый пользовательский оффер</b>\n"
                     f"Автор: <code>{user.telegram_id}</code>\n"
-                    f"Название: <b>{offer.title}</b>\n"
+                    f"Название: <b>{escape(offer.title)}</b>\n"
                     f"Тип цели: {classify_offer_url(offer.channel_url)['label']}\n"
-                    f"Статус: отправлен на модерацию",
+                    f"Статус: отправлен на модерацию\n\n"
+                    f"Открыть очередь: /admin",
                 )
             except Exception:
                 pass
@@ -313,31 +318,6 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Неизвестный способ оплаты", show_alert=True)
 
 
-async def _create_user_offer(session, user_id: int, data: dict, cost: Decimal):
-    """Создаёт пользовательский оффер и отправляет на модерацию"""
-    from app.models import Offer
-    
-    start = utc_now()
-    end = start + timedelta(days=data["duration_days"])
-    
-    offer = Offer(
-        creator_user_id=user_id,
-        title=data["title"],
-        description=data["description"],
-        channel_url=data["url"],
-        reward_preview=data["reward_preview"],
-        reward_final=data["reward_final"],
-        penalty_unsubscribe=Decimal("0"),
-        duration_days=data["duration_days"],
-        placement_cost=cost,
-        status="pending",
-        is_active=False
-    )
-    session.add(offer)
-    await session.commit()
-    return offer
-
-
 # =========================
 # МОИ ОФФЕРЫ
 # =========================
@@ -359,9 +339,21 @@ async def user_my_offers(callback: CallbackQuery):
         return
     
     text = "📋 <b>Ваши офферы:</b>\n\n"
-    for o in offers:
-        status = {"pending": "⏳", "approved": "✅", "rejected": "❌"}.get(o.status, "❓")
-        text += f"{status} {o.title} — {o.reward_preview}+{o.reward_final}\n"
-    
-    await callback.message.answer(text, parse_mode="HTML")
+    status_labels = {
+        "payment_pending": "💳 ожидает оплаты",
+        "pending": "⏳ на модерации",
+        "approved": "✅ одобрен",
+        "rejected": "❌ отклонён",
+    }
+    for offer in offers:
+        text += (
+            f"<b>#{offer.id} {escape(offer.title)}</b>\n"
+            f"Статус: {status_labels.get(offer.status, escape(offer.status))}\n"
+            f"Награда: {offer.reward_preview}+{offer.reward_final} монет\n"
+        )
+        if offer.status == "rejected" and offer.rejection_reason:
+            text += f"Причина: {escape(offer.rejection_reason)}\n"
+        text += "\n"
+
+    await callback.message.answer(text[:4000], parse_mode="HTML")
     await callback.answer()

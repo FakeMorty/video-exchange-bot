@@ -1,15 +1,17 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from app.models import VideoReport
+    from app.models import OfferRental, VideoReport
 
 import math
 import asyncio
 import uuid
 import random
+import re
+from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
-from sqlalchemy import select, func, desc, update
+from sqlalchemy import select, func, desc, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
@@ -64,20 +66,73 @@ from app.config import (
 )
 
 OFFER_MANUAL_TARGET_TYPES = {"bot", "invite"}
+_TELEGRAM_USERNAME_RE = re.compile(r"[A-Za-z0-9_]{4,32}")
+
+
+def normalize_telegram_url(target_url: str) -> str | None:
+    """Validate a Telegram target and return a URL safe for inline buttons.
+
+    Telegram does not accept ``@name`` or ``t.me/name`` as an inline-button URL.
+    Keeping normalization in one place also prevents values such as
+    ``https://example.org/?next=t.me/foo`` from passing the old substring check.
+    """
+    raw = (target_url or "").strip()
+    if not raw or any(ch.isspace() for ch in raw):
+        return None
+
+    if raw.startswith("@"):
+        username = raw[1:]
+        if not _TELEGRAM_USERNAME_RE.fullmatch(username):
+            return None
+        return f"https://t.me/{username}"
+
+    if raw.lower().startswith("t.me/"):
+        raw = f"https://{raw}"
+    elif raw.lower().startswith("telegram.me/"):
+        raw = f"https://{raw}"
+
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return None
+
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() not in {"http", "https"} or host not in {
+        "t.me", "www.t.me", "telegram.me", "www.telegram.me",
+    }:
+        return None
+    try:
+        has_credentials_or_port = bool(parsed.username or parsed.password or parsed.port)
+    except ValueError:
+        return None
+    if has_credentials_or_port:
+        return None
+
+    path = parsed.path.strip("/")
+    if not path or any(ch in path for ch in '<>"'):
+        return None
+
+    # Public targets must start with a valid Telegram username. Invite links use
+    # +hash or joinchat/hash and are intentionally accepted for manual checks.
+    first_segment = path.split("/", 1)[0]
+    if not (
+        _TELEGRAM_USERNAME_RE.fullmatch(first_segment)
+        or first_segment.startswith("+") and len(first_segment) > 1
+        or first_segment.lower() == "joinchat" and "/" in path
+    ):
+        return None
+
+    return urlunsplit(("https", "t.me", f"/{path}", parsed.query, ""))
 
 
 def classify_offer_url(target_url: str) -> dict:
-    url = (target_url or "").strip()
+    url = normalize_telegram_url(target_url) or (target_url or "").strip()
     lowered = url.lower()
-    username = ""
-    if "t.me/" in lowered:
-        username = lowered.split("t.me/", 1)[1]
-    elif lowered.startswith("@"):
-        username = lowered[1:]
-    username = username.strip("/")
-    username_base = username.split("?")[0]
+    path_and_query = lowered.split("t.me/", 1)[1] if "t.me/" in lowered else lowered.lstrip("@")
+    path = path_and_query.split("?", 1)[0].strip("/")
+    first_segment = path.split("/", 1)[0]
 
-    if "/+" in lowered or "joinchat/" in lowered or username_base.startswith("+"):
+    if first_segment.startswith("+") or first_segment == "joinchat":
         return {
             "kind": "invite",
             "label": "Группа / чат / приватный инвайт",
@@ -85,7 +140,7 @@ def classify_offer_url(target_url: str) -> dict:
             "cta": "🚀 Открыть проект",
             "claim_text": "✅ Получить награду",
         }
-    if username_base.endswith("bot") or "start=" in lowered or "startapp=" in lowered:
+    if first_segment.endswith("bot") or "start=" in lowered or "startapp=" in lowered:
         return {
             "kind": "bot",
             "label": "Telegram-бот",
@@ -1308,26 +1363,135 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> tuple
 # ============================
 # ОФФЕРЫ
 # ============================
+def is_offer_available(offer: "Offer | None", *, at: datetime | None = None) -> bool:
+    """Whether an offer may be shown and may accept new participations."""
+    if not offer or offer.status != "approved" or not offer.is_active:
+        return False
+    duration_days = int(offer.duration_days or 0)
+    if duration_days <= 0:
+        return False
+    started_at = offer.approved_at or offer.created_at
+    if not started_at:
+        return False
+    return started_at + timedelta(days=duration_days) > (at or utc_now())
+
+
+def get_offer_expires_at(offer: "Offer") -> datetime | None:
+    if int(offer.duration_days or 0) <= 0:
+        return None
+    started_at = offer.approved_at or offer.created_at
+    return started_at + timedelta(days=int(offer.duration_days)) if started_at else None
+
+
 async def get_active_offers(session: AsyncSession) -> list["Offer"]:
-    return (await session.execute(
-        select(Offer).where(Offer.is_active, Offer.status == "approved")
+    offers = (await session.execute(
+        select(Offer)
+        .where(Offer.is_active, Offer.status == "approved")
+        .order_by(Offer.created_at.desc())
     )).scalars().all()
+    return [offer for offer in offers if is_offer_available(offer)]
 
 
 async def get_rentable_offers(session: AsyncSession) -> list["Offer"]:
-    return (await session.execute(
-        select(Offer).where(
-            Offer.is_active,
-            Offer.status == "approved",
-            Offer.is_rentable,
-        )
-    )).scalars().all()
+    return [offer for offer in await get_active_offers(session) if offer.is_rentable]
 
 
 async def get_offer_by_id(session: AsyncSession, offer_id: int) -> "Offer | None":
     return (await session.execute(
         select(Offer).where(Offer.id == offer_id)
     )).scalar_one_or_none()
+
+
+async def get_offer_moderation_counts(session: AsyncSession) -> dict[str, int]:
+    from app.models import OfferRental
+
+    rows = (await session.execute(
+        select(Offer.status, func.count(Offer.id)).group_by(Offer.status)
+    )).all()
+    counts = {str(status): int(count or 0) for status, count in rows}
+    pending_rentals = (await session.execute(
+        select(func.count(OfferRental.id)).where(OfferRental.status == "pending")
+    )).scalar_one() or 0
+    counts["pending_rentals"] = int(pending_rentals)
+    return counts
+
+
+async def get_offers_for_admin(
+    session: AsyncSession,
+    *,
+    status: str | None = None,
+    offset: int = 0,
+    limit: int = 10,
+) -> list["Offer"]:
+    query = select(Offer)
+    if status and status != "all":
+        query = query.where(Offer.status == status)
+    return (await session.execute(
+        query.order_by(Offer.created_at.desc()).offset(max(0, offset)).limit(max(1, limit))
+    )).scalars().all()
+
+
+async def moderate_offer(
+    session: AsyncSession,
+    offer_id: int,
+    *,
+    approve: bool,
+    admin_telegram_id: int,
+    reason: str | None = None,
+) -> "Offer | None":
+    """Atomically review one pending offer.
+
+    The conditional UPDATE makes repeated button presses and simultaneous work
+    by two moderators idempotent.
+    """
+    now = utc_now()
+    values = {
+        "status": "approved" if approve else "rejected",
+        "is_active": bool(approve),
+        "reviewed_at": now,
+        "reviewed_by_telegram_id": admin_telegram_id,
+        "rejection_reason": None if approve else (reason or "Не прошёл модерацию")[:1000],
+    }
+    if approve:
+        values["approved_at"] = now
+
+    result = await session.execute(
+        update(Offer)
+        .where(Offer.id == offer_id, Offer.status == "pending")
+        .values(**values)
+    )
+    if not result.rowcount:
+        await session.rollback()
+        return None
+    await session.commit()
+    return await get_offer_by_id(session, offer_id)
+
+
+async def set_offer_active(
+    session: AsyncSession,
+    offer_id: int,
+    *,
+    active: bool,
+    admin_telegram_id: int,
+) -> "Offer | None":
+    values = {
+        "is_active": active,
+        "reviewed_at": utc_now(),
+        "reviewed_by_telegram_id": admin_telegram_id,
+    }
+    # Re-enabling is an explicit re-publication and starts a fresh configured term.
+    if active:
+        values["approved_at"] = utc_now()
+    result = await session.execute(
+        update(Offer)
+        .where(Offer.id == offer_id, Offer.status == "approved")
+        .values(**values)
+    )
+    if not result.rowcount:
+        await session.rollback()
+        return None
+    await session.commit()
+    return await get_offer_by_id(session, offer_id)
 
 
 async def _get_today_offer_rewards_total(session: AsyncSession, user_id: int) -> Decimal:
@@ -1347,7 +1511,7 @@ async def start_offer_participation(session: AsyncSession, user_id: int,
                                     offer_id: int) -> tuple["OfferParticipation | None", bool]:
     offer = await get_offer_by_id(session, offer_id)
     user = await get_user_by_id(session, user_id)
-    if not offer or not user:
+    if not user or not is_offer_available(offer):
         return None, False
 
     existing = (await session.execute(
@@ -1405,7 +1569,7 @@ async def verify_offer_subscription(
 
     offer = await get_offer_by_id(session, offer_id)
     user = await get_user_by_id(session, user_id)
-    if not offer or not user:
+    if not user or not is_offer_available(offer):
         return False, Decimal("0")
 
     part.status = "completed"
@@ -1462,13 +1626,12 @@ async def apply_offer_unsubscribe_penalty(
     offer: "Offer",
     part: "OfferParticipation",
 ) -> tuple[Decimal, Decimal, Decimal]:
-    previous_penalties = await _count_query(
-        session,
+    previous_penalties = (await session.execute(
         select(func.count(BalanceLog.id)).where(
             BalanceLog.user_id == user.id,
             BalanceLog.source == "offer_unsubscribe_penalty",
-        ),
-    )
+        )
+    )).scalar_one() or 0
     in_grace_period = (utc_now() - part.created_at) <= timedelta(minutes=OFFER_UNSUBSCRIBE_GRACE_MINUTES)
     rewarded_total, extra_penalty, total_charge = calculate_offer_unsubscribe_amounts(
         offer,
@@ -1516,27 +1679,34 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
                              reward_final: Decimal, penalty_unsubscribe: Decimal = Decimal("0"),
                              is_rentable: bool = False,
                              rent_cost_per_day: Decimal = Decimal("0"),
-                             max_simultaneous_rentals: int = 1) -> "Offer":
+                             max_simultaneous_rentals: int = 1,
+                             duration_days: int = 30,
+                             admin_telegram_id: int | None = None) -> "Offer":
+    normalized_url = normalize_telegram_url(channel_url)
+    if not normalized_url:
+        raise ValueError("Некорректная ссылка Telegram")
+    now = utc_now()
     offer = Offer(
         creator_user_id=None,
-        title=title,
-        description=description,
-        channel_url=channel_url,
+        title=title.strip(),
+        description=description.strip(),
+        channel_url=normalized_url,
         reward_preview=reward_preview,
         reward_final=reward_final,
         penalty_unsubscribe=penalty_unsubscribe,
         is_active=True,
         status="approved",
+        duration_days=max(1, int(duration_days)),
         is_rentable=is_rentable,
         rent_cost_per_day=rent_cost_per_day,
-        max_simultaneous_rentals=max_simultaneous_rentals,
+        max_simultaneous_rentals=max(1, int(max_simultaneous_rentals)),
+        approved_at=now,
+        reviewed_at=now,
+        reviewed_by_telegram_id=admin_telegram_id,
     )
     session.add(offer)
     await session.commit()
     return offer
-
-
-# Система аренды слотов отключена (OfferRental удалена)
 
 
 # ============================
@@ -1589,6 +1759,8 @@ async def increment_game_played(session: AsyncSession, user_id: int):
 # СТАТИСТИКА
 # ============================
 async def get_admin_extended_stats(session: AsyncSession) -> dict:
+    from app.models import OfferRental
+
     users = (await session.execute(select(func.count(User.id)))).scalar_one()
     vip = (await session.execute(
         select(func.count(User.id)).where(User.vip_until > utc_now())
@@ -1600,6 +1772,17 @@ async def get_admin_extended_stats(session: AsyncSession) -> dict:
     reactions = (await session.execute(select(func.count(ContentReaction.id)))).scalar_one()
     games = (await session.execute(select(func.count(GameHistory.id)))).scalar_one()
     offers = (await session.execute(select(func.count(Offer.id)))).scalar_one()
+    active_rentals = (await session.execute(
+        select(func.count(OfferRental.id)).where(
+            OfferRental.status == "active",
+            OfferRental.expires_at > utc_now(),
+        )
+    )).scalar_one() or 0
+    total_rent_income = (await session.execute(
+        select(func.sum(OfferRental.cost_paid)).where(
+            OfferRental.status.in_(["pending", "active", "expired"]),
+        )
+    )).scalar_one() or Decimal("0")
     total_balance = (await session.execute(
         select(func.sum(User.balance))
     )).scalar_one() or Decimal("0")
@@ -1614,11 +1797,11 @@ async def get_admin_extended_stats(session: AsyncSession) -> dict:
     return {
         "users": users, "vip": vip, "with_nickname": with_nickname,
         "comments": comments, "reactions": reactions, "games": games,
-        "offers": offers, "active_rentals": 0,
+        "offers": offers, "active_rentals": int(active_rentals),
         "total_balance_in_system": total_balance,
         "total_admin_given": total_admin_given,
         "total_game_profit": total_game_profit,
-        "total_rent_income": Decimal("0"),
+        "total_rent_income": total_rent_income,
     }
 
 
@@ -2401,11 +2584,8 @@ async def mark_low_balance_hint_shown(session: AsyncSession, user_id: int) -> No
 
 
 async def get_random_active_offer(session: AsyncSession) -> "Offer | None":
-    return (await session.execute(
-        select(Offer).where(
-            Offer.is_active, Offer.status == "approved",
-        ).order_by(func.random()).limit(1)
-    )).scalar_one_or_none()
+    offers = await get_active_offers(session)
+    return random.choice(offers) if offers else None
 
 
 def should_inject_ad_in_video() -> bool:
@@ -2936,7 +3116,7 @@ async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
 # АРЕНДА СЛОТОВ (OfferRental)
 # ============================
 async def count_active_rentals(session: AsyncSession, offer_id: int) -> int:
-    """Считает количество активных аренд для конкретного оффера"""
+    """Считает действующие, уже одобренные аренды оффера."""
     from app.models import OfferRental
     count = (await session.execute(
         select(func.count(OfferRental.id)).where(
@@ -2945,20 +3125,67 @@ async def count_active_rentals(session: AsyncSession, offer_id: int) -> int:
             OfferRental.expires_at > utc_now(),
         )
     )).scalar_one()
-    return count or 0
+    return int(count or 0)
+
+
+async def count_reserved_rentals(session: AsyncSession, offer_id: int) -> int:
+    """Pending-заявки тоже резервируют слот, чтобы их нельзя было перепродать."""
+    from app.models import OfferRental
+    now = utc_now()
+    count = (await session.execute(
+        select(func.count(OfferRental.id)).where(
+            OfferRental.offer_id == offer_id,
+            or_(
+                OfferRental.status == "pending",
+                (OfferRental.status == "active") & (OfferRental.expires_at > now),
+            ),
+        )
+    )).scalar_one()
+    return int(count or 0)
+
+
+async def get_active_rentals_for_offer(
+    session: AsyncSession,
+    offer_id: int,
+    *,
+    limit: int = 10,
+) -> list["OfferRental"]:
+    from app.models import OfferRental
+    return (await session.execute(
+        select(OfferRental).where(
+            OfferRental.offer_id == offer_id,
+            OfferRental.status == "active",
+            OfferRental.expires_at > utc_now(),
+        ).order_by(OfferRental.created_at).limit(max(1, limit))
+    )).scalars().all()
+
+
+async def get_pending_rentals(
+    session: AsyncSession,
+    *,
+    offset: int = 0,
+    limit: int = 10,
+) -> list["OfferRental"]:
+    from app.models import OfferRental
+    return (await session.execute(
+        select(OfferRental)
+        .where(OfferRental.status == "pending")
+        .order_by(OfferRental.created_at)
+        .offset(max(0, offset))
+        .limit(max(1, limit))
+    )).scalars().all()
 
 
 async def expire_old_rentals(session: AsyncSession) -> int:
-    """Завершает аренды, срок которых истек"""
+    """Завершает аренды, срок которых истёк."""
     from app.models import OfferRental
-    now = utc_now()
     result = await session.execute(
         update(OfferRental)
-        .where(OfferRental.status == "active", OfferRental.expires_at < now)
+        .where(OfferRental.status == "active", OfferRental.expires_at <= utc_now())
         .values(status="expired")
     )
     await session.commit()
-    return result.rowcount
+    return int(result.rowcount or 0)
 
 
 async def create_offer_rental(
@@ -2969,32 +3196,64 @@ async def create_offer_rental(
     channel_url: str,
     rent_days: int,
 ) -> tuple["OfferRental | None", str | None]:
-    """Создаёт заявку на аренду рекламного слота"""
+    """Создаёт оплаченную заявку и резервирует слот до модерации."""
     from app.models import OfferRental
+
     offer = await get_offer_by_id(session, offer_id)
-    if not offer or not offer.is_rentable:
+    if not is_offer_available(offer) or not offer.is_rentable:
         return None, "Аренда в этом оффере недоступна."
-    
-    active_count = await count_active_rentals(session, offer_id)
-    if active_count >= offer.max_simultaneous_rentals:
-        return None, "Все рекламные слоты в этом оффере заняты."
-    
+    try:
+        rent_days = int(rent_days)
+    except (TypeError, ValueError):
+        return None, "Некорректный срок аренды."
+    if rent_days < 1 or rent_days > 365:
+        return None, "Некорректный срок аренды."
+    offer_expires_at = get_offer_expires_at(offer)
+    if offer_expires_at and utc_now() + timedelta(days=rent_days) > offer_expires_at:
+        return None, "Срок аренды не помещается в оставшийся срок работы оффера."
+
+    normalized_url = normalize_telegram_url(channel_url)
+    if not normalized_url:
+        return None, "Некорректная ссылка Telegram."
+
+    duplicate = (await session.execute(
+        select(OfferRental.id).where(
+            OfferRental.offer_id == offer_id,
+            OfferRental.renter_user_id == user_id,
+            OfferRental.renter_channel_url == normalized_url,
+            OfferRental.status.in_(["pending", "active"]),
+        ).limit(1)
+    )).scalar_one_or_none()
+    if duplicate:
+        return None, "Такая заявка уже ожидает проверки или активна."
+
+    reserved_count = await count_reserved_rentals(session, offer_id)
+    if reserved_count >= int(offer.max_simultaneous_rentals or 1):
+        return None, "Все рекламные слоты заняты или уже ожидают модерации."
+
     user = await get_user_by_id(session, user_id)
     if not user:
         return None, "Пользователь не найден."
-    
+
     cost = to_decimal(offer.rent_cost_per_day) * rent_days
+    if cost < 0:
+        return None, "Некорректная стоимость аренды."
     if user.balance < cost:
         return None, f"Недостаточно монет. Нужно {cost:.0f}, у вас {user.balance:.0f}."
-    
-    await change_balance_atomic(session, user.id, -cost, "offer_rental_pay",
-                                 source_id=offer_id, details=f"days={rent_days}")
-    
+
+    await change_balance_atomic(
+        session,
+        user.id,
+        -cost,
+        "offer_rental_pay",
+        source_id=offer_id,
+        details=f"days={rent_days}",
+    )
     rental = OfferRental(
         offer_id=offer_id,
         renter_user_id=user_id,
-        renter_channel_title=channel_title,
-        renter_channel_url=channel_url,
+        renter_channel_title=channel_title.strip()[:255],
+        renter_channel_url=normalized_url,
         rent_days=rent_days,
         cost_paid=cost,
         status="pending",
@@ -3004,8 +3263,78 @@ async def create_offer_rental(
     return rental, None
 
 
+async def moderate_offer_rental(
+    session: AsyncSession,
+    rental_id: int,
+    *,
+    approve: bool,
+    admin_telegram_id: int,
+    reason: str | None = None,
+) -> tuple["OfferRental | None", str | None]:
+    """Approve a rental or reject it with an automatic coin refund."""
+    from app.models import OfferRental
+
+    rental = await session.get(OfferRental, rental_id)
+    if not rental or rental.status != "pending":
+        return None, "Заявка уже обработана или не найдена."
+
+    now = utc_now()
+    if approve:
+        offer = await get_offer_by_id(session, rental.offer_id)
+        if not is_offer_available(offer) or not offer.is_rentable:
+            return None, "Родительский оффер уже неактивен. Отклоните заявку с возвратом."
+        active_count = await count_active_rentals(session, rental.offer_id)
+        if active_count >= int(offer.max_simultaneous_rentals or 1):
+            return None, "Свободных слотов уже нет. Отклоните заявку с возвратом."
+        offer_expires_at = get_offer_expires_at(offer)
+        rental_expires_at = now + timedelta(days=rental.rent_days)
+        if offer_expires_at and rental_expires_at > offer_expires_at:
+            return None, "Оффер закончится раньше аренды. Отклоните заявку с возвратом."
+        values = {
+            "status": "active",
+            "reviewed_at": now,
+            "reviewed_by_telegram_id": admin_telegram_id,
+            "rejection_reason": None,
+            "expires_at": rental_expires_at,
+        }
+    else:
+        values = {
+            "status": "rejected",
+            "reviewed_at": now,
+            "reviewed_by_telegram_id": admin_telegram_id,
+            "rejection_reason": (reason or "Не прошла модерацию")[:1000],
+            "expires_at": None,
+        }
+
+    result = await session.execute(
+        update(OfferRental)
+        .where(OfferRental.id == rental_id, OfferRental.status == "pending")
+        .values(**values)
+    )
+    if not result.rowcount:
+        await session.rollback()
+        return None, "Заявка уже обработана другим администратором."
+
+    if not approve and to_decimal(rental.cost_paid) > 0:
+        await change_balance_atomic(
+            session,
+            rental.renter_user_id,
+            to_decimal(rental.cost_paid),
+            "offer_rental_refund",
+            source_id=rental.id,
+            admin_id=admin_telegram_id,
+            details=f"reason={values['rejection_reason']}",
+        )
+
+    await session.commit()
+    updated_rental = await session.get(OfferRental, rental_id)
+    if updated_rental:
+        await session.refresh(updated_rental)
+    return updated_rental, None
+
+
 async def get_user_rentals(session: AsyncSession, user_id: int) -> list["OfferRental"]:
-    """Получает все аренды пользователя"""
+    """Получает все аренды пользователя."""
     from app.models import OfferRental
     return (await session.execute(
         select(OfferRental).where(OfferRental.renter_user_id == user_id)

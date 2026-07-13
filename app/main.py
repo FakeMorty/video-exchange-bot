@@ -39,6 +39,7 @@ from app.services import (
     get_user_by_id,
     apply_offer_unsubscribe_penalty,
     classify_offer_url,
+    normalize_telegram_url,
     notify_admins,
     ensure_current_lottery_round,
     get_latest_lottery_round,
@@ -97,19 +98,14 @@ def _get_webapp_user_id(request: web.Request, payload: dict | None = None) -> in
 
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
     meta = classify_offer_url(channel_url)
-    if not meta.get("auto_verify"):
+    normalized = normalize_telegram_url(channel_url)
+    if not meta.get("auto_verify") or not normalized:
         return None
-    if not channel_url:
+    path = urllib.parse.urlsplit(normalized).path.strip("/")
+    username = path.split("/", 1)[0]
+    if not username:
         return None
-    url = channel_url.strip()
-    if "t.me/" in url:
-        url = url.split("t.me/", 1)[1]
-    if url.startswith("@"):
-        return url
-    url = url.strip("/").split("?")[0]
-    if not url:
-        return None
-    return f"@{url}"
+    return f"@{username}"
 
 
 async def _is_subscribed(bot: Bot, telegram_user_id: int, channel_url: str) -> bool:

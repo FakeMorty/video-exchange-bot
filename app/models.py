@@ -267,14 +267,20 @@ class Offer(Base):
     penalty_unsubscribe: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("400"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="approved")
-    
-    # Поля для офферов
+
+    # Размещение и аренда
     duration_days: Mapped[int] = mapped_column(Integer, default=30)
     placement_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     is_rentable: Mapped[bool] = mapped_column(Boolean, default=False)
     rent_cost_per_day: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     max_simultaneous_rentals: Mapped[int] = mapped_column(Integer, default=1)
-    
+
+    # Результат модерации. Срок пользовательского оффера отсчитывается от
+    # approved_at, а не от момента оплаты/отправки в очередь.
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     creator: Mapped["User"] = relationship(back_populates="user_offers")
@@ -300,7 +306,7 @@ class OfferParticipation(Base):
 
 
 class OfferRental(Base):
-    """Заглушка - система аренды отключена, но модель оставлена для совместимости"""
+    """Платная заявка на показ рекламы внутри оффера."""
     __tablename__ = "offer_rentals"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False)
@@ -311,6 +317,9 @@ class OfferRental(Base):
     cost_paid: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
