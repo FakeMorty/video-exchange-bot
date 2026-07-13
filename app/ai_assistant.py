@@ -609,8 +609,9 @@ async def btn_katya(message: Message, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
-        if not user or not user.nickname_set:
-            await message.answer("❌ Сначала установи ник.")
+        from app.services import has_valid_nickname
+        if not user or not has_valid_nickname(user):
+            await message.answer("❌ Сначала установи нормальный ник (не User&lt;id&gt;).")
             return
         balance = user.balance
         chats = await _get_user_chats(session, user.id)

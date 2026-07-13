@@ -83,6 +83,7 @@ from app.services import (
     start_offer_participation, verify_offer_subscription,
     change_balance_atomic, log_user_action, to_decimal,
     set_display_name, get_display_name, get_styled_display_name, log_balance_change,
+    has_valid_nickname,
     can_play_free_game, pay_for_game_session, increment_game_played,
     get_or_create_game_session,
     check_daily_photo_limit,
@@ -222,23 +223,39 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             )
             return
 
-        if not user.nickname_set or not user.display_name:
+        if not has_valid_nickname(user):
+            needs_fix = bool(user.nickname_set and user.display_name)
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="✏️ Установить ник",
+                    text="✏️ Сменить ник" if needs_fix else "✏️ Установить ник",
                     callback_data="set_nickname_start"
                 )]
             ])
             from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
-            await message.answer(
-                "👋 Добро пожаловать!\n\n"
-                "⚠️ Перед началом нужно установить ник.\n"
-                f"Первая установка бесплатна!\n"
-                f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
-                f"• Только буквы, цифры, _ и -",
-                parse_mode="HTML",
-                reply_markup=kb
-            )
+            if needs_fix:
+                await message.answer(
+                    "👋 С возвращением!\n\n"
+                    "⚠️ У вас недопустимый ник (например <code>User&lt;id&gt;</code>).\n"
+                    "Нужно поставить <b>нормальный ник</b> — это бесплатно.\n\n"
+                    f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+                    f"• Только буквы (рус/лат), цифры, _ и -\n"
+                    f"• Без точек, пробелов, ? и спецсимволов\n"
+                    f"• Нельзя User&lt;id&gt;",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+            else:
+                await message.answer(
+                    "👋 Добро пожаловать!\n\n"
+                    "⚠️ Перед началом нужно установить нормальный ник.\n"
+                    f"Первая установка бесплатна!\n"
+                    f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+                    f"• Только буквы (рус/лат), цифры, _ и -\n"
+                    f"• Без точек, пробелов, ? и спецсимволов\n"
+                    f"• Нельзя User&lt;id&gt;",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
             return
 
         await send_welcome_banner(message, session, user)
@@ -395,22 +412,34 @@ def is_vip(user) -> bool:
 
 
 async def require_nickname(message: Message, user) -> bool:
-    """Проверяет наличие ника. False = ник не задан, показано предупреждение."""
-    if user.nickname_set and user.display_name:
+    """Проверяет наличие нормального ника. False = ник не задан/невалидный."""
+    if has_valid_nickname(user):
         return True
+    needs_fix = bool(user.nickname_set and user.display_name)
+    title = (
+        "⚠️ <b>Нужно сменить ник на нормальный!</b>"
+        if needs_fix
+        else "⚠️ <b>Необходимо установить ник!</b>"
+    )
+    extra = (
+        "\nНик вида <code>User&lt;id&gt;</code>, точки, ? и слишком короткие ники запрещены."
+        if needs_fix
+        else ""
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✏️ Установить ник",
+            text="✏️ Сменить ник" if needs_fix else "✏️ Установить ник",
             callback_data="set_nickname_start"
         )]
     ])
     await message.answer(
-        f"⚠️ <b>Необходимо установить ник!</b>\n\n"
+        f"{title}\n\n"
         f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
         f"• Только буквы (рус/лат), цифры, _ и -\n"
-        f"• Уникальный\n\n"
-        f"Первая установка — бесплатно!\n"
-        f"Смена ника стоит {NICKNAME_CHANGE_COST} монет.",
+        f"• Без точек, пробелов, ? и спецсимволов\n"
+        f"• Уникальный, не User&lt;id&gt;{extra}\n\n"
+        f"Первая установка / замена недопустимого ника — бесплатно!\n"
+        f"Обычная смена ника стоит {NICKNAME_CHANGE_COST} монет.",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -526,15 +555,17 @@ async def set_nickname_start(callback: CallbackQuery, state: FSMContext):
         if not user:
             await callback.answer()
             return
-        is_first = not user.nickname_set
-        cost_text = "бесплатно" if is_first else f"{NICKNAME_CHANGE_COST} монет"
+        # Первая установка или замена placeholder/невалидного ника — бесплатно
+        is_free = (not user.nickname_set) or (not has_valid_nickname(user))
+        cost_text = "бесплатно" if is_free else f"{NICKNAME_CHANGE_COST} монет"
 
     await state.set_state(NicknameState.waiting_nickname)
     await callback.message.answer(
         f"✏️ Введите ник ({cost_text}):\n\n"
         f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
         f"• Буквы (рус/лат), цифры, _ или -\n"
-        f"• Без точек, пробелов, спецсимволов"
+        f"• Без точек, пробелов, ? и спецсимволов\n"
+        f"• Нельзя User&lt;id&gt; и ник только из цифр"
     )
     await callback.answer()
 
@@ -652,23 +683,30 @@ async def accept_rules(callback: CallbackQuery):
             await process_referral_reward(session, user.referred_by_user_id)
         await session.commit()
 
-        # If user already has nickname, show main menu immediately while session is still alive.
-        if user.nickname_set and user.display_name:
+        # If user already has a valid nickname, show main menu immediately while session is still alive.
+        if has_valid_nickname(user):
             await send_welcome_banner(callback, session, user)
             await callback.answer()
             return
 
+    needs_fix = bool(user.nickname_set and user.display_name)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✏️ Установить ник",
+            text="✏️ Сменить ник" if needs_fix else "✏️ Установить ник",
             callback_data="set_nickname_start"
         )]
     ])
     await callback.message.answer(
         "✅ Правила приняты!\n\n"
-        "Теперь установите ник. Первая установка бесплатна.\n"
-        f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
-        f"• Только буквы (рус/лат), цифры, _ и -",
+        + (
+            "У вас недопустимый ник — поставьте нормальный. Это бесплатно.\n"
+            if needs_fix else
+            "Теперь установите нормальный ник. Первая установка бесплатна.\n"
+        )
+        + f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
+        + f"• Только буквы (рус/лат), цифры, _ и -\n"
+        + f"• Без точек, пробелов, ? и спецсимволов\n"
+        + f"• Нельзя User&lt;id&gt;",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -1523,7 +1561,7 @@ async def handle_photo_upload(message: Message):
         if not user.agreed_to_rules:
             await message.answer("Примите правила командой /start")
             return
-        if not user.nickname_set:
+        if not has_valid_nickname(user):
             await require_nickname(message, user)
             return
 

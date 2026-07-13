@@ -215,13 +215,80 @@ def round_coin(val: Decimal) -> Decimal:
 
 
 def get_display_name(user: "User") -> str:
-    if user.display_name:
+    if user.display_name and not is_placeholder_nickname(user.display_name, user.telegram_id):
         return user.display_name
     if user.first_name:
         return user.first_name
     if user.username:
         return f"@{user.username}"
     return f"User#{user.telegram_id}"
+
+
+def is_placeholder_nickname(name: str | None, telegram_id: int | None = None) -> bool:
+    """True for empty / auto-generated / 'User <tg id>' style nicks that must be replaced."""
+    import re
+
+    raw = (name or "").strip()
+    if not raw:
+        return True
+
+    # Explicit placeholder patterns: User123, User 123, User#123, User_123
+    if re.fullmatch(r"(?i)user[\s_#\-]*\d+", raw):
+        return True
+    if re.fullmatch(r"(?i)user", raw):
+        return True
+
+    # Nick is just the telegram id (or mostly digits matching it)
+    if telegram_id is not None:
+        tid = str(telegram_id)
+        if raw == tid or raw.lower() in {f"user{tid}", f"user#{tid}", f"user_{tid}", f"user-{tid}", f"user {tid}"}:
+            return True
+
+    return False
+
+
+def validate_nickname_format(name: str) -> tuple[bool, str]:
+    """Базовые требования к нормальному нику.
+
+    - 4–20 символов (или runtime NICKNAME_MIN/MAX)
+    - только буквы (рус/лат), цифры, _ и -
+    - нельзя точки/вопросы/пробелы/эмодзи
+    - нельзя placeholder вида User<tg id>
+    - нельзя ник из одних цифр / одних подчёркиваний
+    """
+    import re
+
+    name = (name or "").strip()
+    if len(name) < NICKNAME_MIN_LENGTH:
+        return False, f"Ник слишком короткий. Минимум {NICKNAME_MIN_LENGTH} символов."
+    if len(name) > NICKNAME_MAX_LENGTH:
+        return False, f"Ник слишком длинный. Максимум {NICKNAME_MAX_LENGTH} символов."
+    if not re.fullmatch(r"[a-zA-Zа-яА-ЯёЁ0-9_\-]+", name):
+        return False, "Ник может содержать только буквы (рус/лат), цифры, _ и -. Без точек, пробелов, ? и спецсимволов."
+    if re.fullmatch(r"[\d_\-]+", name):
+        return False, "Ник не может состоять только из цифр, _ или -. Добавьте буквы."
+    if is_placeholder_nickname(name):
+        return False, "Ник вида User&lt;id&gt; запрещён. Придумайте нормальный ник."
+    # Запрет слишком «мусорных» ников из 1-2 уникальных символов типа aaaa / ____ / ----
+    unique_chars = set(name.lower().replace("_", "").replace("-", ""))
+    if len(unique_chars) < 2 and len(name) >= NICKNAME_MIN_LENGTH:
+        return False, "Ник слишком простой. Используйте хотя бы 2 разные буквы/цифры."
+    return True, ""
+
+
+def has_valid_nickname(user: "User") -> bool:
+    """Пользователь обязан иметь нормальный ник (не placeholder User<id>)."""
+    if not user:
+        return False
+    if not user.nickname_set:
+        return False
+    name = (user.display_name or "").strip()
+    if not name:
+        return False
+    if is_placeholder_nickname(name, getattr(user, "telegram_id", None)):
+        return False
+    ok, _ = validate_nickname_format(name)
+    return ok
 
 
 async def get_nick_style_id(session: AsyncSession, user_id: int) -> int | None:
@@ -517,19 +584,22 @@ async def get_or_create_user(
 # ============================
 async def set_display_name(session: AsyncSession, user: "User", name: str,
                            admin_free: bool = False) -> tuple[bool, str]:
-    import re
-    name = name.strip()
-    if len(name) < NICKNAME_MIN_LENGTH:
-        return False, f"Ник слишком короткий. Минимум {NICKNAME_MIN_LENGTH} символов."
-    if len(name) > NICKNAME_MAX_LENGTH:
-        return False, f"Ник слишком длинный. Максимум {NICKNAME_MAX_LENGTH} символов."
-    if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9_\-]+$', name):
-        return False, "Ник может содержать только буквы, цифры, _ и -"
+    name = (name or "").strip()
+    ok, err = validate_nickname_format(name)
+    if not ok:
+        return False, err
+
+    # Дополнительно: нельзя поставить ник = свой tg id
+    if is_placeholder_nickname(name, user.telegram_id):
+        return False, "Ник вида User&lt;id&gt; или равный Telegram ID запрещён. Придумайте нормальный ник."
+
     existing = await get_user_by_display_name(session, name)
     if existing and existing.id != user.id:
         return False, "Этот ник уже занят."
 
-    is_first = not user.nickname_set
+    # Первая установка ИЛИ принудительная замена «битого»/placeholder-ника — бесплатно
+    current_invalid = not has_valid_nickname(user)
+    is_first = (not user.nickname_set) or current_invalid
     if not is_first and not admin_free:
         cost = to_decimal(NICKNAME_CHANGE_COST)
         if user.balance < cost:
@@ -543,6 +613,8 @@ async def set_display_name(session: AsyncSession, user: "User", name: str,
     await session.commit()
     await log_user_action(session, user.id, "set_nickname", f"{old_name} -> {name}")
     if is_first:
+        if current_invalid and old_name:
+            return True, f"Ник <b>{name}</b> установлен бесплатно! (старый ник был недопустимым)"
         return True, f"Ник <b>{name}</b> установлен бесплатно!"
     if admin_free:
         return True, f"Ник изменён на <b>{name}</b>! 🆓 <b>ADMIN FREE — бесплатно!</b>"

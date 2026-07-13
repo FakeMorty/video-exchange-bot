@@ -1030,8 +1030,9 @@ async def cb_admin_user_edit_nick_start(callback: CallbackQuery, state: FSMConte
         callback,
         "✏️ <b>Изменение никнейма пользователя</b>\n\n"
         "Отправьте мне <b>новый никнейм</b> для этого пользователя:\n"
-        "• От 3 до 20 символов\n"
-        "• Буквы, цифры, _ и -",
+        "• От 4 до 20 символов\n"
+        "• Буквы, цифры, _ и -\n"
+        "• Без точек, ? и User&lt;id&gt;",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_select_user:{user_id}")]
@@ -1051,25 +1052,30 @@ async def process_admin_user_edit_nick(message: Message, state: FSMContext):
         await state.clear()
         return
         
-    import re
-    if not re.match(r"^[a-zA-Zа-яА-ЯёЁ0-9_-]+$", new_nick) or len(new_nick) < 3 or len(new_nick) > 20:
-        await message.answer("❌ Недопустимый формат ника. Допустимы только буквы, цифры, _ и - от 3 до 20 символов. Введите снова:")
+    from app.services import validate_nickname_format, is_placeholder_nickname
+    ok, err = validate_nickname_format(new_nick)
+    if not ok:
+        await message.answer(f"❌ {err}\nВведите снова:")
         return
-        
+
     async with async_session() as session:
-        exists = (await session.execute(
-            select(User).where(User.display_name == new_nick, User.telegram_id != user_id)
-        )).scalars().first()
-        if exists:
-            await message.answer("❌ Этот ник уже занят другим пользователем. Введите другой ник:")
-            return
-            
         user = await get_user_by_id(session, user_id)
         if not user:
             await message.answer("Пользователь не найден.")
             await state.clear()
             return
-            
+
+        if is_placeholder_nickname(new_nick, user.telegram_id):
+            await message.answer("❌ Ник вида User&lt;id&gt; запрещён. Введите нормальный ник:")
+            return
+
+        exists = (await session.execute(
+            select(User).where(User.display_name == new_nick, User.id != user.id)
+        )).scalars().first()
+        if exists:
+            await message.answer("❌ Этот ник уже занят другим пользователем. Введите другой ник:")
+            return
+
         old_nick = user.display_name
         user.display_name = new_nick
         user.nickname_set = True

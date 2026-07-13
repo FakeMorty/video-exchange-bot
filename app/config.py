@@ -190,7 +190,7 @@ BUMP_VIDEO_COST = _get_float("BUMP_VIDEO_COST", 300.0)
 # ============================
 NICKNAME_FIRST_FREE = True
 NICKNAME_CHANGE_COST = _get_float("NICKNAME_CHANGE_COST", 200.0)
-NICKNAME_MIN_LENGTH = 3
+NICKNAME_MIN_LENGTH = 4
 NICKNAME_MAX_LENGTH = 20
 
 # ============================
