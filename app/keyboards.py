@@ -156,6 +156,38 @@ def photo_actions_keyboard(photo_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+# =========================
+# КЛАВИАТУРЫ-ВЫХОД ДЛЯ ОШИБОК ПОКАЗА КОНТЕНТА
+# (всегда дают возможность продолжить: бракованное видео ≠ следующее бракованное)
+# =========================
+def video_error_keyboard() -> InlineKeyboardMarkup:
+    """Выход при ошибке показа видео.
+
+    Одно нерабочее видео не означает, что следующих нет — поэтому всегда
+    даём кнопку «Смотреть дальше», плюс запасной переход к фото.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="▶️ Смотреть дальше", callback_data="watch_next")],
+        [InlineKeyboardButton(text="🖼 Перейти к фото", callback_data="watch_photo_content")],
+    ])
+
+
+def photo_error_keyboard() -> InlineKeyboardMarkup:
+    """Выход при ошибке показа фото: всегда можно попробовать следующее или уйти к видео."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="▶️ Смотреть дальше", callback_data="watch_next_photo")],
+        [InlineKeyboardButton(text="🎬 Перейти к видео", callback_data="watch_video_content")],
+    ])
+
+
+def photo_limit_reached_keyboard() -> InlineKeyboardMarkup:
+    """Выход при достижении дневного лимита фото: показываем альтернативу (видео без лимита)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎬 Смотреть видео", callback_data="watch_video_content")],
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="dismiss_low_balance_hint")],
+    ])
+
+
 def offers_list_keyboard(offers) -> InlineKeyboardMarkup:
     """Создаёт клавиатуру со списком офферов"""
     buttons = []

@@ -110,7 +110,9 @@ from app.keyboards import (
     offers_list_keyboard, games_menu_keyboard,
     tops_menu_keyboard,
     reaction_menu_keyboard,
-    low_balance_offer_keyboard, BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
+    low_balance_offer_keyboard,
+    video_error_keyboard, photo_error_keyboard, photo_limit_reached_keyboard,
+    BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_RULES, BTN_FAQ, BTN_AI,
@@ -982,15 +984,26 @@ async def watch_video_content(callback: CallbackQuery):
                 return
 
             # Обычный показ видео (с безопасной отправкой и возвратом при ошибке)
+            # Пытаемся несколько раз: бракованное видео не значит, что следующее такое же.
             last_send_error: str | None = None
-            for _ in range(3):
+            videos_tried = 0
+            for _ in range(5):
                 video = await get_random_video_for_user(session, user.id)
                 if not video:
                     break
 
+                videos_tried += 1
                 ok = await record_view_and_charge_with_cost(session, user.id, video.id, cost)
                 if not ok:
-                    await callback.message.answer("❌ Ошибка списания монет.")
+                    # Списание не прошло (гонка баланса / уже просмотрено) — не тупик:
+                    # даём понятное объяснение и кнопку продолжить.
+                    await callback.message.answer(
+                        "⚠️ <b>Не удалось начать просмотр.</b>\n\n"
+                        "Возможно, баланс изменился или это видео уже просмотрено.\n"
+                        "Нажмите кнопку ниже — попробуем другое видео.",
+                        parse_mode="HTML",
+                        reply_markup=video_error_keyboard(),
+                    )
                     return
 
                 try:
@@ -1036,15 +1049,40 @@ async def watch_video_content(callback: CallbackQuery):
 
                 return
 
-            await callback.message.answer(
-                "😔 Нет доступных видео.\n"
-                "Загрузите своё видео, чтобы другие смотрели!"
-                + (f"\n\n⚠️ Ошибка отправки: {last_send_error}" if last_send_error else "")
-            )
+            # Цикл завершился без удачной отправки. Техническую ошибку прячем
+            # в лог (она непонятна пользователю), а человеку показываем понятный
+            # текст и ВСЕГДА — кнопки продолжения.
+            if last_send_error:
+                logger.warning(
+                    "watch_video_content: %d видео не отправилось, last_error=%s",
+                    videos_tried, last_send_error,
+                )
+                await callback.message.answer(
+                    "😵‍💫 <b>Несколько видео подряд не удалось показать.</b>\n\n"
+                    "Это временный сбой, проблемные ролики мы уже пометили.\n"
+                    "Следующее видео может быть совершенно рабочим — попробуйте ещё раз!",
+                    parse_mode="HTML",
+                    reply_markup=video_error_keyboard(),
+                )
+            else:
+                await callback.message.answer(
+                    "😔 <b>Пока нет новых видео для вас.</b>\n\n"
+                    "Вы посмотрели всё доступное!\n"
+                    "Загрузите своё видео (кнопка 📤 Загрузить в меню), чтобы другие тоже смотрели.\n"
+                    "А пока можно посмотреть фото.",
+                    parse_mode="HTML",
+                    reply_markup=video_error_keyboard(),
+                )
     except Exception:
         logger.exception("watch_video_content failed")
         try:
-            await callback.message.answer("⚠️ Ошибка при показе видео. Попробуйте ещё раз через пару секунд.")
+            await callback.message.answer(
+                "🛠 <b>Не получилось показать видео.</b>\n\n"
+                "Произошёл кратковременный сбой — это не значит, что видео нет.\n"
+                "Попробуйте ещё раз, следующее должно открыться нормально.",
+                parse_mode="HTML",
+                reply_markup=video_error_keyboard(),
+            )
         except Exception:
             pass
 
@@ -1136,17 +1174,21 @@ async def watch_photo_content(callback: CallbackQuery):
                 can_view = await check_daily_photo_limit(session, user.id)
                 if not can_view:
                     await callback.message.answer(
-                        f"📸 Вы исчерпали лимит просмотра фото на сегодня ({DAILY_PHOTO_LIMIT} шт.).\n"
-                        f"👑 VIP пользователи смотрят без ограничений.",
-                        parse_mode="HTML"
+                        f"📸 <b>Дневной лимит фото исчерпан ({DAILY_PHOTO_LIMIT} шт.).</b>\n\n"
+                        f"👑 VIP-пользователи смотрят фото без ограничений.\n"
+                        f"А видео можно смотреть без лимита — переходите туда!",
+                        parse_mode="HTML",
+                        reply_markup=photo_limit_reached_keyboard(),
                     )
                     return
 
             last_send_error: str | None = None
-            for _ in range(3):
+            photos_tried = 0
+            for _ in range(5):
                 photo = await get_random_photo_for_user(session, user.id)
                 if not photo:
                     break
+                photos_tried += 1
                 try:
                     await callback.message.answer_photo(
                         photo.telegram_file_id,
@@ -1167,14 +1209,37 @@ async def watch_photo_content(callback: CallbackQuery):
                     logger.exception("Post-photo processing failed (non-critical)")
                 return
 
-            await callback.message.answer(
-                "😔 Нет доступных фото."
-                + (f"\n\n⚠️ Ошибка отправки: {last_send_error}" if last_send_error else "")
-            )
+            # Цикл завершился без удачной отправки: понятный текст + кнопки выхода.
+            if last_send_error:
+                logger.warning(
+                    "watch_photo_content: %d фото не отправилось, last_error=%s",
+                    photos_tried, last_send_error,
+                )
+                await callback.message.answer(
+                    "😵‍💫 <b>Несколько фото подряд не удалось показать.</b>\n\n"
+                    "Временный сбой — мы пометили проблемные фото.\n"
+                    "Следующее может открыться нормально, попробуйте ещё раз!",
+                    parse_mode="HTML",
+                    reply_markup=photo_error_keyboard(),
+                )
+            else:
+                await callback.message.answer(
+                    "😔 <b>Пока нет новых фото для вас.</b>\n\n"
+                    "Вы посмотрели всё доступное!\n"
+                    "Загрузите своё фото (кнопка 📤 Загрузить в меню) или посмотрите видео.",
+                    parse_mode="HTML",
+                    reply_markup=photo_error_keyboard(),
+                )
     except Exception:
         logger.exception("watch_photo_content failed")
         try:
-            await callback.message.answer("⚠️ Ошибка при показе фото. Попробуйте ещё раз через пару секунд.")
+            await callback.message.answer(
+                "🛠 <b>Не получилось показать фото.</b>\n\n"
+                "Кратковременный сбой — это не значит, что фото нет.\n"
+                "Попробуйте ещё раз, или перейдите к видео.",
+                parse_mode="HTML",
+                reply_markup=photo_error_keyboard(),
+            )
         except Exception:
             pass
 
