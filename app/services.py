@@ -706,6 +706,40 @@ async def count_rejected_videos(session: AsyncSession) -> int:
     )).scalar_one()
 
 
+async def get_video_by_id(session: AsyncSession, video_id: int) -> "Video | None":
+    return (await session.execute(
+        select(Video).where(Video.id == video_id)
+    )).scalar_one_or_none()
+
+
+async def get_rejected_video(session: AsyncSession, offset: int = 0) -> "Video | None":
+    return (await session.execute(
+        select(Video)
+        .where(Video.status == "rejected")
+        .order_by(Video.id.desc())
+        .offset(max(0, offset))
+        .limit(1)
+    )).scalar_one_or_none()
+
+
+async def restore_rejected_video(session: AsyncSession, video_id: int) -> "Video | None":
+    """Return rejected content to moderation without granting a reward."""
+    video = await get_video_by_id(session, video_id)
+    if not video or video.status != "rejected":
+        return None
+    video.status = "pending"
+    video.rejection_reason = None
+    await log_user_action(
+        session,
+        video.uploader_user_id,
+        "video_restored_to_moderation",
+        f"video_id={video.id}",
+        auto_commit=False,
+    )
+    await session.commit()
+    return video
+
+
 async def _get_runtime_upload_reward(session: AsyncSession, content_type: str) -> Decimal:
     if content_type == "photo":
         db_val = await get_setting(session, "photo_upload_reward", "")
@@ -1091,15 +1125,73 @@ async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating:
 # ============================
 # БАЛАНС И БАН
 # ============================
+class AdminBalanceError(ValueError):
+    """A safe, user-facing error raised for invalid manual balance changes."""
+
+
+async def adjust_balance_by_admin(
+    session: AsyncSession,
+    user_id: int,
+    amount: Decimal,
+    admin_user_id: int | None,
+    *,
+    details: str = "Изменено администратором",
+) -> "User":
+    """Safely change a user's balance and write an audit trail.
+
+    The target row is locked until commit, so two admins cannot overwrite each
+    other's changes. Manual deductions may not make the balance negative.
+    ``admin_user_id`` is the internal users.id, not a Telegram ID.
+    """
+    try:
+        amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+    except Exception as exc:
+        raise AdminBalanceError("Некорректная сумма.") from exc
+    if not amount.is_finite() or amount == 0:
+        raise AdminBalanceError("Сумма должна быть ненулевым числом.")
+    if abs(amount) > Decimal("99999999.99"):
+        raise AdminBalanceError("Сумма слишком большая.")
+
+    user = (await session.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    )).scalar_one_or_none()
+    if not user:
+        raise AdminBalanceError("Пользователь не найден.")
+
+    before = Decimal(user.balance or 0)
+    after = before + amount
+    if after < 0:
+        raise AdminBalanceError(
+            f"Нельзя списать {abs(amount)}: на балансе только {before} монет."
+        )
+    if after > Decimal("99999999.99"):
+        raise AdminBalanceError("Итоговый баланс превышает допустимый лимит.")
+
+    user.balance = after
+    session.add(BalanceLog(
+        user_id=user.id,
+        amount=amount,
+        balance_before=before,
+        balance_after=after,
+        source="admin_balance",
+        admin_id=admin_user_id,
+        details=details,
+    ))
+    session.add(UserActionLog(
+        user_id=user.id,
+        action="balance_update",
+        details=f"admin_user_id={admin_user_id}, amount={amount}, before={before}, after={after}",
+    ))
+    await session.flush()
+    return user
+
+
 async def update_user_balance(session: AsyncSession, user_id: int, amount: Decimal,
                               admin_id: int = None) -> bool:
-    user = await get_user_by_id(session, user_id)
-    if not user:
+    try:
+        await adjust_balance_by_admin(session, user_id, amount, admin_id)
+    except AdminBalanceError:
         return False
-    await change_balance_atomic(session, user_id, amount, "admin_balance", admin_id=admin_id,
-                                    details=f"Manual by admin {admin_id}")
-    await log_user_action(session, user_id, "balance_update",
-                          f"admin={admin_id}, amount={amount}")
     await session.commit()
     return True
 

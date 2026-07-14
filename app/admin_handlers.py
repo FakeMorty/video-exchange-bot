@@ -26,7 +26,8 @@ from app.models import (
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
     get_user_dossier, count_pending_videos, count_approved_videos, count_rejected_videos,
-    get_next_pending_video, approve_video, reject_video,
+    get_next_pending_video, get_video_by_id, get_rejected_video, restore_rejected_video,
+    approve_video, reject_video,
     get_admin_extended_stats, get_display_name, get_styled_display_name,
     get_user_by_display_name, get_recent_feedback, get_active_sale,
     get_active_events, approve_all_pending,
@@ -34,6 +35,7 @@ from app.services import (
     get_offer_moderation_counts, get_offers_for_admin, get_offer_by_id,
     moderate_offer, set_offer_active, get_offer_expires_at,
     get_pending_rentals, moderate_offer_rental, normalize_telegram_url,
+    adjust_balance_by_admin, AdminBalanceError,
 )
 from app.keyboards import (
     admin_main_keyboard, moderation_keyboard,
@@ -79,6 +81,10 @@ class AdminUserState(StatesGroup):
 
 class ModerationRejectState(StatesGroup):
     waiting_comment = State()
+
+
+class AdminVideoSearchState(StatesGroup):
+    waiting_video_id = State()
 
 
 class AdminManageState(StatesGroup):
@@ -257,10 +263,168 @@ async def cb_queue(callback: CallbackQuery):
         p, a, r = await count_pending_videos(session), await count_approved_videos(session), await count_rejected_videos(session)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="▶ Модерировать", callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text=f"🗄 Отклонённые ({r})", callback_data="admin_rejected:0")],
+        [InlineKeyboardButton(text="🔎 Найти публикацию по #ID", callback_data="admin_video_search")],
         [InlineKeyboardButton(text="◀ Назад", callback_data="admin_center")],
     ])
     await _safe_edit(callback, f"📊 <b>Очередь</b>\n\n⏳ Ожидает: {p}\n✅ Одобрено: {a}\n❌ Отклонено: {r}", parse_mode="HTML", reply_markup=kb)
     await callback.answer()
+
+
+def _parse_video_number(raw: str | None) -> int | None:
+    value = (raw or "").strip()
+    if value.startswith("#"):
+        value = value[1:]
+    if not value.isdigit():
+        return None
+    video_id = int(value)
+    return video_id if video_id > 0 else None
+
+
+def _video_admin_keyboard(video: Video, *, back_callback: str = "admin_queue_info") -> InlineKeyboardMarkup:
+    rows = []
+    if video.status == "pending":
+        rows.append([
+            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"mod_approve:{video.id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod_reject:{video.id}"),
+        ])
+    elif video.status == "approved":
+        rows.append([InlineKeyboardButton(text="❌ Снять с публикации", callback_data=f"mod_reject:{video.id}")])
+    elif video.status == "rejected":
+        rows.append([InlineKeyboardButton(text="↩️ Вернуть на модерацию", callback_data=f"admin_video_restore:{video.id}")])
+    rows.append([InlineKeyboardButton(text="◀ Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_admin_video_card(message: Message, video: Video, uploader: User | None, reply_markup) -> None:
+    name = escape(get_display_name(uploader)) if uploader else "???"
+    status_labels = {"pending": "⏳ ожидает", "approved": "✅ одобрено", "rejected": "❌ отклонено"}
+    reason = f"\n📝 Причина: {escape(video.rejection_reason)}" if video.rejection_reason else ""
+    caption = (
+        f"🎬 <b>Публикация #{video.id}</b>\n"
+        f"Статус: {status_labels.get(video.status, escape(video.status))}\n"
+        f"Тип: {escape(video.content_type)}\n"
+        f"Автор: {name}\n"
+        f"Дата: {video.created_at.strftime('%d.%m.%Y %H:%M')}"
+        f"{reason}"
+    )
+    try:
+        if video.content_type == "photo":
+            await message.answer_photo(video.telegram_file_id, caption=caption, parse_mode="HTML", reply_markup=reply_markup)
+        else:
+            await message.answer_video(video.telegram_file_id, caption=caption, parse_mode="HTML", reply_markup=reply_markup)
+    except Exception:
+        await message.answer(
+            f"⚠️ Медиа Telegram недоступно.\n\n{caption}",
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+
+
+@router.callback_query(F.data.startswith("admin_rejected:"))
+async def admin_rejected_archive(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    offset = max(0, int(callback.data.split(":", 1)[1]))
+    async with async_session() as session:
+        total = await count_rejected_videos(session)
+        if not total:
+            await _safe_edit(callback, "🗄 Хранилище отклонённых публикаций пусто.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀ Назад", callback_data="admin_queue_info")]
+            ]))
+            await callback.answer()
+            return
+        if offset >= total:
+            offset = total - 1
+        video = await get_rejected_video(session, offset)
+        uploader = await get_user_by_id(session, video.uploader_user_id) if video else None
+
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_rejected:{offset - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{offset + 1}/{total}", callback_data="admin_rejected_noop"))
+    if offset + 1 < total:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_rejected:{offset + 1}"))
+    rows = [nav]
+    if video:
+        rows.append([InlineKeyboardButton(text="↩️ Вернуть на модерацию", callback_data=f"admin_video_restore:{video.id}")])
+    rows.extend([
+        [InlineKeyboardButton(text="🔎 Найти по #ID", callback_data="admin_video_search")],
+        [InlineKeyboardButton(text="◀ К очереди", callback_data="admin_queue_info")],
+    ])
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    if video:
+        await _send_admin_video_card(callback.message, video, uploader, InlineKeyboardMarkup(inline_keyboard=rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_rejected_noop")
+async def admin_rejected_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_video_search")
+async def admin_video_search_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    await state.set_state(AdminVideoSearchState.waiting_video_id)
+    await _safe_edit(
+        callback,
+        "🔎 Отправьте номер публикации в формате <code>#1234</code> или <code>1234</code>.\n\nТакже поиск всегда доступен командой <code>/video 1234</code>.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_queue_info")]]),
+    )
+    await callback.answer()
+
+
+async def _show_video_search_result(message: Message, raw_id: str | None) -> bool:
+    video_id = _parse_video_number(raw_id)
+    if not video_id:
+        await message.answer("❌ Нужен корректный номер, например <code>#1234</code>.", parse_mode="HTML")
+        return False
+    async with async_session() as session:
+        video = await get_video_by_id(session, video_id)
+        uploader = await get_user_by_id(session, video.uploader_user_id) if video else None
+    if not video:
+        await message.answer(f"❌ Публикация <b>#{video_id}</b> не найдена.", parse_mode="HTML")
+        return False
+    await _send_admin_video_card(message, video, uploader, _video_admin_keyboard(video))
+    return True
+
+
+@router.message(Command("video"))
+async def admin_video_search_command(message: Message):
+    if not await check_admin(message.from_user.id): return
+    parts = (message.text or "").split(maxsplit=1)
+    await _show_video_search_result(message, parts[1] if len(parts) > 1 else None)
+
+
+@router.message(AdminVideoSearchState.waiting_video_id)
+async def admin_video_search_input(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    if await _show_video_search_result(message, message.text):
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin_video_restore:"))
+async def admin_video_restore(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id): return
+    video_id = int(callback.data.split(":", 1)[1])
+    async with async_session() as session:
+        video = await restore_rejected_video(session, video_id)
+    if not video:
+        await callback.answer("Публикация уже не отклонена.", show_alert=True)
+        return
+    await _safe_edit(
+        callback,
+        f"↩️ Публикация #{video_id} возвращена в очередь модерации.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="▶ Модерировать", callback_data="admin_get_pending")],
+            [InlineKeyboardButton(text="🗄 К отклонённым", callback_data="admin_rejected:0")],
+        ]),
+    )
+    await callback.answer("Возвращено в очередь")
 
 
 @router.callback_query(F.data == "admin_get_pending")
@@ -1131,31 +1295,59 @@ async def cb_admin_user_give_coins_start(callback: CallbackQuery, state: FSMCont
     await callback.answer()
 
 
+async def _apply_admin_balance_change(bot, admin_telegram_id: int, user_id: int, amount: Decimal, details: str) -> User:
+    async with async_session() as session:
+        admin = await get_user(session, admin_telegram_id)
+        try:
+            user = await adjust_balance_by_admin(
+                session,
+                user_id,
+                amount,
+                admin.id if admin else None,
+                details=f"{details}; admin_telegram_id={admin_telegram_id}",
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        telegram_id = user.telegram_id
+        new_balance = user.balance
+
+    action = "начислил" if amount > 0 else "списал"
+    try:
+        await bot.send_message(
+            telegram_id,
+            f"💰 Администратор {action} <b>{abs(amount)}</b> монет.\n"
+            f"Ваш баланс: <b>{new_balance}</b> монет.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    return user
+
+
 @router.callback_query(F.data.startswith("admin_user_give_coins_exec:"))
 async def cb_admin_user_give_coins_exec(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     parts = callback.data.split(":")
     user_id = int(parts[1])
     amount = Decimal(parts[2])
-    
-    async with async_session() as session:
-        user = await get_user_by_id(session, user_id)
-        if not user:
-            await callback.answer("Пользователь не найден.", show_alert=True)
-            return
-            
-        from app.services import change_balance_atomic
-        user = await change_balance_atomic(
-            session,
-            user.id,
-            amount,
-            "admin_balance",
-            admin_id=callback.from_user.id,
-            details="Быстрые кнопки баланса"
-        ) or user
-        await session.commit()
-        
-    await callback.answer(f"✅ Успешно { 'начислено' if amount > 0 else 'списано' } {abs(amount)} монет!", show_alert=True)
+    try:
+        user = await _apply_admin_balance_change(
+            callback.bot, callback.from_user.id, user_id, amount, "Быстрые кнопки баланса"
+        )
+    except AdminBalanceError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Admin balance change failed")
+        await callback.answer("Не удалось изменить баланс. Попробуйте ещё раз.", show_alert=True)
+        return
+
+    await callback.answer(
+        f"✅ {'Начислено' if amount > 0 else 'Списано'} {abs(amount)}. Баланс: {user.balance}",
+        show_alert=True,
+    )
     await state.clear()
     await show_user_profile(callback, user_id)
 
@@ -1163,52 +1355,42 @@ async def cb_admin_user_give_coins_exec(callback: CallbackQuery, state: FSMConte
 @router.message(AdminUserState.waiting_coins_amount)
 async def process_admin_user_give_coins(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
     try:
-        val = (message.text or "").strip().replace(",", ".")
-        try:
-            amount = Decimal(val)
-        except Exception:
-            await message.answer("❌ Некорректное число монет. Отправьте число (например, 100 или -50):")
-            return
-            
-        data = await state.get_data()
-        user_id = data.get("target_user_id")
-        if not user_id:
-            await state.clear()
-            return
-            
-        async with async_session() as session:
-            user = await get_user_by_id(session, user_id)
-            if not user:
-                await message.answer("Пользователь не найден.")
-                await state.clear()
-                return
-                
-            from app.services import change_balance_atomic
-            user = await change_balance_atomic(
-                session,
-                user.id,
-                amount,
-                "admin_balance",
-                admin_id=message.from_user.id,
-                details="Изменено администратором"
-            ) or user
-            await session.commit()
-            
-        status_msg = "начислено" if amount >= 0 else "списано"
-        abs_amount = abs(amount)
-        await message.answer(
-            f"✅ Пользователю успешно {status_msg} <b>{abs_amount}</b> монет!\n\n"
-            f"• Новый баланс: <b>{user.balance}</b> монет.",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="◀️ Назад к пользователю", callback_data=f"admin_select_user:{user_id}")]
-            ])
+        amount = Decimal(val)
+    except Exception:
+        await message.answer("❌ Некорректная сумма. Отправьте число, например <code>100</code> или <code>-50</code>.", parse_mode="HTML")
+        return
+
+    data = await state.get_data()
+    user_id = data.get("target_user_id")
+    if not user_id:
+        await state.clear()
+        await message.answer("❌ Сессия устарела. Откройте пользователя в админке заново.")
+        return
+
+    try:
+        user = await _apply_admin_balance_change(
+            message.bot, message.from_user.id, user_id, amount, "Ручное изменение баланса"
         )
-        await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ Произошла системная ошибка при начислении монет: <code>{e}</code>", parse_mode="HTML")
-        await state.clear()
+    except AdminBalanceError as exc:
+        await message.answer(f"❌ {escape(str(exc))}", parse_mode="HTML")
+        return
+    except Exception:
+        logger.exception("Admin balance change failed")
+        await message.answer("❌ Не удалось изменить баланс. Попробуйте ещё раз.")
+        return
+
+    status_msg = "начислено" if amount > 0 else "списано"
+    await message.answer(
+        f"✅ Пользователю {status_msg} <b>{abs(amount)}</b> монет.\n\n"
+        f"• Новый баланс: <b>{user.balance}</b> монет.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад к пользователю", callback_data=f"admin_select_user:{user_id}")]
+        ]),
+    )
+    await state.clear()
 
 
 @router.callback_query(F.data.startswith("admin_user_toggle_ban:"))

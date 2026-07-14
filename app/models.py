@@ -142,7 +142,7 @@ class BalanceLog(Base):
     balance_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     source: Mapped[str] = mapped_column(String(100), nullable=False)
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    admin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
