@@ -2186,11 +2186,37 @@ async def main():
 
     # global error handler
     from aiogram.types import ErrorEvent
+    import time as _time
+    from app.db import is_db_unavailable_error, is_db_quota_error
+    quota_err_state = {"last": 0.0, "count": 0}
+
     @dp.error()
     async def error_handler(event: ErrorEvent):
-        from app.logger import log_exception, get_logger
-        lg=get_logger("dp_error")
-        log_exception(lg, f"dp_error: {event.exception}")
+        from app.logger import log_exception, log_warning, get_logger
+        lg = get_logger("dp_error")
+        exc = event.exception
+        if is_db_unavailable_error(exc):
+            # БД недоступна (в т.ч. исчерпана compute-квота Neon).
+            # Не сыпем в лог трейсбеки по 5 КБ на каждый апдейт —
+            # одна короткая строка раз в минуту со счётчиком пропущенных.
+            quota_err_state["count"] += 1
+            now = _time.monotonic()
+            if now - quota_err_state["last"] >= 60:
+                quota_err_state["last"] = now
+                if is_db_quota_error(exc):
+                    hint = (
+                        "исчерпана compute-квота Neon: дождитесь её сброса "
+                        "в начале месяца, обновите тариф или смените БД"
+                    )
+                else:
+                    hint = "БД временно недоступна (проблема соединения)"
+                log_warning(
+                    lg,
+                    f"dp_error: {hint}. "
+                    f"Подавлено повторов за минуту: {quota_err_state['count']}",
+                )
+            return True
+        log_exception(lg, f"dp_error: {exc}")
         return True
 
     app = web.Application()
