@@ -22,14 +22,31 @@ def _fix_url(url: str) -> str:
         
     return url
 
+def _is_supabase_pooler(url: str) -> bool:
+    """True, если URL указывает на Supabase Supavisor pooler.
+
+    Transaction pooler (порт 6543, pgbouncer-семантика) ломает prepared
+    statements в asyncpg — для таких подключений их нужно отключить
+    (statement_cache_size=0). Отключение безвредно и для session pooler
+    (порт 5432), поэтому матчим по хосту без разбора порта.
+    """
+    return "pooler.supabase.com" in url
+
+
 # Настройки для Render PostgreSQL (обязателен SSL)
 connect_args = {}
 engine_kwargs = {}
 if "postgresql" in DATABASE_URL:
     connect_args = {"ssl": "require"}
-    # Neon/Render принудительно закрывают простаивающие соединения (~300 сек),
-    # поэтому пересоздаём их чуть раньше и держим пул минимальным:
-    # лишние открытые коннекты 24/7 жгут compute-квоту Neon free tier.
+    if _is_supabase_pooler(DATABASE_URL):
+        # Supabase pooler (Supavisor в transaction mode) не поддерживает
+        # prepared statements — отключаем их кэш в asyncpg, иначе будет
+        # DuplicatePreparedStatementError / InvalidCachedStatementError.
+        connect_args["statement_cache_size"] = 0
+    # Serverless Postgres (Neon/Render/Supabase) принудительно закрывает
+    # простаивающие соединения, поэтому пересоздаём их чуть раньше
+    # и держим пул минимальным: лишние открытые коннекты 24/7 зря жгут
+    # лимиты бесплатных тарифов (compute-часы Neon, коннекции Supabase/Aiven).
     # (для SQLite-фолбэка — NullPool, эти параметры там не поддерживаются)
     engine_kwargs = {
         "pool_pre_ping": True,
