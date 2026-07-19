@@ -43,6 +43,17 @@ def _sync_url_from_env() -> str:
     return db_url
 
 
+def _connect_args_for(url: str) -> dict:
+    """connect_args для asyncpg-движка миграций (зеркалит app/db.py)."""
+    connect_args: dict = {}
+    if url.startswith("postgresql+asyncpg://"):
+        connect_args["ssl"] = "require"
+        if "pooler.supabase.com" in url:
+            # pgbouncer в transaction-режиме несовместим с prepared statements
+            connect_args["statement_cache_size"] = 0
+    return connect_args
+
+
 def run_migrations_offline() -> None:
     url = _sync_url_from_env()
     context.configure(
@@ -78,6 +89,7 @@ async def run_async_migrations() -> None:
         cfg,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=_connect_args_for(cfg["sqlalchemy.url"]),
     )
 
     async with connectable.connect() as connection:

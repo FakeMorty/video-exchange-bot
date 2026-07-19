@@ -1999,6 +1999,27 @@ async def on_startup(app):
     except Exception as e:
         log_error(logger, f"Migration sync error: {e}")
 
+    if not is_sqlite:
+        # Self-heal: если базовой схемы всё ещё нет (свежая БД, а alembic-цепочка
+        # с нуля не поднимается), создаём таблицы из ORM-моделей и штампуем head.
+        try:
+            from sqlalchemy import text as _text
+            async with engine.connect() as conn:
+                r = await conn.execute(_text("SELECT to_regclass('public.users')"))
+                has_users = r.scalar() is not None
+            if not has_users:
+                log_error(logger, "users table missing — creating schema from models (self-heal)")
+                await init_db()
+
+                def stamp_head():
+                    alembic_cfg = Config("alembic.ini")
+                    command.stamp(alembic_cfg, "head")
+
+                await asyncio.to_thread(stamp_head)
+                log_info(logger, "Schema created from models, alembic stamped to head (self-heal)")
+        except Exception as e:
+            log_error(logger, f"Schema self-heal error: {e}")
+
     # DB Maintenance
     from app.utils.db_fix import fix_database
     try:
