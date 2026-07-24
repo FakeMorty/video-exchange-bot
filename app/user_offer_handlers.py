@@ -149,8 +149,10 @@ async def user_offer_final(message: Message, state: FSMContext):
     await state.set_state(UserOfferState.waiting_penalty)
     await message.answer(
         "💰 <b>Шаг 6/8: Штраф за отписку</b>\n\n"
-        "Введите сумму штрафа (монеты), которая будет списана дополнительно, если пользователь прекратит участие в оффере там, где это можно проверить автоматически.\n"
-        "Рекомендуется установить сумму больше награды, чтобы нарушение было в убыток пользователю.",
+        "Введите сумму штрафа (монеты), которая будет списана дополнительно, "
+        "если пользователь прекратит участие в оффере там, где это можно проверить автоматически.\n\n"
+        "⚠️ Штраф <b>не может превышать итоговую награду</b> — "
+        "иначе нарушение становится дороже, чем возможный выигрыш, и это несправедливо.",
         parse_mode="HTML"
     )
 
@@ -163,6 +165,15 @@ async def user_offer_penalty(message: Message, state: FSMContext):
             raise ValueError
     except Exception:
         await message.answer("❌ Введите положительное число.")
+        return
+    # Штраф за отписку не должен превышать итоговую награду.
+    data = await state.get_data()
+    reward_final = data.get("reward_final")
+    if reward_final is not None and val > Decimal(reward_final):
+        await message.answer(
+            f"❌ Штраф ({val}) не может быть больше итоговой награды ({reward_final}). "
+            "Сумма штрафа должна быть меньше или равна награде."
+        )
         return
     await state.update_data(penalty_unsubscribe=val)
     await state.set_state(UserOfferState.waiting_duration)

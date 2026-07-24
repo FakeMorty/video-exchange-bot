@@ -50,16 +50,26 @@ async def test_settle_lottery_round_pays_all_winner_tiers_and_bets():
 
         assert stats["tickets"] == 3
         assert stats["winners"] == 3
-        assert stats["paid_total"] == 100.0
+        # paid_total считает только выплаты по билетам:
+        # 5 (6 совпадений, джекпот) + 10 (5 совпадений) + 25 (4 совпадения) = 40
+        # (выигрыш по ставке bettor не входит в paid_total, начисляется отдельно)
+        # Остаток 60 монет остаётся в пуле (нет победителей с 3/2 совпадениями)
+        assert stats["paid_total"] == 40.0
 
         await session.refresh(u6)
         await session.refresh(u5)
         await session.refresh(u4)
         await session.refresh(bettor)
 
-        assert u6.balance == Decimal("70.00")
-        assert u5.balance == Decimal("20.00")
-        assert u4.balance == Decimal("10.00")
+        # Распределение призового фонда 100 монет:
+        # 6 совпадений (джекпот) = 5% / 1 победитель = 5 монет
+        # 5 совпадений = 10% / 1 победитель = 10 монет
+        # 4 совпадения = 25% / 1 победитель = 25 монет
+        # 3 совпадения = 60% (без победителей, не выплачивается)
+        assert u6.balance == Decimal("5.00")
+        assert u5.balance == Decimal("10.00")
+        assert u4.balance == Decimal("25.00")
+        # Ставка на нечётный первый бочонок: выпал 1 (нечётный) — ставка удваивается
         assert bettor.balance == Decimal("20.00")
 
     await engine.dispose()
