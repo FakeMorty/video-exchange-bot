@@ -270,6 +270,23 @@ LOTTERY_SECONDS_PER_BALL = _get_int("LOTTERY_SECONDS_PER_BALL", 15)
 LOTTERY_DRAW_SECRET = _get_str("LOTTERY_DRAW_SECRET", "")
 
 # ============================
+# КОСМИЧЕСКАЯ АРКАДА (риск-игра с множителем, a-la Galaga)
+# ============================
+ENABLE_ARCADE = _get_bool("ENABLE_ARCADE", True)
+ARCADE_MIN_BET = _get_float("ARCADE_MIN_BET", 10.0)
+ARCADE_MAX_BET = _get_float("ARCADE_MAX_BET", 250.0)
+# Максимальный множитель ставки; при достижении выигрыш забирается автоматически.
+ARCADE_MAX_MULTIPLIER = _get_float("ARCADE_MAX_MULTIPLIER", 50.0)
+# Дневной кап ЧИСТОЙ прибыли игрока в аркаде (защита экономики: «чтобы не сильно богатели»).
+ARCADE_DAILY_PROFIT_CAP = _get_float("ARCADE_DAILY_PROFIT_CAP", 500.0)
+# Через сколько минут «зависший» забег считается протухшим и ставка возвращается.
+ARCADE_RUN_TTL_MINUTES = _get_int("ARCADE_RUN_TTL_MINUTES", 30)
+# --- Математика волн (жёстко в коде, см. app/arcade.py) ---
+# Шанс уничтожить волну: 0.72 для первой, -4.5 п.п. за волну, пол 0.30.
+# Шаг множителя: x1.35 за первую волну, +0.05 за каждую следующую, потолок x1.80.
+# Итог: ранние волны около-безубыточны (весело), поздние — с растущим преимуществом бота.
+
+# ============================
 # ЛУТБОКСЫ
 # ============================
 ENABLE_LOOTBOXES = _get_bool("ENABLE_LOOTBOXES", True)

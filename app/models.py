@@ -618,3 +618,24 @@ class LotteryBet(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=10.0)
     is_settled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_won: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ArcadeRun(Base):
+    """Один забег в «Космической аркаде»: ставка, текущая волна, множитель, статус."""
+    __tablename__ = "arcade_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    bet: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    # Сколько волн уничтожено (0 = игрок ещё не стрелял).
+    wave: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Текущий множитель ставки (x1.00 до первого выстрела).
+    multiplier: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("1"))
+    # Серверная «crash»-волна (0-индекс): волна, на которой флот гарантированно
+    # прорвётся. Клиенту НИКОГДА не отдаётся — честность раунда серверная.
+    crash_wave: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # active | won | lost | expired
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    payout: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -213,4 +213,57 @@ async def fix_database():
             except Exception:
                 await conn.rollback()
 
+        # Ensure arcade_runs table exists (🚀 Космическая аркада)
+        if is_sqlite:
+            try:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS arcade_runs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        bet NUMERIC(10,2) NOT NULL DEFAULT 0,
+                        wave INTEGER NOT NULL DEFAULT 0,
+                        multiplier NUMERIC(8,2) NOT NULL DEFAULT 1,
+                        crash_wave INTEGER NOT NULL DEFAULT 0,
+                        status VARCHAR(20) NOT NULL DEFAULT 'active',
+                        payout NUMERIC(10,2) NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        finished_at TIMESTAMP
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_arcade_runs_user_id ON arcade_runs (user_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_arcade_runs_status ON arcade_runs (status)"))
+                await conn.commit()
+                log_info(logger, "Created arcade_runs table")
+            except Exception:
+                await conn.rollback()
+        else:
+            try:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS arcade_runs (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        bet NUMERIC(10,2) NOT NULL DEFAULT 0,
+                        wave INTEGER NOT NULL DEFAULT 0,
+                        multiplier NUMERIC(8,2) NOT NULL DEFAULT 1,
+                        crash_wave INTEGER NOT NULL DEFAULT 0,
+                        status VARCHAR(20) NOT NULL DEFAULT 'active',
+                        payout NUMERIC(10,2) NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                        finished_at TIMESTAMP
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_arcade_runs_user_id ON arcade_runs (user_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_arcade_runs_status ON arcade_runs (status)"))
+                await conn.commit()
+                log_info(logger, "Created arcade_runs table")
+            except Exception:
+                await conn.rollback()
+
+        # Колонка crash_wave на случай таблицы, созданной старой схемой
+        try:
+            await conn.execute(text("ALTER TABLE arcade_runs ADD COLUMN crash_wave INTEGER NOT NULL DEFAULT 0"))
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+
     log_info(logger, "DB fix complete!")
