@@ -22,6 +22,7 @@ BTN_PROMO      = "🎟 Промокоды"
 BTN_FEEDBACK   = "💬 Жалобы и предложения"
 BTN_LOTTERY    = "🎰 Секслото"
 BTN_LOOTBOXES  = "🎁 Лутбоксы"
+BTN_ARCADE     = "🚀 Космическая аркада"
 BTN_AI         = "💋 ИИ-Общение"
 BTN_RULES      = "📜 Правила"
 BTN_FAQ        = "ℹ️ FAQ / Помощь"
@@ -229,6 +230,7 @@ def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
 
 def games_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=BTN_ARCADE, callback_data="arcade_menu")],
         [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])

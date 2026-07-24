@@ -2240,6 +2240,7 @@ async def admin_bot_settings(callback: CallbackQuery):
         [InlineKeyboardButton(text="💰 Экономика", callback_data="settings_economy")],
         [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
         [InlineKeyboardButton(text="🎁 Лутбоксы", callback_data="settings_games")],
+        [InlineKeyboardButton(text="🚀 Аркада", callback_data="settings_arcade")],
         [InlineKeyboardButton(text="🎁 Еженедельный Промокод", callback_data="settings_weekly_promo")],
         [InlineKeyboardButton(text="📺 Реклама", callback_data="settings_ads")],
         [InlineKeyboardButton(text="✏️ Никнеймы", callback_data="settings_nicks")],
@@ -2360,6 +2361,42 @@ async def settings_games(callback: CallbackQuery):
         [InlineKeyboardButton(text="✏️ Цена лутбокса (монеты)", callback_data="settings_edit:lootbox_coin_price")],
         [InlineKeyboardButton(text="✏️ Цена лутбокса (Stars)", callback_data="settings_edit:lootbox_star_price")],
         [InlineKeyboardButton(text="🔘 Лутбоксы " + ("выкл" if eb == "off" else "вкл"), callback_data="settings_toggle:enable_lootboxes")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- АРКАДА ----------
+@router.callback_query(F.data == "settings_arcade")
+async def settings_arcade(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.arcade import load_arcade_config
+        cfg = await load_arcade_config(session)
+        from app.services import get_setting
+        enabled_raw = await get_setting(session, "arcade_enabled", "")
+    status_label = "включена ✅" if cfg.enabled else "отключена ⛔"
+    toggle_label = "выкл ⛔" if cfg.enabled else "вкл ✅"
+    text = (
+        f"🚀 <b>Космическая аркада</b> (Mini App)\n\n"
+        f"Статус: {status_label}\n"
+        f"Мин. ставка: <b>{cfg.min_bet}</b> монет\n"
+        f"Макс. ставка: <b>{cfg.max_bet}</b> монет\n"
+        f"Макс. множитель: <b>x{cfg.max_multiplier}</b>\n"
+        f"Дневной кап чистой прибыли: <b>{cfg.daily_profit_cap}</b> монет\n"
+        f"TTL забега (возврат ставки): <b>{cfg.run_ttl_minutes}</b> мин\n\n"
+        f"<i>Математика волн (шансы/множители) зашита в коде — см. app/arcade.py.</i>"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🔘 Аркада: {toggle_label}", callback_data="settings_toggle:arcade_enabled")],
+        [InlineKeyboardButton(text="✏️ Мин. ставка", callback_data="settings_edit:arcade_min_bet")],
+        [InlineKeyboardButton(text="✏️ Макс. ставка", callback_data="settings_edit:arcade_max_bet")],
+        [InlineKeyboardButton(text="✏️ Макс. множитель", callback_data="settings_edit:arcade_max_multiplier")],
+        [InlineKeyboardButton(text="✏️ Дневной кап прибыли", callback_data="settings_edit:arcade_daily_profit_cap")],
+        [InlineKeyboardButton(text="✏️ TTL забега (мин)", callback_data="settings_edit:arcade_run_ttl_minutes")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
@@ -2733,6 +2770,8 @@ async def settings_toggle(callback: CallbackQuery):
     # Перезапускаем текущее меню
     if key in ("enable_lottery", "enable_lootboxes"):
         await settings_games(callback)
+    elif key == "arcade_enabled":
+        await settings_arcade(callback)
     else:
         await admin_bot_settings(callback)
 

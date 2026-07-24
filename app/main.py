@@ -32,6 +32,7 @@ from app.admin_handlers import router as admin_router
 from app.user_offer_handlers import router as user_offer_router
 from app.donation_shop import router as donation_router
 from app.ai_assistant import router as ai_router
+from app.arcade_handlers import router as arcade_router
 from app.logger import setup_logging, get_logger, log_info, log_error
 from app.services import (
     get_offer_participations_for_subscription_audit,
@@ -2199,6 +2200,721 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
         await asyncio.sleep(60)
 
 
+# ============================
+# 🚀 КОСМИЧЕСКАЯ АРКАДА (Mini App)
+# ============================
+# HTML5 Galaga-подобная аркада. Все исходы считает сервер (crash-модель):
+# при старте забега разыгрывается скрытая crash-волна, клиент лишь играет
+# и вызывает /api/arcade/wave — накрутить выигрыш невозможно.
+
+ARCADE_PAGE_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Космическая Аркада</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{ --accent:#8b5cf6; --gold:#fbbf24; }
+*{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+html,body{height:100%; overflow:hidden; background:#05010f; color:#fff;
+  font-family:-apple-system,'Segoe UI',Roboto,sans-serif; user-select:none;}
+#game{position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none;}
+.hud{position:fixed; top:0; left:0; right:0; padding:10px 12px; display:flex; gap:6px;
+  justify-content:space-between; z-index:5; pointer-events:none; font-size:13px; flex-wrap:wrap;}
+.hud .chip{background:rgba(20,10,40,.78); border:1px solid rgba(139,92,246,.45);
+  border-radius:12px; padding:5px 9px;}
+.mult{color:var(--gold); font-weight:800; font-size:16px; display:inline-block;}
+.mult.pulse{animation:pulse .35s ease;}
+@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.4)}100%{transform:scale(1)}}
+#cashoutBtn{position:fixed; left:50%; bottom:16px; transform:translateX(-50%); z-index:6;
+  background:linear-gradient(135deg,#f59e0b,#fbbf24); color:#1a0b00; border:none;
+  border-radius:16px; padding:14px 34px; font-size:17px; font-weight:800;
+  box-shadow:0 6px 24px rgba(251,191,36,.4);}
+#cashoutBtn:active{transform:translateX(-50%) scale(.96);}
+.screen{position:fixed; inset:0; z-index:10; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:12px; padding:22px;
+  background:rgba(5,1,15,.9); text-align:center; overflow-y:auto;}
+.hidden{display:none !important;}
+h1{font-size:26px; background:linear-gradient(90deg,#8b5cf6,#22d3ee);
+  -webkit-background-clip:text; background-clip:text; color:transparent;}
+.sub{font-size:14px; opacity:.85; line-height:1.5;}
+.btn{background:rgba(139,92,246,.16); border:1px solid rgba(139,92,246,.5); color:#fff;
+  border-radius:14px; padding:12px 26px; font-size:16px; width:100%; max-width:300px;}
+.btn.primary{background:linear-gradient(135deg,#7c3aed,#8b5cf6); border:none; font-weight:700;}
+.btn:active{transform:scale(.97);}
+.chips{display:flex; gap:8px; flex-wrap:wrap; justify-content:center;}
+.chip-bet{background:rgba(34,211,238,.12); border:1px solid rgba(34,211,238,.5); color:#fff;
+  border-radius:12px; padding:10px 16px; font-size:15px; font-weight:600;}
+.chip-bet.sel{background:#22d3ee; color:#04222b;}
+input{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.25); color:#fff;
+  border-radius:12px; padding:11px 14px; font-size:16px; width:100%; max-width:300px; text-align:center;}
+.limits{font-size:12px; opacity:.6; max-width:320px;}
+.top-list{font-size:13px; opacity:.9; line-height:1.7; margin-top:6px;
+  background:rgba(255,255,255,.05); border-radius:12px; padding:10px 16px;}
+#toast{position:fixed; top:64px; left:50%; transform:translateX(-50%); z-index:30;
+  background:rgba(220,38,38,.94); padding:9px 18px; border-radius:12px; font-size:14px;
+  display:none; max-width:86%; text-align:center;}
+#ovText{white-space:pre-line; font-size:15px; line-height:1.55;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div class="hud hidden" id="hud">
+  <div class="chip">💵 <b id="hudBet">0</b></div>
+  <div class="chip">📈 <span class="mult" id="hudMult">x1</span></div>
+  <div class="chip">💰 <b id="hudPotential">0</b></div>
+  <div class="chip">👛 <b id="hudBalance">0</b></div>
+</div>
+<button id="cashoutBtn" class="hidden">💰 Забрать</button>
+
+<div id="lobby" class="screen">
+  <div style="font-size:46px">🚀</div>
+  <h1>Космическая Аркада</h1>
+  <div class="sub">Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>
+  Успей нажать «Забрать», пока флот не прорвался! ☠️</div>
+  <div>👛 Баланс: <b id="lobbyBalance">—</b> монет</div>
+  <div class="chips" id="betChips"></div>
+  <input id="betInput" type="number" inputmode="decimal" placeholder="Своя ставка"/>
+  <div class="limits" id="limitsLine"></div>
+  <button class="btn hidden" id="resumeBtn">▶️ Продолжить забег</button>
+  <button class="btn primary" id="startBtn">🚀 В бой!</button>
+  <div class="top-list hidden" id="topList"></div>
+</div>
+
+<div id="overlay" class="screen hidden">
+  <div id="ovEmoji" style="font-size:58px">🏆</div>
+  <h1 id="ovTitle" style="font-size:24px">Победа!</h1>
+  <div id="ovText" class="sub"></div>
+  <button class="btn primary" id="againBtn">🔁 Ещё раз</button>
+  <button class="btn" id="toLobbyBtn">✏️ Сменить ставку</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+var tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+var initData = tg ? (tg.initData || '') : '';
+function $(id){ return document.getElementById(id); }
+
+var CFG = { min_bet:10, max_bet:250, max_multiplier:50, daily_profit_cap:500, enabled:true };
+var balance = 0, bet = 0, runId = null, mult = 1, wave = 0;
+var phase = 'lobby';            // lobby | playing | dying | over
+var waitingServer = false;
+var resumeRun = null;
+
+function haptic(kind){
+  try {
+    if (!tg || !tg.HapticFeedback) return;
+    if (kind==='success') tg.HapticFeedback.notificationOccurred('success');
+    else if (kind==='error') tg.HapticFeedback.notificationOccurred('error');
+    else tg.HapticFeedback.impactOccurred(kind==='heavy'?'heavy':'light');
+  } catch(e){}
+}
+async function api(path, body){
+  var opts = { headers: { 'X-Telegram-Init-Data': initData } };
+  if (body !== undefined) {
+    opts.method = 'POST';
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body || {});
+  }
+  var res = await fetch(path, opts);
+  var data = {};
+  try { data = await res.json(); } catch(e){}
+  if (!res.ok || !data.ok) {
+    var err = new Error((data && data.error) || ('http_' + res.status));
+    err.data = data; throw err;
+  }
+  return data;
+}
+function toast(msg){
+  var t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(function(){ t.style.display='none'; }, 3000);
+}
+function fmt(v){
+  v = Math.floor((+v) * 100) / 100;
+  var s = v.toFixed(2).replace(/0+$/,'').replace(/\.$/,'');
+  return s === '-0' ? '0' : s;
+}
+function errText(c){
+  return { no_funds:'Не хватает монет 😢', bad_bet:'Ставка вне лимитов',
+    disabled:'Аркада временно отключена', run_in_progress:'У тебя уже идёт забег',
+    no_waves:'Сначала отбей хотя бы одну волну!', not_active:'Забег уже завершён' }[c] || ('Ошибка: ' + c);
+}
+
+/* ---------- HUD ---------- */
+function updHud(){
+  $('hudBet').textContent = fmt(bet);
+  $('hudMult').textContent = 'x' + fmt(mult);
+  $('hudPotential').textContent = fmt(bet * mult);
+  $('hudBalance').textContent = fmt(balance);
+}
+function pulseMult(){
+  var m = $('hudMult'); m.classList.remove('pulse'); void m.offsetWidth; m.classList.add('pulse');
+}
+function refreshCashoutBtn(){
+  var b = $('cashoutBtn');
+  if (phase==='playing' && wave >= 1) {
+    b.classList.remove('hidden');
+    b.textContent = '💰 Забрать ' + fmt(bet * mult);
+  } else b.classList.add('hidden');
+}
+
+/* ---------- CANVAS ---------- */
+var cv = $('game'), ctx = cv.getContext('2d');
+var W = 0, H = 0;
+function resize(){
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+
+var stars = [], bullets = [], aliens = [], aBullets = [], parts = [];
+var player = { x: 0, tx: 0, cd: 0 };
+var formationY = 0, waveFlash = 0, ts0 = 0;
+
+function initStars(){
+  stars = [];
+  for (var i = 0; i < 90; i++)
+    stars.push({ x: Math.random(), y: Math.random(), s: Math.random()*1.6+0.4, v: Math.random()*0.03+0.008 });
+}
+initStars();
+
+function spawnWave(w){
+  aliens = []; aBullets = []; bullets = [];
+  var cols = Math.min(4 + (w % 3), 7);
+  var rows = Math.min(2 + Math.floor(w / 2), 5);
+  var gap = Math.min(48, (W - 48) / cols);
+  var startX = W/2 - (cols-1)*gap/2;
+  var types = ['👾','🛸','👽'];
+  for (var r = 0; r < rows; r++)
+    for (var c = 0; c < cols; c++)
+      aliens.push({ x0: startX + c*gap, y0: 78 + r*40, sx: startX + c*gap, sy: 78 + r*40,
+                    alive: true, t: types[(r+c+w) % 3], ph: Math.random()*6.28 });
+  formationY = 0;
+}
+function alienSpeed(){ return 5 + wave * 1.3; }
+
+function setTarget(clientX){
+  var rect = cv.getBoundingClientRect();
+  player.tx = Math.max(18, Math.min(W - 18, clientX - rect.left));
+}
+var pointerActive = false;
+cv.addEventListener('pointerdown', function(e){ pointerActive = true; setTarget(e.clientX); });
+cv.addEventListener('pointermove', function(e){ if (pointerActive) setTarget(e.clientX); });
+window.addEventListener('pointerup', function(){ pointerActive = false; });
+window.addEventListener('keydown', function(e){
+  if (phase !== 'playing') return;
+  if (e.key === 'ArrowLeft')  player.tx = Math.max(18, player.tx - 36);
+  if (e.key === 'ArrowRight') player.tx = Math.min(W - 18, player.tx + 36);
+});
+
+function boom(x, y){
+  var cols = ['#fbbf24','#f87171','#8b5cf6','#ffffff'];
+  for (var i = 0; i < 10; i++)
+    parts.push({ x:x, y:y, vx:(Math.random()-0.5)*170, vy:(Math.random()-0.5)*170,
+                 life: 0.5 + Math.random()*0.3, c: cols[i % 4] });
+}
+
+function frame(ts){
+  var dt = Math.min((ts - ts0)/1000 || 0, 0.05); ts0 = ts;
+
+  var g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0b0322'); g.addColorStop(1, '#05010f');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#c4b5fd';
+  for (var i = 0; i < stars.length; i++){
+    var s = stars[i]; s.y += s.v * dt; if (s.y > 1) s.y -= 1;
+    ctx.globalAlpha = 0.3 + s.s*0.3;
+    ctx.fillRect(s.x*W, s.y*H, s.s, s.s);
+  }
+  ctx.globalAlpha = 1;
+
+  if (phase === 'playing' || phase === 'dying') {
+    var moving = (phase === 'dying') || (phase === 'playing' && !waitingServer);
+    if (moving) formationY += alienSpeed() * dt;
+    var sway = Math.sin(ts/700) * 10;
+
+    ctx.font = '26px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    var aliveCount = 0;
+    for (var j = 0; j < aliens.length; j++){
+      var a = aliens[j];
+      if (!a.alive) continue;
+      aliveCount++;
+      a.sx = a.x0 + sway + Math.sin(ts/500 + a.ph)*4;
+      a.sy = a.y0 + formationY;
+      ctx.fillText(a.t, a.sx, a.sy);
+      if (phase === 'playing' && !waitingServer && Math.random() < dt * 0.10)
+        aBullets.push({ x: a.sx, y: a.sy + 14, vy: 150 + wave*14 });
+    }
+
+    // Флот дошёл до линии игрока → сервер решает исход волны.
+    if (phase === 'playing' && !waitingServer && aliveCount > 0 && formationY > H - 200)
+      onWaveCleared();
+
+    // Игрок
+    player.x += (player.tx - player.x) * Math.min(dt*14, 1);
+    ctx.font = '30px serif';
+    ctx.fillText('🚀', player.x, H - 66);
+    ctx.fillStyle = 'rgba(251,191,36,.85)';
+    ctx.fillRect(player.x - 2, H - 50, 4, 8 + Math.random()*7);
+
+    // Автострельба
+    if (phase === 'playing' && !waitingServer && aliveCount > 0) {
+      player.cd -= dt;
+      if (player.cd <= 0) { player.cd = 0.18; bullets.push({ x: player.x, y: H - 84, vy: -440 }); }
+    }
+
+    ctx.fillStyle = '#22d3ee';
+    for (var b1 = bullets.length - 1; b1 >= 0; b1--){
+      var b = bullets[b1]; b.y += b.vy * dt;
+      ctx.fillRect(b.x - 2, b.y - 9, 4, 11);
+      if (b.y < -20) bullets.splice(b1, 1);
+    }
+    // Столкновения
+    for (var k = 0; k < bullets.length; k++){
+      var bl = bullets[k];
+      for (var m = 0; m < aliens.length; m++){
+        var al = aliens[m];
+        if (!al.alive) continue;
+        if (Math.abs(bl.x - al.sx) < 17 && Math.abs(bl.y - al.sy) < 17) {
+          al.alive = false; bl.y = -100; boom(al.sx, al.sy); haptic('light');
+          break;
+        }
+      }
+    }
+    if (phase === 'playing' && !waitingServer && aliens.length && aliens.every(function(x){ return !x.alive; }))
+      onWaveCleared();
+
+    // Декоративные снаряды пришельцев (исход решает сервер, они не убивают)
+    ctx.fillStyle = '#f87171';
+    for (var q = aBullets.length - 1; q >= 0; q--){
+      var ab = aBullets[q]; ab.y += ab.vy * dt;
+      ctx.fillRect(ab.x - 2, ab.y, 4, 8);
+      if (ab.y > H + 20) aBullets.splice(q, 1);
+    }
+    // Частицы
+    for (var p = parts.length - 1; p >= 0; p--){
+      var pt = parts[p]; pt.x += pt.vx*dt; pt.y += pt.vy*dt; pt.life -= dt;
+      ctx.globalAlpha = Math.max(pt.life*1.6, 0); ctx.fillStyle = pt.c;
+      ctx.fillRect(pt.x-2, pt.y-2, 4, 4);
+      if (pt.life <= 0) parts.splice(p, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    if (waveFlash > 0) {
+      waveFlash -= dt;
+      ctx.globalAlpha = Math.min(waveFlash, 1);
+      ctx.fillStyle = '#fbbf24'; ctx.font = 'bold 21px sans-serif';
+      ctx.fillText('ВОЛНА ' + wave + ' ОТБИТА! 💥', W/2, H/2 - 60);
+      ctx.globalAlpha = 1;
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- СЕТЬ ---------- */
+function onWaveCleared(){
+  if (waitingServer || phase !== 'playing') return;
+  waitingServer = true;
+  api('/api/arcade/wave', { run_id: runId }).then(function(r){
+    balance = r.balance;
+    if (r.outcome === 'hit') {
+      wave = r.wave; mult = r.multiplier;
+      pulseMult(); updHud(); refreshCashoutBtn();
+      waveFlash = 1.1; spawnWave(wave); waitingServer = false;
+      haptic('light');
+    } else if (r.outcome === 'lost') {
+      waitingServer = false; onDefeat();
+    } else if (r.outcome === 'cashed_out') {
+      waitingServer = false; onWin(r.payout, r.multiplier, true, r.cap_applied);
+    } else {
+      waitingServer = false; toLobby('Сервер отменил забег');
+    }
+  }).catch(function(e){ waitingServer = false; toLobby(errText(e.message)); });
+}
+
+function onDefeat(){
+  phase = 'dying'; haptic('error');
+  aliens = [];
+  for (var i = 0; i < 9; i++)
+    aliens.push({ x0: 26 + (W-52)*i/9, y0: -30 - Math.random()*80, sx:0, sy:0,
+                  alive: true, t: (i%2) ? '☄️' : '👹', ph: i });
+  formationY = 0;
+  boom(player.x, H - 66); boom(player.x, H - 66);
+  setTimeout(function(){
+    phase = 'over';
+    showOverlay('☠️', 'Прорыв флота!',
+      'Инопланетяне прорвались на волне ' + (wave + 1) + '.\\nСтавка ' + fmt(bet) + ' монет сгорела.');
+  }, 1150);
+}
+
+function onWin(payout, multiplier, capped, capApplied){
+  phase = 'over'; haptic('success');
+  var txt = 'Ставка ' + fmt(bet) + ' × x' + fmt(multiplier) + ' = ' + fmt(payout) + ' монет зачислено!';
+  if (capped) txt = '🌟 Множитель достиг потолка x' + fmt(CFG.max_multiplier) + '!\\n' + txt;
+  if (capApplied) txt += '\\n🛡 Часть прибыли срезана дневным лимитом.';
+  showOverlay(capped ? '🌟' : '🏆', capped ? 'Сверхновая!' : 'Выигрыш забран!', txt);
+}
+
+function showOverlay(emoji, title, text){
+  $('ovEmoji').textContent = emoji;
+  $('ovTitle').textContent = title;
+  $('ovText').textContent = text;
+  $('overlay').classList.remove('hidden');
+  $('hud').classList.add('hidden');
+  $('cashoutBtn').classList.add('hidden');
+}
+
+/* ---------- ЛОББИ ---------- */
+function buildChips(){
+  var box = $('betChips'); box.innerHTML = '';
+  [10, 25, 50, 100].forEach(function(v){
+    if (v < CFG.min_bet || v > CFG.max_bet) return;
+    var b = document.createElement('button');
+    b.className = 'chip-bet'; b.textContent = v + ' 💵';
+    if (v === bet) b.classList.add('sel');
+    b.onclick = function(){
+      bet = v; $('betInput').value = '';
+      document.querySelectorAll('.chip-bet').forEach(function(x){ x.classList.remove('sel'); });
+      b.classList.add('sel');
+    };
+    box.appendChild(b);
+  });
+  if (!bet || bet < CFG.min_bet || bet > CFG.max_bet) bet = CFG.min_bet;
+}
+
+function refreshTop(){
+  api('/api/arcade/top').then(function(t){
+    var el = $('topList');
+    if (!t.rows || !t.rows.length) { el.classList.add('hidden'); return; }
+    var medals = ['🥇','🥈','🥉'];
+    el.classList.remove('hidden');
+    el.innerHTML = '<b>🏆 Топ недели</b><br/>' + t.rows.slice(0,5).map(function(r, i){
+      return (medals[i] || (i+1) + '.') + ' ' + r.name + ' — +' + fmt(r.net);
+    }).join('<br/>');
+  }).catch(function(){});
+}
+
+function refreshState(){
+  api('/api/arcade/state').then(function(s){
+    CFG.enabled = s.enabled; CFG.min_bet = s.min_bet; CFG.max_bet = s.max_bet;
+    CFG.max_multiplier = s.max_multiplier; CFG.daily_profit_cap = s.daily_profit_cap;
+    balance = s.balance;
+    $('lobbyBalance').textContent = fmt(balance);
+    $('limitsLine').textContent = 'Ставка от ' + fmt(CFG.min_bet) + ' до ' + fmt(CFG.max_bet) +
+      ' монет · макс. x' + fmt(CFG.max_multiplier) +
+      ' · кап прибыли ' + fmt(CFG.daily_profit_cap) + '/день';
+    resumeRun = s.active_run;
+    if (resumeRun) {
+      bet = resumeRun.bet;
+      $('resumeBtn').classList.remove('hidden');
+      $('resumeBtn').textContent = '▶️ Продолжить (ставка ' + fmt(resumeRun.bet) +
+        ', x' + fmt(resumeRun.multiplier) + ')';
+    } else {
+      $('resumeBtn').classList.add('hidden');
+      buildChips();
+    }
+    if (!CFG.enabled) toast('Аркада временно отключена');
+  }).catch(function(e){ toast('Нет связи с сервером: ' + e.message); });
+  refreshTop();
+}
+
+function enterGame(){
+  phase = 'playing'; waitingServer = false;
+  $('lobby').classList.add('hidden');
+  $('overlay').classList.add('hidden');
+  $('hud').classList.remove('hidden');
+  player.x = W/2; player.tx = W/2;
+  spawnWave(wave);
+  updHud(); refreshCashoutBtn();
+}
+
+function startRun(newBet){
+  api('/api/arcade/start', { bet: newBet }).then(function(r){
+    balance = r.balance; runId = r.run.run_id; bet = r.run.bet;
+    mult = r.run.multiplier; wave = r.run.wave;
+    enterGame();
+  }).catch(function(e){ toast(errText(e.message)); });
+}
+
+function toLobby(msg){
+  phase = 'lobby';
+  if (msg) toast(msg);
+  $('hud').classList.add('hidden');
+  $('cashoutBtn').classList.add('hidden');
+  $('overlay').classList.add('hidden');
+  $('lobby').classList.remove('hidden');
+  refreshState();
+}
+
+/* ---------- КНОПКИ ---------- */
+$('startBtn').onclick = function(){
+  if (!CFG.enabled) { toast('Аркада временно отключена'); return; }
+  var v = $('betInput').value ? parseFloat($('betInput').value) : bet;
+  if (!(v > 0)) { toast('Введи ставку'); return; }
+  startRun(v);
+};
+$('resumeBtn').onclick = function(){
+  if (!resumeRun) return;
+  runId = resumeRun.run_id; bet = resumeRun.bet;
+  mult = resumeRun.multiplier; wave = resumeRun.wave;
+  enterGame();
+};
+$('cashoutBtn').onclick = function(){
+  if (phase !== 'playing' || waitingServer || wave < 1) return;
+  waitingServer = true;
+  api('/api/arcade/cashout', { run_id: runId }).then(function(r){
+    balance = r.balance; waitingServer = false;
+    onWin(r.payout, r.multiplier, false, r.cap_applied);
+  }).catch(function(e){ waitingServer = false; toast(errText(e.message)); });
+};
+$('againBtn').onclick = function(){ $('overlay').classList.add('hidden'); startRun(bet); };
+$('toLobbyBtn').onclick = function(){ $('overlay').classList.add('hidden'); toLobby(); };
+$('betInput').addEventListener('input', function(){
+  document.querySelectorAll('.chip-bet').forEach(function(x){ x.classList.remove('sel'); });
+});
+
+resize();
+requestAnimationFrame(frame);
+refreshState();
+</script>
+</body>
+</html>
+"""
+
+
+async def arcade_page_handler(request: web.Request) -> web.Response:
+    return web.Response(text=ARCADE_PAGE_HTML, content_type="text/html")
+
+
+def _arcade_run_public(run) -> dict:
+    from app.arcade import payout_for as _af_payout_for
+    return {
+        "run_id": run.id,
+        "bet": float(run.bet),
+        "wave": int(run.wave),
+        "multiplier": float(run.multiplier),
+        "payout": float(_af_payout_for(run.bet, run.multiplier)),
+    }
+
+
+async def api_arcade_state(request: web.Request) -> web.Response:
+    telegram_user_id = _get_webapp_user_id(request)
+    if not telegram_user_id:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        from app.arcade import expire_stale_runs, get_active_run, load_arcade_config
+        from app.db import async_session
+        from app.services import get_user
+        async with async_session() as session:
+            cfg = await load_arcade_config(session)
+            user = await get_user(session, telegram_user_id)
+            if not user:
+                return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
+            active_run = None
+            if cfg.enabled:
+                await expire_stale_runs(session, user.id, cfg)
+                run = await get_active_run(session, user.id)
+                if run:
+                    active_run = _arcade_run_public(run)
+            return web.json_response({
+                "ok": True,
+                "enabled": cfg.enabled,
+                "balance": float(user.balance),
+                "min_bet": float(cfg.min_bet),
+                "max_bet": float(cfg.max_bet),
+                "max_multiplier": float(cfg.max_multiplier),
+                "daily_profit_cap": float(cfg.daily_profit_cap),
+                "active_run": active_run,
+                "name": user.display_name or user.first_name or "Игрок",
+            })
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def api_arcade_start(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    telegram_user_id = _get_webapp_user_id(request, data)
+    if not telegram_user_id:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        from decimal import Decimal as _Dec
+        bet = _Dec(str(data.get("bet", "0")))
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad_bet"}, status=400)
+    try:
+        from app.arcade import load_arcade_config, start_run
+        from app.db import async_session
+        from app.services import get_user
+        async with async_session() as session:
+            cfg = await load_arcade_config(session)
+            user = await get_user(session, telegram_user_id)
+            if not user:
+                return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
+            run, err = await start_run(session, user, bet, cfg)
+            if err:
+                status = 402 if err == "no_funds" else 400
+                return web.json_response({"ok": False, "error": err}, status=status)
+            await session.refresh(user)
+            return web.json_response({
+                "ok": True,
+                "run": _arcade_run_public(run),
+                "balance": float(user.balance),
+            })
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def _arcade_load_owned_run(session, telegram_user_id: int, run_id: int):
+    """
+    Возвращает (user, run, error_response).
+    ВАЖНО: ошибку проверять через `is not None` — aiohttp Response falsy!
+    """
+    from app.models import ArcadeRun
+    from app.services import get_user
+    user = await get_user(session, telegram_user_id)
+    if not user:
+        return None, None, web.json_response({"ok": False, "error": "user_not_found"}, status=404)
+    run = await session.get(ArcadeRun, run_id)
+    if not run or run.user_id != user.id:
+        return None, None, web.json_response({"ok": False, "error": "not_found"}, status=404)
+    return user, run, None
+
+
+async def api_arcade_wave(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    telegram_user_id = _get_webapp_user_id(request, data)
+    if not telegram_user_id:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        run_id = int(data.get("run_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+    try:
+        from app.arcade import advance_wave, load_arcade_config
+        from app.db import async_session
+        async with async_session() as session:
+            cfg = await load_arcade_config(session)
+            user, run, err = await _arcade_load_owned_run(session, telegram_user_id, run_id)
+            if err is not None:
+                return err
+            if run.status != "active":
+                return web.json_response(
+                    {"ok": False, "error": "not_active", "status": run.status}, status=409
+                )
+            result = await advance_wave(session, run, cfg)
+            await session.refresh(user)
+
+        outcome = result.get("outcome")
+        if outcome == "stale":
+            return web.json_response({"ok": False, "error": "stale"}, status=409)
+        resp = {"ok": True, "outcome": outcome, "balance": float(user.balance)}
+        for key in ("wave", "next_chance"):
+            if key in result:
+                resp[key] = int(result[key])
+        if "multiplier" in result:
+            resp["multiplier"] = float(result["multiplier"])
+        for key in ("payout", "profit"):
+            if key in result:
+                resp[key] = float(result[key])
+        if "cap_applied" in result:
+            resp["cap_applied"] = bool(result["cap_applied"])
+        if result.get("capped"):
+            resp["capped"] = True
+        return web.json_response(resp)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def api_arcade_cashout(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    telegram_user_id = _get_webapp_user_id(request, data)
+    if not telegram_user_id:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        run_id = int(data.get("run_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+    try:
+        from app.arcade import cashout_run, load_arcade_config
+        from app.db import async_session
+        async with async_session() as session:
+            cfg = await load_arcade_config(session)
+            user, run, err = await _arcade_load_owned_run(session, telegram_user_id, run_id)
+            if err is not None:
+                return err
+            result = await cashout_run(session, run, cfg)
+            if not result.get("ok"):
+                status = 409 if result.get("error") in ("stale", "not_active") else 400
+                return web.json_response(
+                    {"ok": False, "error": result.get("error", "cashout_failed")}, status=status
+                )
+            await session.refresh(user)
+            return web.json_response({
+                "ok": True,
+                "payout": float(result["payout"]),
+                "profit": float(result["profit"]),
+                "multiplier": float(result["multiplier"]),
+                "wave": int(result["wave"]),
+                "cap_applied": bool(result["cap_applied"]),
+                "balance": float(user.balance),
+            })
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def api_arcade_top(request: web.Request) -> web.Response:
+    try:
+        from datetime import timedelta as _td
+        from sqlalchemy import func as _func, select as _select
+        from app.arcade import GAME_TYPE as _ARC_GT
+        from app.db import async_session
+        from app.models import GameHistory, User, utc_now as _arc_utc_now
+        week_ago = _arc_utc_now() - _td(days=7)
+        async with async_session() as session:
+            rows = (await session.execute(
+                _select(
+                    User.display_name,
+                    _func.sum(GameHistory.result).label("net"),
+                    _func.count(GameHistory.id).label("games"),
+                )
+                .join(User, User.id == GameHistory.user_id)
+                .where(
+                    GameHistory.game_type == _ARC_GT,
+                    GameHistory.created_at >= week_ago,
+                )
+                .group_by(GameHistory.user_id, User.display_name)
+                .having(_func.sum(GameHistory.result) > 0)
+                .order_by(_func.sum(GameHistory.result).desc())
+                .limit(10)
+            )).all()
+        return web.json_response({
+            "ok": True,
+            "rows": [
+                {"name": name or "Игрок", "net": float(net), "games": int(games)}
+                for (name, net, games) in rows
+            ],
+        })
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is empty")
@@ -2213,6 +2929,7 @@ async def main():
     dp.callback_query.middleware(BanCheckMiddleware())
     dp.include_router(admin_router)
     dp.include_router(user_router)
+    dp.include_router(arcade_router)
     dp.include_router(user_offer_router)
     dp.include_router(donation_router)
     dp.include_router(ai_router)
@@ -2269,6 +2986,14 @@ async def main():
     app.router.add_post("/api/lottery/buy-coins", api_lottery_buy_coins)
     app.router.add_get("/api/lottery/offers", api_lottery_offers)
     app.router.add_post("/api/lottery/place-bet", api_lottery_place_bet)
+
+    # 🚀 Космическая аркада (Mini App)
+    app.router.add_get("/arcade", arcade_page_handler)
+    app.router.add_get("/api/arcade/state", api_arcade_state)
+    app.router.add_post("/api/arcade/start", api_arcade_start)
+    app.router.add_post("/api/arcade/wave", api_arcade_wave)
+    app.router.add_post("/api/arcade/cashout", api_arcade_cashout)
+    app.router.add_get("/api/arcade/top", api_arcade_top)
 
     runner = web.AppRunner(app)
     await runner.setup()
