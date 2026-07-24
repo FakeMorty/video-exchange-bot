@@ -271,19 +271,32 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
     winners_6_cnt = sum(1 for t in tickets if t.matched_count >= n)
     winners_5_cnt = sum(1 for t in tickets if t.matched_count == n - 1)
     winners_4_cnt = sum(1 for t in tickets if t.matched_count == n - 2)
-    
-    # Считаем награду на один билет в каждой категории
+    winners_3_cnt = sum(1 for t in tickets if t.matched_count == n - 3)
+    winners_2_cnt = sum(1 for t in tickets if t.matched_count == n - 4)
+
+    # Распределение призового фонда (должно совпадать с settle_lottery_round):
+    # 3 совпадения — 60%, 4 совпадения — 25%, 5 совпадений — 10%, 6 — 5%.
     per_ticket_6 = to_decimal(0)
     if winners_6_cnt > 0:
-        per_ticket_6 = round((pool * to_decimal(0.70)) / to_decimal(winners_6_cnt), 2)
-        
+        per_ticket_6 = round((pool * to_decimal(0.05)) / to_decimal(winners_6_cnt), 2)
+
     per_ticket_5 = to_decimal(0)
     if winners_5_cnt > 0:
-        per_ticket_5 = round((pool * to_decimal(0.20)) / to_decimal(winners_5_cnt), 2)
-        
+        per_ticket_5 = round((pool * to_decimal(0.10)) / to_decimal(winners_5_cnt), 2)
+
     per_ticket_4 = to_decimal(0)
     if winners_4_cnt > 0:
-        per_ticket_4 = round((pool * to_decimal(0.10)) / to_decimal(winners_4_cnt), 2)
+        per_ticket_4 = round((pool * to_decimal(0.25)) / to_decimal(winners_4_cnt), 2)
+
+    per_ticket_3 = to_decimal(0)
+    if winners_3_cnt > 0:
+        per_ticket_3 = round((pool * to_decimal(0.60)) / to_decimal(winners_3_cnt), 2)
+
+    # Фиксированные выплаты за 2 совпадения (берём из конфига).
+    per_ticket_2 = to_decimal(0)
+    if winners_2_cnt > 0:
+        from app.config import LOTTERY_MATCH2_REWARD
+        per_ticket_2 = to_decimal(LOTTERY_MATCH2_REWARD)
 
     # Группируем билеты по пользователям
     user_tickets = {}
@@ -307,33 +320,48 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
         for idx, t in enumerate(tickets_list, 1):
             matched = t.matched_count
             win_amount = to_decimal(0)
+            shared_with = 0
             if matched >= n:
                 win_amount = per_ticket_6
+                shared_with = winners_6_cnt
             elif matched == n - 1:
                 win_amount = per_ticket_5
+                shared_with = winners_5_cnt
             elif matched == n - 2:
                 win_amount = per_ticket_4
-                
+                shared_with = winners_4_cnt
+            elif matched == n - 3:
+                win_amount = per_ticket_3
+                shared_with = winners_3_cnt
+            elif matched == n - 4:
+                win_amount = per_ticket_2
+                shared_with = winners_2_cnt
+
             total_won += win_amount
             ticket_nums_str = ", ".join(str(n) for n in _deserialize_numbers(t.numbers))
-            
+
             if win_amount > 0:
+                share_note = (
+                    f" (делится на {shared_with} победителей)"
+                    if shared_with > 1
+                    else ""
+                )
                 tickets_info.append(
                     f"🎫 Билет №{t.id} [{ticket_nums_str}]: "
-                    f"совпало {matched} чисел — <b>выигрыш {win_amount} монет!</b> 🎉"
+                    f"совпало {matched} чисел — <b>выигрыш {win_amount} монет</b>{share_note} 🎉"
                 )
             else:
                 tickets_info.append(
                     f"🎫 Билет №{t.id} [{ticket_nums_str}]: "
                     f"совпало {matched} чисел (без выигрыша) 😔"
                 )
-                
+
         tickets_report = "\n".join(tickets_info)
-        
+
         if total_won > 0:
             msg = (
                 f"🎉 <b>РОЗЫГРЫШ ЛОТЕРЕИ #{round_id} ЗАВЕРШЕН!</b>\n\n"
-                f"🔵 <b>Выигрышные номера Столото:</b>\n"
+                f"🔵 <b>Выигрышные номера:</b>\n"
                 f"➡ <b>[ {drawn_nums_str} ]</b>\n\n"
                 f"📝 <b>Результаты ваших билетов:</b>\n"
                 f"{tickets_report}\n\n"
@@ -343,7 +371,7 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
         else:
             msg = (
                 f"🎰 <b>РОЗЫГРЫШ ЛОТЕРЕИ #{round_id} ЗАВЕРШЕН!</b>\n\n"
-                f"🔵 <b>Выигрышные номера Столото:</b>\n"
+                f"🔵 <b>Выигрышные номера:</b>\n"
                 f"➡ <b>[ {drawn_nums_str} ]</b>\n\n"
                 f"📝 <b>Результаты ваших билетов:</b>\n"
                 f"{tickets_report}\n\n"
@@ -389,6 +417,8 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
 
                     drawn_nums = []
                     # Тянем бочонки по одному: один цикл лототрона = 15 секунд.
+                    # Промежуточные результаты НЕ рассылаем — Telegram может за такое
+                    # забанить рассылку. Всё покажем в одном итоговом сообщении.
                     for _step in range(round_obj.numbers_per_ticket):
                         if stop_event.is_set():
                             break
@@ -400,30 +430,12 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                             break
                         drawn_nums.append(next_num)
 
-                        # Рассылаем выпавший бочонок всем участникам
-                        tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_obj.id))).scalars().all()
-                        user_ids = list(set(t.user_id for t in tickets))
-                        users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
-
-                        drawn_str = ", ".join(f"<b>[{n}]</b>" for n in drawn_nums)
-                        msg = (
-                            f"🌀 <b>Лототрон вращается... {LOTTERY_SECONDS_PER_BALL} секунд прошло!</b>\n\n"
-                            f"Из лототрона выпадает бочонок с номером: 🔵 <b>{next_num}</b>! 🎉\n\n"
-                            f"📈 <b>Выпавшие номера на данный момент:</b>\n"
-                            f"➡ {drawn_str}"
-                        )
-                        for u in users:
-                            try:
-                                await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
-                            except Exception:
-                                pass
-                            await asyncio.sleep(0.02)
-                    
                     # Рассчитываем и распределяем выигрыши
                     stats = await settle_lottery_round(session, round_obj)
                     log_info(logger, f"Lottery round #{round_obj.id} settled: {stats}")
-                    
+
                     # Оповещаем участников о подробных результатах
+                    # (включая все выпавшие бочонки)
                     await notify_lottery_results(bot, session, round_obj.id)
         except Exception as e:
             log_info(logger, f"Lottery worker warning: {e}")

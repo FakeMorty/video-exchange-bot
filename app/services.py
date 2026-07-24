@@ -1777,6 +1777,12 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
     normalized_url = normalize_telegram_url(channel_url)
     if not normalized_url:
         raise ValueError("Некорректная ссылка Telegram")
+    # Штраф за отписку не должен превышать итоговую награду:
+    # иначе пользователя штрафуют больше, чем он мог заработать.
+    if to_decimal(penalty_unsubscribe) > to_decimal(reward_final):
+        raise ValueError(
+            "Штраф за отписку не может превышать итоговую награду за оффер."
+        )
     now = utc_now()
     offer = Offer(
         creator_user_id=None,
@@ -2031,7 +2037,6 @@ async def create_promocode(
         return None, 0, f"Срок от 1 до {PROMOCODE_MAX_HOURS} часов."
 
     star_cost = calculate_promocode_star_cost(coin_amount, max_uses)
-    # Dead call removed: is_admin_or_super(creator_tg_id, user)
 
     if not admin_free:
         # Проверка VIP (бесплатный промокод раз в месяц)
@@ -2494,10 +2499,14 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
             winners_2.append(t)
 
     pool = to_decimal(round_obj.prize_pool)
+    # Распределение призового фонда (от частых к редким совпадениям):
+    # 3 совпадения — 60%, 4 совпадения — 25%, 5 совпадений — 10%, 6 (джекпот) — 5%.
+    # Так призы раздаются чаще, а ожидание пользователя совпадает с реальностью.
     payout_map = [
-        (winners_6, to_decimal(0.70), "lottery_win_6"),
-        (winners_5, to_decimal(0.20), "lottery_win_5"),
-        (winners_4, to_decimal(0.10), "lottery_win_4"),
+        (winners_4, to_decimal(0.25), "lottery_win_4"),
+        (winners_3, to_decimal(0.60), "lottery_win_3"),
+        (winners_5, to_decimal(0.10), "lottery_win_5"),
+        (winners_6, to_decimal(0.05), "lottery_win_6"),
     ]
     paid_total = Decimal("0")
     for winner_group, share, source in payout_map:
@@ -2704,30 +2713,34 @@ async def get_current_prices(session: AsyncSession, user_id: int | None = None):
         for k, v in STARS_PACKAGES.items():
             packs[k] = {"stars": v["stars"], "coins": v["coins"], "title": v["title"]}
 
-        # Применяем скидки от событий
-        total_discount = 0
+        # Приоритет систем скидок (берётся максимальная, не суммируются):
+        # 1) Event — гибкая система скидок (applies_vip / applies_coins).
+        # 2) ActiveSale — старая система, используется только если нет Event.
+        # Так пользователь не получает «сюрприз» с двойной скидкой.
+        best_discount = 0.0
+        applies_vip = False
+        applies_coins = False
         if active_events:
             for ev in active_events:
-                total_discount = max(total_discount, ev.discount_percent)
+                if ev.discount_percent > best_discount:
+                    best_discount = ev.discount_percent
+                    # Берём флаги события с самой большой скидкой
+                    applies_vip = ev.applies_vip
+                    applies_coins = ev.applies_coins
+        elif sale:
+            best_discount = sale.discount_percent
+            applies_vip = sale.applies_to in ("all", "vip")
+            applies_coins = sale.applies_to in ("all", "coins")
 
-        if total_discount > 0:
-            discount = total_discount / 100.0
-            if any(e.applies_vip for e in active_events):
+        if best_discount > 0:
+            discount = best_discount / 100.0
+            if applies_vip:
                 vip_price = _discount_stars_amount(vip_price, discount)
-            if any(e.applies_coins for e in active_events):
+            if applies_coins:
                 for k in packs:
                     packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], discount)
 
-        # Также применяем старую систему ActiveSale
-        if sale:
-            discount = sale.discount_percent / 100.0
-            if sale.applies_to in ("all", "vip"):
-                vip_price = _discount_stars_amount(vip_price, discount)
-            if sale.applies_to in ("all", "coins"):
-                for k in packs:
-                    packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], discount)
-
-        # Персональная скидка за перк действует поверх акций/сейлов.
+        # Персональная скидка за перк — отдельная от акций, накладывается сверху.
         if user_id is not None:
             stars_discount = await get_stars_discount(session, user_id)
             if stars_discount > 0:
