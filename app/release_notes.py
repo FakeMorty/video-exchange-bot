@@ -39,7 +39,7 @@ def get_recent_changelog_items(limit: int = 8) -> list[str]:
 def build_version_text(*, admin: bool = False, limit: int = 8) -> str:
     items = get_recent_changelog_items(limit=limit)
     if not items:
-        items = ["История изменений пока недоступна. Проверьте файл CHANGELOG.md."]
+        items = ["История изменений пока недоступна. Проверь файл CHANGELOG.md."]
 
     text = (
         "🤖 <b>ИНФОРМАЦИЯ О ВЕРСИИ И ИЗМЕНЕНИЯХ</b>\n"

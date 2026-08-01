@@ -112,7 +112,7 @@ async def arcade_howto(callback: CallbackQuery):
 async def arcade_to_games(callback: CallbackQuery):
     from app.keyboards import games_menu_keyboard
     await callback.message.answer(
-        "🎮 <b>Игровой центр</b>\n\nВыберите раздел:",
+        "🎮 <b>Игровой центр</b>\n\nВыбери раздел:",
         parse_mode="HTML",
         reply_markup=games_menu_keyboard(),
     )

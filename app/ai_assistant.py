@@ -182,7 +182,7 @@ def _pick_sticker_for_text(text: str, character: str = "katya") -> str | None:
 
     text_lower = text.lower()
 
-    # Ищем совпадение по ключевым словам
+    # Ищем совпадение по ключевым слотебе
     matched_keyword = None
     matched_sticker_name = None
     for keyword, sticker_name in _STICKER_EMOTION_MAP.items():
@@ -719,7 +719,7 @@ async def katya_new_chat_menu(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.message.edit_text(
-        "🤖 <b>Выберите вашего виртуального собеседника:</b>\n\n"
+        "🤖 <b>Выбери твоего виртуального собеседника:</b>\n\n"
         "• <b>Катя</b> — весёлая, гибкая гимнастка-старшеклассница. 🥰\n"
         "• <b>Софа</b> — саркастичная готка, анимешница и геймерша. 🖤\n"
         "• <b>Саня</b> — брутальный фитнес-тренер, качок и борец. 🏋️‍♂️",

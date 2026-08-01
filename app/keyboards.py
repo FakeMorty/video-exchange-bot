@@ -254,7 +254,7 @@ def tops_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="👁 Топ зрителей", callback_data="top_viewers")],
         [InlineKeyboardButton(text="⭐ Топ по XP", callback_data="top_levels")],
         [InlineKeyboardButton(text="💰 Топ богатых", callback_data="top_richest")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="btn_main_menu")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="btn_main_menu")],
     ])
 
 

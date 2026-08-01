@@ -1269,7 +1269,7 @@ def _render_user_report_sync(data: dict, output_path: Path):
         content = data["content"]
         story.append(_section_banner("3. Контент и активность", font_name, bg="#1D4ED8"))
         story.append(Spacer(1, 0.1 * cm))
-        content_table = [["Метрика", "Значение"], ["Загружено видео", str(content["videos"])], ["Загружено фото", str(content["photos"])], ["Одобрено", str(content["approved"])], ["Отклонено", str(content["rejected"])], ["На модерации", str(content["pending"])], ["Доля одобрения", _fmt_pct(content["approval_rate_pct"])], ["Средний рейтинг", str(content["avg_rating"])], ["Просмотры вашего контента", str(content["own_content_views"])], ["Ваши просмотры", str(content["own_views"])], ["Комментарии", str(content["comments"])], ["Реакции", str(content["reactions"])]]
+        content_table = [["Метрика", "Значение"], ["Загружено видео", str(content["videos"])], ["Загружено фото", str(content["photos"])], ["Одобрено", str(content["approved"])], ["Отклонено", str(content["rejected"])], ["На модерации", str(content["pending"])], ["Доля одобрения", _fmt_pct(content["approval_rate_pct"])], ["Средний рейтинг", str(content["avg_rating"])], ["Просмотры твоего контента", str(content["own_content_views"])], ["Твои просмотры", str(content["own_views"])], ["Комментарии", str(content["comments"])], ["Реакции", str(content["reactions"])]]
         story.append(_table(content_table, font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_table([["Эффективность контента", "Значение"], ["Всего загрузок", str(content["efficiency"]["uploads_total"])], ["Одобрено", _fmt_pct(content["efficiency"]["approved_share_pct"])], ["Просмотров на загрузку", _fmt_dec(content["efficiency"]["views_per_upload"])], ["Просмотров на одобренную загрузку", _fmt_dec(content["efficiency"]["views_per_approved_upload"])]], font_name, col_widths=[7 * cm, 8.5 * cm]))
@@ -1377,7 +1377,7 @@ def _render_user_report_sync(data: dict, output_path: Path):
 
         story.append(_section_banner("8. Итоговый профиль", font_name, bg="#1E293B"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_bullet(f"Вы больше похожи на: <b>{data['insights']['dominant']}</b>", styles))
+        story.append(_bullet(f"Ты больше похожи на: <b>{data['insights']['dominant']}</b>", styles))
         story.append(_bullet(f"Основной источник дохода: <b>{data['insights']['top_income']}</b>", styles))
         story.append(_bullet(f"Основной источник расходов: <b>{data['insights']['top_expense']}</b>", styles))
         story.append(_bullet(data['insights']['balance_comment'], styles))

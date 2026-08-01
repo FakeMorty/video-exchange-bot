@@ -39,7 +39,7 @@ from app.config import (
     ENABLE_ADMIN_FREE,
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
-    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER,
+    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT,
     LEVEL_XP_BASE, LEVEL_XP_MULTIPLIER,
     DAILY_QUESTS, PREMIUM_DAILY_QUESTS,
     COMMENTS_PER_10_MIN,
@@ -166,7 +166,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                 message.from_user.last_name,
             )
             if user.status == "banned":
-                await message.answer("🚫 Вы заблокированы в боте.")
+                await message.answer("🚫 Доступ к боту для тебя заблокирован.")
                 return
             result = await activate_promocode(session, user.id, promo_code)
             await message.answer(result)
@@ -200,7 +200,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             referral_code,
         )
         if user.status == "banned":
-            await message.answer("🚫 Вы заблокированы в боте.")
+            await message.answer("🚫 Доступ к боту для тебя заблокирован.")
             return
 
         if is_new:
@@ -239,7 +239,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             if needs_fix:
                 await message.answer(
                     "👋 С возвращением!\n\n"
-                    "⚠️ У вас недопустимый ник (например <code>User&lt;id&gt;</code>).\n"
+                    "⚠️ У тебя недопустимый ник (например <code>User&lt;id&gt;</code>).\n"
                     "Нужно поставить <b>нормальный ник</b> — это бесплатно.\n\n"
                     f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
                     f"• Только буквы (рус/лат), цифры, _ и -\n"
@@ -546,7 +546,7 @@ async def _level_up_check(session, user, message_or_callback):
         target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
         try:
             await target.answer(
-                f"🎉 Поздравляем! Вы достигли уровня <b>{new_level}</b>!",
+                f"🎉 Поздравляем! Ты достиг уровня <b>{new_level}</b>!",
                 parse_mode="HTML"
             )
         except Exception:
@@ -569,7 +569,7 @@ async def set_nickname_start(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(NicknameState.waiting_nickname)
     await callback.message.answer(
-        f"✏️ Введите ник ({cost_text}):\n\n"
+        f"✏️ Введи ник ({cost_text}):\n\n"
         f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
         f"• Буквы (рус/лат), цифры, _ или -\n"
         f"• Без точек, пробелов, ? и спецсимволов\n"
@@ -665,8 +665,8 @@ async def send_welcome_banner(message_or_callback, session, user):
         ])
         await target.answer(
             "🎁 <b>Подарок новичку!</b>\n\n"
-            "Заберите бесплатный стартовый лутбокс. Внутри — красивое круглое число от 50 до 400 монет.\n"
-            "Это ваш приветственный бонус на старт!",
+            "Забери бесплатный стартовый лутбокс. Внутри — красивое круглое число от 50 до 400 монет.\n"
+            "Это твой приветственный бонус на старт!",
             parse_mode="HTML",
             reply_markup=lootbox_kb,
         )
@@ -707,9 +707,9 @@ async def accept_rules(callback: CallbackQuery):
     await callback.message.answer(
         "✅ Правила приняты!\n\n"
         + (
-            "У вас недопустимый ник — поставьте нормальный. Это бесплатно.\n"
+            "У тебя недопустимый ник — поставь нормальный. Это бесплатно.\n"
             if needs_fix else
-            "Теперь установите нормальный ник. Первая установка бесплатна.\n"
+            "Теперь установи нормальный ник. Первая установка бесплатна.\n"
         )
         + f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
         + f"• Только буквы (рус/лат), цифры, _ и -\n"
@@ -724,6 +724,20 @@ async def accept_rules(callback: CallbackQuery):
 # =========================
 # ADMIN REDIRECT
 # =========================
+@router.callback_query(F.data == "btn_main_menu")
+async def cb_main_menu(callback: CallbackQuery):
+    """Возвращает пользователя из inline-меню к главному меню бота."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        admin_flag = is_any_admin(callback.from_user.id, user)
+    await callback.message.answer(
+        "🏠 <b>Главное меню</b>\n\nВыбери нужный раздел:",
+        parse_mode="HTML",
+        reply_markup=main_menu(is_admin=admin_flag),
+    )
+    await callback.answer()
+
+
 @router.message(F.text == BTN_ADMIN)
 async def cmd_admin_redirect(message: Message):
     async with async_session() as session:
@@ -842,13 +856,22 @@ async def show_vip(message: Message, state: FSMContext):
             if not await require_nickname(message, user):
                 return
 
+            vip_discount = VIP_WATCH_DISCOUNT
+            db_vip_discount = await get_setting(session, "vip_watch_discount", "")
+            if db_vip_discount:
+                try:
+                    vip_discount = float(db_vip_discount)
+                except (TypeError, ValueError):
+                    pass
+            vip_discount_percent = max(0, min(100, round((1 - vip_discount) * 100)))
+
             if is_vip(user):
                 await message.answer(
-                    f"👑 <b>Вы VIP!</b>\n\n"
+                    f"👑 <b>Ты VIP!</b>\n\n"
                     f"До: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
                     f"Привилегии:\n"
                     f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-                    f"• Скидка 50% на просмотр\n"
+                    f"• Скидка {vip_discount_percent}% на просмотр\n"
                     f"• Приоритет и бонусы в экономике",
                     parse_mode="HTML"
                 )
@@ -871,7 +894,7 @@ async def show_vip(message: Message, state: FSMContext):
                     f"Длительность: {VIP_DURATION_DAYS} дней\n\n"
                     f"Привилегии:\n"
                     f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-                    f"• Скидка 50% на просмотр\n"
+                    f"• Скидка {vip_discount_percent}% на просмотр\n"
                     f"• Приоритет и бонусы в экономике",
                     parse_mode="HTML",
                     reply_markup=vip_buy_keyboard(vip_price)
@@ -891,6 +914,15 @@ async def buy_vip(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
+
+        vip_discount = VIP_WATCH_DISCOUNT
+        db_vip_discount = await get_setting(session, "vip_watch_discount", "")
+        if db_vip_discount:
+            try:
+                vip_discount = float(db_vip_discount)
+            except (TypeError, ValueError):
+                pass
+        vip_discount_percent = max(0, min(100, round((1 - vip_discount) * 100)))
 
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
         if not admin_free:
@@ -931,7 +963,7 @@ async def buy_vip(callback: CallbackQuery):
             f"VIP до: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
             f"Привилегии:\n"
             f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-            f"• Скидка 50% на просмотр\n"
+            f"• Скидка {vip_discount_percent}% на просмотр\n"
             f"• Приоритет и бонусы в экономике",
             parse_mode="HTML",
         )
@@ -950,7 +982,7 @@ async def btn_watch(message: Message, state: FSMContext):
         if not user:
             return
         if user.status == "banned":
-            await message.answer("🚫 Вы заблокированы.")
+            await message.answer("🚫 Доступ к боту для тебя заблокирован.")
             return
         if not await require_nickname(message, user):
             return
@@ -1007,7 +1039,7 @@ async def watch_video_content(callback: CallbackQuery):
                     await callback.message.answer(
                         f"💸 <b>Монет не хватает</b>\n\n"
                         f"Для просмотра нужно: <b>{_fmt_coins(cost)}</b> монет\n"
-                        f"У вас сейчас: <b>{_fmt_coins(user.balance)}</b> монет\n"
+                        f"У тебя сейчас: <b>{_fmt_coins(user.balance)}</b> монет\n"
                         f"Не хватает: <b>{_fmt_coins(missing)}</b> монет\n"
                         f"{suggested_text}\n\n"
                         f"Что можно сделать прямо сейчас:\n"
@@ -1021,7 +1053,7 @@ async def watch_video_content(callback: CallbackQuery):
                 else:
                     await callback.message.answer(
                         f"❌ <b>Недостаточно монет.</b>\n\n"
-                        f"Нужно: <b>{_fmt_coins(cost)}</b>, у вас: <b>{_fmt_coins(user.balance)}</b>."
+                        f"Нужно: <b>{_fmt_coins(cost)}</b>, у тебя: <b>{_fmt_coins(user.balance)}</b>."
                         f"{suggested_text}\n\n"
                         f"Реферальная ссылка:\n<code>{ref_link}</code>",
                         parse_mode="HTML",
@@ -1046,7 +1078,7 @@ async def watch_video_content(callback: CallbackQuery):
                     await callback.message.answer(
                         "⚠️ <b>Не удалось начать просмотр.</b>\n\n"
                         "Возможно, баланс изменился или это видео уже просмотрено.\n"
-                        "Нажмите кнопку ниже — попробуем другое видео.",
+                        "Нажми кнопку ниже — попробуем другое видео.",
                         parse_mode="HTML",
                         reply_markup=video_error_keyboard(),
                     )
@@ -1118,8 +1150,8 @@ async def watch_video_content(callback: CallbackQuery):
             else:
                 await callback.message.answer(
                     "😔 <b>Пока нет новых видео для вас.</b>\n\n"
-                    "Вы посмотрели всё доступное!\n"
-                    "Загрузите своё видео (кнопка 📤 Загрузить в меню), чтобы другие тоже смотрели.\n"
+                    "Доступный контент закончился!\n"
+                    "Загрузи своё видео (кнопка 📤 Загрузить в меню), чтобы другие тоже смотрели.\n"
                     "А пока можно посмотреть фото.",
                     parse_mode="HTML",
                     reply_markup=video_error_keyboard(),
@@ -1130,7 +1162,7 @@ async def watch_video_content(callback: CallbackQuery):
             await callback.message.answer(
                 "🛠 <b>Не получилось показать видео.</b>\n\n"
                 "Произошёл кратковременный сбой — это не значит, что видео нет.\n"
-                "Попробуйте ещё раз, следующее должно открыться нормально.",
+                "Попробуй ещё раз, следующее должно открыться нормально.",
                 parse_mode="HTML",
                 reply_markup=video_error_keyboard(),
             )
@@ -1191,7 +1223,7 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
                 f"📢 <b>Рекомендация</b>\n\n"
                 f"<b>{offer.title}</b>\n"
                 f"{offer.description}\n\n"
-                f"💰 За подписку получите <b>{offer.reward_preview} монет</b>!"
+                f"💰 За подписку получи <b>{offer.reward_preview} монет</b>!"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="👉 Подписаться", url=offer.channel_url)],
@@ -1283,8 +1315,8 @@ async def watch_photo_content(callback: CallbackQuery):
             else:
                 await callback.message.answer(
                     "😔 <b>Пока нет новых фото для вас.</b>\n\n"
-                    "Вы посмотрели всё доступное!\n"
-                    "Загрузите своё фото (кнопка 📤 Загрузить в меню) или посмотрите видео.",
+                    "Доступный контент закончился!\n"
+                    "Загрузи своё фото (кнопка 📤 Загрузить в меню) или посмотри видео.",
                     parse_mode="HTML",
                     reply_markup=photo_error_keyboard(),
                 )
@@ -1294,7 +1326,7 @@ async def watch_photo_content(callback: CallbackQuery):
             await callback.message.answer(
                 "🛠 <b>Не получилось показать фото.</b>\n\n"
                 "Кратковременный сбой — это не значит, что фото нет.\n"
-                "Попробуйте ещё раз, или перейдите к видео.",
+                "Попробуй ещё раз или перейди к видео.",
                 parse_mode="HTML",
                 reply_markup=photo_error_keyboard(),
             )
@@ -1381,7 +1413,7 @@ async def add_comment_start(callback: CallbackQuery, state: FSMContext):
     video_id = int(callback.data.split(":")[1])
     await state.set_state(CommentState.waiting_text)
     await state.update_data(video_id=video_id)
-    await callback.message.answer("✏️ Напишите комментарий:")
+    await callback.message.answer("✏️ Напиши комментарий:")
     await callback.answer()
 
 
@@ -1437,7 +1469,7 @@ async def process_comment(message: Message, state: FSMContext):
 async def cb_reactions_menu(callback: CallbackQuery):
     video_id = int(callback.data.split(":")[1])
     await callback.message.answer(
-        "Выберите реакцию:",
+        "Выбери реакцию:",
         reply_markup=reaction_menu_keyboard(video_id)
     )
     await callback.answer()
@@ -1503,13 +1535,13 @@ async def btn_upload(message: Message, state: FSMContext):
         if not user:
             return
         if user.status == "banned":
-            await message.answer("🚫 Вы заблокированы.")
+            await message.answer("🚫 Доступ к боту для тебя заблокирован.")
             return
         if not await require_nickname(message, user):
             return
     await message.answer(
-        "📤 Отправьте видео или фото.\n\n"
-        "После проверки модератором вы получите монеты!"
+        "📤 Отправь видео или фото.\n\n"
+        "После проверки модератором ты получишь монеты!"
     )
 
 
@@ -1658,7 +1690,7 @@ async def btn_referrals(message: Message, state: FSMContext):
         f"• зарегистрировался\n"
         f"• стал активным\n"
         f"• награда начислена\n\n"
-        f"Ваша ссылка:\n<code>{ref_link}</code>\n\n"
+        f"Твоя ссылка:\n<code>{ref_link}</code>\n\n"
         f"Приглашено: <b>{refs}</b>\n"
         f"Заработано: <b>{_fmt_coins(user.referral_earnings)}</b> монет"
         f"{milestone_text}",
@@ -1713,7 +1745,7 @@ async def btn_buy(message: Message, state: FSMContext):
             f"• <b>500 монет</b> — быстрый старт\n"
             f"• <b>1 000 монет</b> — популярный пакет\n"
             f"• <b>2 200 монет</b> — самый выгодный\n\n"
-            f"Выберите пакет:",
+            f"Выбери пакет:",
             parse_mode="HTML",
             reply_markup=buy_coins_keyboard(packs)
         )
@@ -1766,7 +1798,7 @@ async def cb_buy_pack(callback: CallbackQuery):
                 f"🆓 <b>ADMIN FREE</b> — бесплатно!\n\n"
                 f"Получено: <b>{coins} монет</b>\n"
                 f"Бонус первой покупки: +<b>{int(bonus)} монет</b>\n\n"
-                f"Ваш баланс: <b>{_fmt_coins(user.balance)}</b> монет",
+                f"Твой баланс: <b>{_fmt_coins(user.balance)}</b> монет",
                 parse_mode="HTML",
             )
             await callback.answer("🆓 Пополнено бесплатно!", show_alert=True)
@@ -1792,14 +1824,14 @@ async def cb_buy_pack(callback: CallbackQuery):
 @router.callback_query(F.data == "buy_custom")
 async def cb_buy_custom(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CustomBuyState.waiting_stars)
-    await callback.message.answer("💫 Введите количество Stars (мин. 1):")
+    await callback.message.answer("💫 Введи количество Stars (мин. 1):")
     await callback.answer()
 
 
 @router.message(CustomBuyState.waiting_stars)
 async def process_custom_stars(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
-        await message.answer("❌ Введите целое число.")
+        await message.answer("❌ Введи целое число.")
         return
     stars = int(message.text)
     if stars < 1:
@@ -1834,7 +1866,7 @@ async def process_custom_stars(message: Message, state: FSMContext):
                 f"🆓 <b>ADMIN FREE</b> — бесплатно!\n\n"
                 f"Получено: <b>{coins} монет</b>\n"
                 f"Бонус первой покупки: +<b>{int(bonus)} монет</b>\n\n"
-                f"Ваш баланс: <b>{_fmt_coins(user.balance)}</b> монет",
+                f"Твой баланс: <b>{_fmt_coins(user.balance)}</b> монет",
                 parse_mode="HTML",
             )
             await state.clear()
@@ -2088,7 +2120,7 @@ async def successful_payment(message: Message):
                 if not offer or offer.creator_user_id != user.id:
                     await session.rollback()
                     session.expunge_all()
-                    await message.answer("Ошибка платежа: оффер не найден или не принадлежит вам.")
+                    await message.answer("Ошибка платежа: оффер не найден или не принадлежит тебе.")
                     return
 
                 offer.status = "pending"
@@ -2112,7 +2144,7 @@ async def successful_payment(message: Message):
                     pass
 
                 await message.answer(
-                    "✅ Оплата прошла успешно! Ваш оффер отправлен на модерацию.\n"
+                    "✅ Оплата прошла успешно! Твой оффер отправлен на модерацию.\n"
                     "Он появится в списке, как только администратор его одобрит."
                 )
         except Exception:
@@ -2440,12 +2472,12 @@ async def styles_lootbox_menu(callback: CallbackQuery, state: FSMContext):
     
     text = (
         "🎨 <b>Кейс ников</b>\n\n"
-        "В этом кейсе вы можете выбить кастомный стиль для ника на 7 дней.\n"
+        "В этом кейсе ты можешь выбить кастомный стиль для ника на 7 дней.\n"
         "• Шанс 50%: Рандомный стиль\n"
         "• Шанс 50%: Утешительный приз 10-250 монет\n\n"
         f"<b>Текущая цена:</b> {price:.0f} монет\n"
         f"<b>Доступно стилей:</b> {remaining}/{total}\n\n"
-        "Выберите категорию ниже, чтобы настроить доступные стили точечно. "
+        "Выбери категорию ниже, чтобы настроить доступные стили точечно. "
         "Удаление стилей повышает шанс на остальные, но <b>увеличивает цену</b>."
     )
     
@@ -2468,7 +2500,7 @@ async def styles_lootbox_menu_refresh(callback: CallbackQuery, state: FSMContext
         "🎨 <b>Кейс ников</b>\n\n"
         f"<b>Текущая цена:</b> {price:.0f} монет\n"
         f"<b>Доступно стилей:</b> {remaining}/{total}\n\n"
-        "Выберите категорию для точечной настройки:"
+        "Выбери категорию для точечной настройки:"
     )
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_styles_case_kb(excluded_ids, price))
@@ -2486,7 +2518,7 @@ async def styles_case_view_cat(callback: CallbackQuery, state: FSMContext):
     
     text = (
         f"{icon} <b>Категория: {name}</b>\n\n"
-        "Нажмите на стиль, чтобы включить или исключить его из кейса."
+        "Нажми на стиль, чтобы включить или исключить его из кейса."
     )
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_styles_list_kb(cat_id, excluded_ids))
@@ -2579,12 +2611,12 @@ async def styles_case_open(callback: CallbackQuery, state: FSMContext):
             f"✨ <b>ВЫ ВЫИГРАЛИ СТИЛЬ!</b>\n\n"
             f"Название: <b>{label}</b>\n"
             f"Вид: <code>{preview}</code>\n\n"
-            f"Стиль активирован на 7 дней! Вы можете увидеть его в профиле."
+            f"Стиль активирован на 7 дней! Ты можешь увидеть его в профиле."
         )
     else:
         msg = (
             f"🪙 <b>Утешительный приз!</b>\n\n"
-            f"Вы получили <b>{reward:.0f} монет</b> на баланс."
+            f"Тебе начислено <b>{reward:.0f} монет</b>."
         )
         
     await callback.message.answer(msg, parse_mode="HTML")
@@ -2613,7 +2645,7 @@ async def btn_offers(message: Message, state: FSMContext):
 
     from app.user_offer_handlers import user_offers_menu
     await message.answer(
-        "📢 <b>Офферы</b>\n\nВыберите раздел:",
+        "📢 <b>Офферы</b>\n\nВыбери раздел:",
         parse_mode="HTML",
         reply_markup=user_offers_menu()
     )
@@ -2630,7 +2662,7 @@ async def offers_participation(callback: CallbackQuery):
         return
 
     await callback.message.answer(
-        "📢 <b>Офферы для участия</b>\n\nВыберите оффер:",
+        "📢 <b>Офферы для участия</b>\n\nВыбери оффер:",
         parse_mode="HTML",
         reply_markup=offers_list_keyboard(offers)
     )
@@ -2663,7 +2695,7 @@ async def cb_offer_open(callback: CallbackQuery):
     target_meta = classify_offer_url(offer.channel_url)
     target_url = normalize_telegram_url(offer.channel_url)
     if not target_url:
-        await callback.answer("У оффера некорректная ссылка. Сообщите администратору.", show_alert=True)
+        await callback.answer("У оффера некорректная ссылка. Сообщи администратору.", show_alert=True)
         return
     verify_text = (
         "Финальная награда выдаётся после автоматической проверки участия."
@@ -2736,8 +2768,8 @@ async def cb_offer_start_confirm(callback: CallbackQuery):
     )
     text = (
         "⚠️ <b>Важно перед участием</b>\n\n"
-        "Вы получите монеты за участие в оффере.\n"
-        "Если после получения награды вы отпишетесь:\n"
+        "Ты получишь монеты за участие в оффере.\n"
+        "Если после получения награды ты отпишешься:\n"
         "• награда будет забрана назад\n"
         "• при повторных нарушениях может быть дополнительный штраф\n"
         "• первые 15 минут после входа считаются grace period без доп. штрафа\n"
@@ -2762,7 +2794,7 @@ async def cb_offer_start(callback: CallbackQuery):
         (callback.from_user.id, "offer_start"),
         OFFER_ACTION_COOLDOWN_SECONDS,
     ):
-        await callback.answer("⏳ Слишком часто. Попробуйте через пару секунд.", show_alert=True)
+        await callback.answer("⏳ Слишком часто. Попробуй через пару секунд.", show_alert=True)
         return
     offer_id = int(callback.data.split(":")[1])
     async with async_session() as session:
@@ -2775,14 +2807,14 @@ async def cb_offer_start(callback: CallbackQuery):
             await callback.answer("Оффер не найден.", show_alert=True)
             return
         if not is_new:
-            await callback.answer("Вы уже участвуете!", show_alert=True)
+            await callback.answer("Ты уже участвуешь!", show_alert=True)
             return
         offer = await get_offer_by_id(session, offer_id)
 
     paid = to_decimal(part.reward_given)
     target_meta = classify_offer_url(offer.channel_url)
     cap_note = "" if paid == to_decimal(offer.reward_preview) else "\n⚠️ Сработал дневной лимит наград."
-    next_step = "Откройте проект и потом нажмите кнопку подтверждения." if not target_meta["auto_verify"] else "Подпишитесь и нажмите кнопку проверки."
+    next_step = "Открой проект и потом нажми кнопку подтверждения." if not target_meta["auto_verify"] else "Подпишитесь и нажми кнопку проверки."
     await callback.answer(
         f"✅ Получено {paid} монет!\n"
         f"{next_step}{cap_note}",
@@ -2797,7 +2829,7 @@ async def cb_offer_check(callback: CallbackQuery):
         (callback.from_user.id, "offer_check"),
         OFFER_ACTION_COOLDOWN_SECONDS,
     ):
-        await callback.answer("⏳ Слишком часто. Попробуйте через пару секунд.", show_alert=True)
+        await callback.answer("⏳ Слишком часто. Попробуй через пару секунд.", show_alert=True)
         return
     offer_id = int(callback.data.split(":")[1])
     async with async_session() as session:
@@ -2854,8 +2886,8 @@ async def offers_rent_list(callback: CallbackQuery):
     text = "📣 <b>Аренда рекламных слотов</b>\n\n"
     text += (
         "Арендуйте слот в оффере и рекламируйте свой канал!\n"
-        "Ваш канал будет показан всем участникам оффера.\n\n"
-        "Выберите оффер:"
+        "Твой канал будет показан всем участникам оффера.\n\n"
+        "Выбери оффер:"
     )
     kb_buttons = []
     for offer, reserved_count in offer_rows:
@@ -2885,7 +2917,7 @@ async def offers_rent_list(callback: CallbackQuery):
 async def btn_offers_back(callback: CallbackQuery):
     from app.user_offer_handlers import user_offers_menu
     await callback.message.answer(
-        "📢 <b>Офферы</b>\n\nВыберите раздел:",
+        "📢 <b>Офферы</b>\n\nВыбери раздел:",
         parse_mode="HTML",
         reply_markup=user_offers_menu()
     )
@@ -2906,7 +2938,7 @@ async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
 
     if slots_left <= 0:
         await callback.answer(
-            "❌ Все слоты заняты. Попробуйте позже.",
+            "❌ Все слоты заняты. Попробуй позже.",
             show_alert=True
         )
         return
@@ -2917,7 +2949,7 @@ async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
         f"📣 <b>Аренда слота в: {escape(offer.title)}</b>\n\n"
         f"💰 Стоимость: {offer.rent_cost_per_day} монет/день\n"
         f"Свободных слотов: {slots_left}/{offer.max_simultaneous_rentals}\n\n"
-        f"Шаг 1/3: Введите название вашего канала:",
+        f"Шаг 1/3: Введи название твоего канала:",
         parse_mode="HTML"
     )
     await callback.answer()
@@ -2932,7 +2964,7 @@ async def rent_channel_title(message: Message, state: FSMContext):
     await state.update_data(channel_title=title)
     await state.set_state(RentOfferState.waiting_channel_url)
     await message.answer(
-        "Шаг 2/3: Введите ссылку на ваш канал (https://t.me/...):"
+        "Шаг 2/3: Введи ссылку на твой канал (https://t.me/...):"
     )
 
 
@@ -2949,7 +2981,7 @@ async def rent_channel_url(message: Message, state: FSMContext):
     offer_id = data.get("offer_id")
 
     await message.answer(
-        f"Шаг 3/3: Выберите количество дней аренды\n"
+        f"Шаг 3/3: Выбери количество дней аренды\n"
         f"(от {OFFER_MIN_RENT_DAYS} до {OFFER_MAX_RENT_DAYS}):",
         reply_markup=rent_days_keyboard(offer_id)
     )
@@ -2998,11 +3030,11 @@ async def rent_days_selected(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"📣 <b>Подтверждение аренды</b>\n\n"
         f"Оффер: {escape(offer.title)}\n"
-        f"Ваш канал: {escape(channel_title)}\n"
+        f"Твой канал: {escape(channel_title)}\n"
         f"Ссылка: {escape(channel_url)}\n"
         f"Дней: {days}\n"
         f"Стоимость: <b>{cost} монет</b>\n"
-        f"Ваш баланс: {user.balance} монет\n\n"
+        f"Твой баланс: {user.balance} монет\n\n"
         f"После оплаты аренда уйдёт на проверку администратору.",
         parse_mode="HTML",
         reply_markup=kb
@@ -3069,8 +3101,8 @@ async def confirm_rent(callback: CallbackQuery, state: FSMContext):
         f"Канал: {escape(channel_title)}\n"
         f"Дней: {days}\n"
         f"Стоимость: {rental.cost_paid} монет\n\n"
-        f"После одобрения администратором ваш канал будет активен в оффере.\n"
-        f"Вы получите уведомление.",
+        f"После одобрения администратором твой канал будет активен в оффере.\n"
+        f"Ты получишь уведомление.",
         parse_mode="HTML"
     )
     await state.clear()
@@ -3088,7 +3120,7 @@ async def my_rentals(callback: CallbackQuery):
 
         if not rentals:
             await callback.message.answer(
-                "У вас нет аренд.\n"
+                "У тебя нет аренд.\n"
                 "Арендуйте рекламный слот в разделе 📣 Офферы!"
             )
             await callback.answer()
@@ -3135,7 +3167,7 @@ async def btn_games(message: Message, state: FSMContext):
             return
 
     await message.answer(
-        "🎮 <b>Игровой центр</b>\n\nВыберите раздел:",
+        "🎮 <b>Игровой центр</b>\n\nВыбери раздел:",
         parse_mode="HTML",
         reply_markup=games_menu_keyboard()
     )
@@ -3327,7 +3359,7 @@ async def forced_offer_continue(callback: CallbackQuery):
             await callback.message.answer(
                 f"💡 Кстати, за подписку на <b>{offer.title}</b> "
                 f"можно получить <b>{offer.reward_preview} монет</b>!\n"
-                f"Хотите заработать?",
+                f"Хочешь заработать?",
                 parse_mode="HTML",
                 reply_markup=kb
             )
@@ -3491,7 +3523,7 @@ def _format_lottery_purchase_summary(tickets: list[LotteryTicket], total_cost: D
 
     preview_limit = 5
     lines.append("")
-    lines.append("<b>Ваши билеты:</b>")
+    lines.append("<b>Твои билеты:</b>")
     for ticket in tickets[:preview_limit]:
         lines.append(f"• #{ticket.id}: <code>{ticket.numbers}</code>")
     if qty > preview_limit:
@@ -3545,7 +3577,7 @@ async def lottery_buy(callback: CallbackQuery, state: FSMContext):
             "🎫 <b>Покупка билетов</b>\n\n"
             f"Цена одного билета: <b>{_fmt_coins(round_obj.ticket_price)}</b> монет\n"
             f"Сейчас можно купить до: <b>{max_count}</b> билет(ов)\n\n"
-            "Выберите количество, нажмите «Максимум» или введите своё число.",
+            "Выбери количество, нажми «Максимум» или введи своё число.",
             parse_mode="HTML",
             reply_markup=_lottery_buy_kb(max_count),
         )
@@ -3583,7 +3615,7 @@ async def lottery_buy_max(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "lottery_buy_custom")
 async def lottery_buy_custom(callback: CallbackQuery, state: FSMContext):
     await state.set_state(LotteryBuyState.waiting_quantity)
-    await callback.message.answer("✏️ Введите количество билетов, которое хотите купить:")
+    await callback.message.answer("✏️ Введи количество билетов, которое хочешь купить:")
     await callback.answer()
 
 
@@ -3591,7 +3623,7 @@ async def lottery_buy_custom(callback: CallbackQuery, state: FSMContext):
 async def lottery_buy_custom_input(message: Message, state: FSMContext):
     value = (message.text or "").strip()
     if not value.isdigit():
-        await message.answer("❌ Введите целое число билетов.")
+        await message.answer("❌ Введи целое число билетов.")
         return
     quantity = int(value)
     ok, msg = await _lottery_buy_execute(message, message.from_user.id, quantity)
@@ -3614,10 +3646,10 @@ async def lottery_my_tickets(callback: CallbackQuery):
         round_obj = await get_latest_lottery_round(session)
         tickets = await get_user_lottery_tickets(session, user.id, round_obj.id if round_obj else None, limit=20)
     if not tickets:
-        await callback.message.answer("😔 У вас пока нет билетов в текущем раунде.")
+        await callback.message.answer("😔 У тебя пока нет билетов в текущем раунде.")
         await callback.answer()
         return
-    text = "📋 <b>Ваши билеты</b>\n\n"
+    text = "📋 <b>Твои билеты</b>\n\n"
     for t in tickets:
         text += f"#{t.id}: {t.numbers} | совпадений: {t.matched_count}\n"
     await callback.message.answer(text, parse_mode="HTML")
@@ -3647,13 +3679,19 @@ async def lottery_weekly_leaderboard(callback: CallbackQuery):
 @router.callback_query(F.data == "lottery_live_info")
 async def lottery_live_info(callback: CallbackQuery):
     base = (WEBHOOK_BASE or "").rstrip("/")
-    live_url = f"{base}/lottery/live" if base else "/lottery/live"
-    await callback.message.answer(
-        "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
-        "В прямом эфире ты увидишь, как лототрон по очереди вытягивает все бочонки.\n"
-        f"Открыть Live: {live_url}",
-        parse_mode="HTML",
-    )
+    if not base:
+        text = (
+            "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
+            "Live пока недоступен: владелец бота ещё не настроил публичный адрес Mini App."
+        )
+    else:
+        live_url = f"{base}/lottery/live"
+        text = (
+            "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
+            "В прямом эфире ты увидишь, как лототрон по очереди вытягивает все бочонки.\n"
+            f"Открыть Live: {live_url}"
+        )
+    await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
 
@@ -3670,7 +3708,7 @@ async def feedback_start(message: Message, state: FSMContext):
     ])
     await message.answer(
         "💬 <b>Жалобы и предложения</b>\n\n"
-        "Напишите нам бесплатно: о баге, идее или просто поддержке.\n"
+        "Напиши нам бесплатно: о баге, идее или просто поддержке.\n"
         "Мы читаем все обращения.",
         parse_mode="HTML",
         reply_markup=kb,
@@ -3693,7 +3731,7 @@ async def feedback_pick_kind(callback: CallbackQuery, state: FSMContext):
     await state.update_data(feedback_kind=kind)
     await callback.message.answer(
         f"✍️ Тип: <b>{kind_title}</b>\n\n"
-        "Опишите ваше сообщение одним текстом (5-2000 символов).",
+        "Опиши твоё сообщение одним текстом (5-2000 символов).",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -3743,8 +3781,8 @@ async def feedback_submit(message: Message, state: FSMContext):
             pass
 
     await message.answer(
-        "✅ Спасибо! Ваше обращение отправлено команде.\n"
-        "Если нужно, мы свяжемся с вами в Telegram."
+        "✅ Спасибо! Твойе обращение отправлено команде.\n"
+        "Если нужно, мы свяжемся с тебеи в Telegram."
     )
     await state.clear()
 
@@ -3769,7 +3807,7 @@ async def btn_promo(message: Message, state: FSMContext):
         ])
         await message.answer(
             "🎟 <b>Промокоды</b>\n\n"
-            "Создайте код на монеты и поделитесь с друзьями!\n"
+            "Создай код на монеты и поделись им с друзьями!\n"
             f"Стоимость создания: {PROMOCODE_CREATION_STAR_RATE} Stars за 1 монету × использования.\n"
             f"VIP: {VIP_FREE_PROMO_PER_MONTH} бесплатный код в месяц.",
             parse_mode="HTML",
@@ -3786,7 +3824,7 @@ async def promo_create_start(callback: CallbackQuery, state: FSMContext):
             return
         await state.set_state(PromoCreateState.waiting_amount)
         await callback.message.answer(
-            f"Введите сумму монет (1–{PROMOCODE_MAX_AMOUNT}):"
+            f"Введи сумму монет (1–{PROMOCODE_MAX_AMOUNT}):"
         )
     await callback.answer()
 
@@ -3794,7 +3832,7 @@ async def promo_create_start(callback: CallbackQuery, state: FSMContext):
 @router.message(PromoCreateState.waiting_amount)
 async def promo_amount(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
-        await message.answer("Введите число.")
+        await message.answer("Введи число.")
         return
     amount = int(message.text)
     if amount < 1 or amount > PROMOCODE_MAX_AMOUNT:
@@ -3808,7 +3846,7 @@ async def promo_amount(message: Message, state: FSMContext):
 @router.message(PromoCreateState.waiting_uses)
 async def promo_uses(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
-        await message.answer("Введите число.")
+        await message.answer("Введи число.")
         return
     uses = int(message.text)
     if uses < 1 or uses > PROMOCODE_MAX_USES:
@@ -3822,7 +3860,7 @@ async def promo_uses(message: Message, state: FSMContext):
 @router.message(PromoCreateState.waiting_hours)
 async def promo_hours(message: Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
-        await message.answer("Введите число.")
+        await message.answer("Введи число.")
         return
     hours = int(message.text)
     if hours < 1 or hours > PROMOCODE_MAX_HOURS:
@@ -3900,7 +3938,7 @@ async def promo_activate_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Промокоды временно отключены.", show_alert=True)
         return
     await state.set_state(PromoActivateState.waiting_code)
-    await callback.message.answer("Введите промокод:")
+    await callback.message.answer("Введи промокод:")
     await callback.answer()
 
 
@@ -3916,7 +3954,7 @@ async def promo_activate_code(message: Message, state: FSMContext):
         if code_input != current_word:
             await message.answer(
                 "❌ <b>Неверное секретное слово!</b>\n\n"
-                "Убедитесь, что вы правильно списали слово (регистр не важен), или поищите актуальное слово в наших соцсетях!",
+                "Убедись, что ты правильно ввёл слово (регистр не важен), или поищи актуальное слово в наших соцсетях!",
                 parse_mode="HTML"
             )
             await state.clear()
@@ -3933,7 +3971,7 @@ async def promo_activate_code(message: Message, state: FSMContext):
             current_year = utc_now().isocalendar()[0]
             
             if user.last_freebie_week == current_week and user.last_freebie_year == current_year:
-                await message.answer("❌ Вы уже забирали Халяву на этой неделе!")
+                await message.answer("❌ Халява уже была получена на этой неделе!")
                 await state.clear()
                 return
                 
@@ -3954,7 +3992,7 @@ async def promo_activate_code(message: Message, state: FSMContext):
             
         await message.answer(
             f"🎉 <b>Секретное слово угадано!</b>\n\n"
-            f"Вам начислено <b>{reward:.0f}</b> монет на баланс!\n"
+            f"Тебе начислено <b>{reward:.0f}</b> монет!\n"
             f"Приходите в следующий понедельник за новой Халявой! 🎁",
             parse_mode="HTML"
         )
@@ -3970,11 +4008,11 @@ async def promo_activate_code(message: Message, state: FSMContext):
         message.from_user.id,
         PROMO_ACTIVATE_COOLDOWN_SECONDS,
     ):
-        await message.answer("⏳ Слишком часто. Попробуйте чуть позже.")
+        await message.answer("⏳ Слишком часто. Попробуй чуть позже.")
         return
     code = (message.text or "").strip()
     if not code:
-        await message.answer("Введите промокод.")
+        await message.answer("Введи промокод.")
         return
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
@@ -4001,10 +4039,10 @@ async def promo_my(callback: CallbackQuery):
             .order_by(desc(Promocode.created_at)).limit(10)
         )).scalars().all()
         if not promos:
-            await callback.message.answer("📭 У вас пока нет промокодов.")
+            await callback.message.answer("📭 У тебя пока нет промокодов.")
             await callback.answer()
             return
-        text = "🎟 <b>Ваши промокоды:</b>\n\n"
+        text = "🎟 <b>Твои промокоды:</b>\n\n"
         for p in promos:
             status = "✅" if p.is_active else "❌"
             text += (
@@ -4071,7 +4109,7 @@ async def report_video_start(callback: CallbackQuery, state: FSMContext):
     kb_rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="report_cancel")])
 
     await callback.message.answer(
-        "🚨 <b>Пожаловаться на видео</b>\n\nВыберите причину:",
+        "🚨 <b>Пожаловаться на видео</b>\n\nВыбери причину:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
     )
@@ -4084,7 +4122,7 @@ async def report_reason_picked(callback: CallbackQuery, state: FSMContext):
     await state.update_data(report_reason=reason)
     await state.set_state(ReportState.writing_comment)
     await callback.message.answer(
-        "💬 Опишите проблему (или отправьте «-» чтобы пропустить):",
+        "💬 Опиши проблему (или отправь «-» чтобы пропустить):",
     )
     await callback.answer()
 
@@ -4119,7 +4157,7 @@ async def report_comment(message: Message, state: FSMContext):
             await schedule_mod_notification(session, "report")
         await message.answer("✅ Жалоба отправлена. Администрация разберётся.")
     else:
-        await message.answer("❌ Не удалось отправить жалобу (возможно, вы уже жаловались на это видео).")
+        await message.answer("❌ Не удалось отправить жалобу (возможно, жалоба на это видео уже была отправлена).")
 
 
 @router.callback_query(ReportState.picking_reason, F.data == "report_cancel")
@@ -4140,16 +4178,16 @@ async def cb_block_author(callback: CallbackQuery):
             return
         
         if video.uploader_user_id == user.id:
-            await callback.answer("Вы не можете заблокировать самого себя.", show_alert=True)
+            await callback.answer("Нельзя заблокировать самого себя.", show_alert=True)
             return
 
         success = await block_user(session, user.id, video.uploader_user_id)
         if success:
-            await callback.answer("Автор заблокирован. Вы больше не увидите его контент.", show_alert=True)
+            await callback.answer("Автор заблокирован. Ты больше не увидишь его контент.", show_alert=True)
             # Можно предложить переключиться на следующее видео
             await callback.message.answer(
-                "✅ Автор заблокирован. Вы больше не увидите его видео и фото.\n"
-                "Нажмите «Следующее», чтобы продолжить просмотр других авторов.",
+                "✅ Автор заблокирован. Ты больше не увидишь его видео и фото.\n"
+                "Нажми «Следующее», чтобы продолжить просмотр других авторов.",
                 reply_markup=video_error_keyboard() if video.content_type == "video" else photo_error_keyboard()
             )
         else:
@@ -4167,37 +4205,37 @@ async def btn_faq(message: Message, state: FSMContext):
         "ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "<b>1. Как зарабатывать монеты?</b>\n"
-        "Загружайте видео и фото, выполняйте офферы и приглашайте друзей по реферальной ссылке. Точные награды зависят от текущих настроек бота.\n\n"
+        "Загружайте видео и фото, выполняй офферы и приглашайте друзей по реферальной ссылке. Точные награды зависят от текущих настроек бота.\n\n"
         "<b>2. Как смотреть контент других авторов?</b>\n"
-        "Нажмите кнопку 🎬 Смотреть и выберите интересующий формат.\n\n"
+        "Нажми кнопку 🎬 Смотреть и выбери интересующий формат.\n\n"
         "<b>3. Что дает подписка VIP?</b>\n"
-        "Удвоенные награды за просмотры, скидки в магазине и бонусы в экономике.\n\n"
+        "Множитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. Размер скидки указан в разделе VIP.\n\n"
         "<b>4. Что такое Секслото?</b>\n"
         "Это ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n"
         "<b>5. Как общаться с ИИ?</b>\n"
-        f"Нажмите кнопку 💋 ИИ-общение. Одно сообщение стоит {AI_ASSISTANT_PRICE} монет.\n\n"
+        f"Нажми кнопку 💋 ИИ-общение. Одно сообщение стоит {AI_ASSISTANT_PRICE} монет.\n\n"
         "<b>6. Как работают промокоды?</b>\n"
-        "Вы можете создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n"
+        "Ты можешь создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n"
         "<b>7. Как работает реферальная система?</b>\n"
-        f"Откройте раздел 👥 Рефералы, скопируйте свою ссылку и отправьте друзьям. За активного приглашённого вы получаете <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n"
+        f"Открой раздел 👥 Рефералы, скопируй свою ссылку и отправь друзьям. За активного приглашённого ты получаешь <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n"
         "<b>8. Есть ли ежедневный бонус?</b>\n"
         "Нет. Ежедневная халява отключена — вместо неё теперь работает еженедельный секретный промокод.\n\n"
         "<b>9. Есть ли квесты?</b>\n"
         "Нет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n"
         "<b>10. Где посмотреть топы игроков?</b>\n"
-        "В меню 🏆 Топы собраны лучшие авторы контента и самые богатые игроки.\n\n"
+        "В меню 🏆 Топы собраны текущие рейтинги загрузчиков, зрителей, XP и баланса. Рейтинг загрузчиков и зрителей считается за всё время.\n\n"
         "<b>11. Что находится внутри лутбоксов?</b>\n"
         "Случайный выигрыш монет разной степени редкости.\n\n"
         "<b>12. Как сменить никнейм?</b>\n"
-        "В вашем Профиле. Первая установка ника бесплатна, последующие изменения — за монеты.\n\n"
+        "В твоем Профиле. Первая установка ника бесплатна, последующие изменения — за монеты.\n\n"
         "<b>13. Что такое Уровень и XP?</b>\n"
-        "За активность вы получаете XP. Повышение уровня открывает приятную косметику и прогресс профиля.\n\n"
+        "За активность ты получаешь XP. Повышение уровня открывает приятную косметику и прогресс профиля.\n\n"
         "<b>14. Безопасны ли мои данные?</b>\n"
         "Бот не просит лишние персональные данные: используется в основном Telegram ID и сервисная информация профиля.\n\n"
         "<b>15. Что такое Космическая аркада?</b>\n"
         "Это мини-игра (Mini App) в разделе 🎮 Игры: делаете ставку, отбиваете волны инопланетного флота, и каждая волна увеличивает множитель ставки. Забрать выигрыш можно в любой момент, но рано или поздно флот прорвётся — и ставка сгорит. Есть дневной кап чистой прибыли.\n\n"
         "<b>16. Как связаться с техподдержкой?</b>\n"
-        "Нажмите кнопку 💬 Жалобы и предложения и отправьте сообщение команде."
+        "Нажми кнопку 💬 Жалобы и предложения и отправь сообщение команде."
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -4243,7 +4281,7 @@ async def cb_promo_freebie_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "🎁 <b>Еженедельная халява</b>\n\n"
         "Теперь она работает через автоматическую рассылку секретного промокода.\n"
-        "Бот сам пришлёт код в заданный день и час — вам останется только активировать его через <b>/start promo_...</b> или в разделе <b>🔑 Активировать промокод</b>.",
+        "Бот сам пришлёт код в заданный день и час — тебе останется только активировать его через <b>/start promo_...</b> или в разделе <b>🔑 Активировать промокод</b>.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔑 Активировать промокод", callback_data="promo_activate")],
@@ -4272,7 +4310,7 @@ async def welcome_lootbox_claim(callback: CallbackQuery):
         from sqlalchemy import select
         already_claimed = (await session.execute(select(UserActionLog).where(UserActionLog.user_id == user.id, UserActionLog.action == "welcome_lootbox"))).scalars().first()
         if already_claimed:
-            await callback.answer("Вы уже открыли свой стартовый лутбокс!", show_alert=True)
+            await callback.answer("Стартовый лутбокс уже открыт!", show_alert=True)
             try:
                 await callback.message.delete()
             except:
