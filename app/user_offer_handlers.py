@@ -164,7 +164,7 @@ async def user_offer_penalty(message: Message, state: FSMContext):
         if not val.is_finite() or val < 0:
             raise ValueError
     except Exception:
-        await message.answer("❌ Введите положительное число.")
+        await message.answer("❌ Введите неотрицательное число.")
         return
     # Штраф за отписку не должен превышать итоговую награду.
     data = await state.get_data()

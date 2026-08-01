@@ -829,8 +829,8 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
             "👉 Перейдите в меню <b>🎟 Промокоды</b>"
         ),
         "lottery": (
-            "🎰 <b>Секслото — разыгрываем миллионы!</b>\n\n"
-            "Новый раунд уже открыт! Купите счастливый билет за монеты и следите за розыгрышем прямо в Mini App. 🎡\n\n"
+            "🎰 <b>Секслото — розыгрыш монет</b>\n\n"
+            "Новый раунд уже открыт! Купите билет за монеты и следите за розыгрышем в Live. Размер призового фонда зависит от количества купленных билетов. 🎡\n\n"
             "👉 Зайдите в меню <b>🎮 Игры ➔ 🎰 Секслото</b>"
         ),
         "katya": (
@@ -855,7 +855,7 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
         ),
         "vip": (
             "👑 <b>Получите статус VIP-пользователя!</b>\n\n"
-            "VIP-подписка дает удвоенные награды за просмотры, огромные скидки в магазине, бесплатное создание промокодов и эксклюзивные элитные стили никнеймов! Позвольте себе роскошь! ⭐\n\n"
+            "VIP даёт множитель начисления монет ×2, скидку на просмотр видео, просмотр фото без дневного лимита и дополнительные бонусы в экономике. ⭐\n\n"
             "👉 Перейдите в меню <b>👑 VIP</b>!"
         )
     }
@@ -2241,7 +2241,7 @@ async def admin_bot_settings(callback: CallbackQuery):
         [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
         [InlineKeyboardButton(text="🎁 Лутбоксы", callback_data="settings_games")],
         [InlineKeyboardButton(text="🚀 Аркада", callback_data="settings_arcade")],
-        [InlineKeyboardButton(text="🎁 Еженедельный Промокод", callback_data="settings_weekly_promo")],
+        [InlineKeyboardButton(text="🎁 Еженедельный промокод", callback_data="settings_weekly_promo")],
         [InlineKeyboardButton(text="📺 Реклама", callback_data="settings_ads")],
         [InlineKeyboardButton(text="✏️ Никнеймы", callback_data="settings_nicks")],
         [InlineKeyboardButton(text="🎟 Промокоды", callback_data="settings_promos")],

@@ -39,7 +39,7 @@ from app.config import (
     ENABLE_ADMIN_FREE,
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
-    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER,
+    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT,
     LEVEL_XP_BASE, LEVEL_XP_MULTIPLIER,
     DAILY_QUESTS, PREMIUM_DAILY_QUESTS,
     COMMENTS_PER_10_MIN,
@@ -724,6 +724,20 @@ async def accept_rules(callback: CallbackQuery):
 # =========================
 # ADMIN REDIRECT
 # =========================
+@router.callback_query(F.data == "btn_main_menu")
+async def cb_main_menu(callback: CallbackQuery):
+    """Возвращает пользователя из inline-меню к главному меню бота."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        admin_flag = is_any_admin(callback.from_user.id, user)
+    await callback.message.answer(
+        "🏠 <b>Главное меню</b>\n\nВыберите нужный раздел:",
+        parse_mode="HTML",
+        reply_markup=main_menu(is_admin=admin_flag),
+    )
+    await callback.answer()
+
+
 @router.message(F.text == BTN_ADMIN)
 async def cmd_admin_redirect(message: Message):
     async with async_session() as session:
@@ -842,13 +856,22 @@ async def show_vip(message: Message, state: FSMContext):
             if not await require_nickname(message, user):
                 return
 
+            vip_discount = VIP_WATCH_DISCOUNT
+            db_vip_discount = await get_setting(session, "vip_watch_discount", "")
+            if db_vip_discount:
+                try:
+                    vip_discount = float(db_vip_discount)
+                except (TypeError, ValueError):
+                    pass
+            vip_discount_percent = max(0, min(100, round((1 - vip_discount) * 100)))
+
             if is_vip(user):
                 await message.answer(
                     f"👑 <b>Вы VIP!</b>\n\n"
                     f"До: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
                     f"Привилегии:\n"
                     f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-                    f"• Скидка 50% на просмотр\n"
+                    f"• Скидка {vip_discount_percent}% на просмотр\n"
                     f"• Приоритет и бонусы в экономике",
                     parse_mode="HTML"
                 )
@@ -871,7 +894,7 @@ async def show_vip(message: Message, state: FSMContext):
                     f"Длительность: {VIP_DURATION_DAYS} дней\n\n"
                     f"Привилегии:\n"
                     f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-                    f"• Скидка 50% на просмотр\n"
+                    f"• Скидка {vip_discount_percent}% на просмотр\n"
                     f"• Приоритет и бонусы в экономике",
                     parse_mode="HTML",
                     reply_markup=vip_buy_keyboard(vip_price)
@@ -891,6 +914,15 @@ async def buy_vip(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
+
+        vip_discount = VIP_WATCH_DISCOUNT
+        db_vip_discount = await get_setting(session, "vip_watch_discount", "")
+        if db_vip_discount:
+            try:
+                vip_discount = float(db_vip_discount)
+            except (TypeError, ValueError):
+                pass
+        vip_discount_percent = max(0, min(100, round((1 - vip_discount) * 100)))
 
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
         if not admin_free:
@@ -931,7 +963,7 @@ async def buy_vip(callback: CallbackQuery):
             f"VIP до: <b>{user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
             f"Привилегии:\n"
             f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-            f"• Скидка 50% на просмотр\n"
+            f"• Скидка {vip_discount_percent}% на просмотр\n"
             f"• Приоритет и бонусы в экономике",
             parse_mode="HTML",
         )
@@ -3647,13 +3679,19 @@ async def lottery_weekly_leaderboard(callback: CallbackQuery):
 @router.callback_query(F.data == "lottery_live_info")
 async def lottery_live_info(callback: CallbackQuery):
     base = (WEBHOOK_BASE or "").rstrip("/")
-    live_url = f"{base}/lottery/live" if base else "/lottery/live"
-    await callback.message.answer(
-        "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
-        "В прямом эфире ты увидишь, как лототрон по очереди вытягивает все бочонки.\n"
-        f"Открыть Live: {live_url}",
-        parse_mode="HTML",
-    )
+    if not base:
+        text = (
+            "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
+            "Live пока недоступен: владелец бота ещё не настроил публичный адрес Mini App."
+        )
+    else:
+        live_url = f"{base}/lottery/live"
+        text = (
+            "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
+            "В прямом эфире вы увидите, как лототрон по очереди вытягивает все бочонки.\n"
+            f"Открыть Live: {live_url}"
+        )
+    await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
 
@@ -4171,7 +4209,7 @@ async def btn_faq(message: Message, state: FSMContext):
         "<b>2. Как смотреть контент других авторов?</b>\n"
         "Нажмите кнопку 🎬 Смотреть и выберите интересующий формат.\n\n"
         "<b>3. Что дает подписка VIP?</b>\n"
-        "Удвоенные награды за просмотры, скидки в магазине и бонусы в экономике.\n\n"
+        "Множитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. Размер скидки указан в разделе VIP.\n\n"
         "<b>4. Что такое Секслото?</b>\n"
         "Это ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n"
         "<b>5. Как общаться с ИИ?</b>\n"
@@ -4185,7 +4223,7 @@ async def btn_faq(message: Message, state: FSMContext):
         "<b>9. Есть ли квесты?</b>\n"
         "Нет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n"
         "<b>10. Где посмотреть топы игроков?</b>\n"
-        "В меню 🏆 Топы собраны лучшие авторы контента и самые богатые игроки.\n\n"
+        "В меню 🏆 Топы собраны текущие рейтинги загрузчиков, зрителей, XP и баланса. Рейтинг загрузчиков и зрителей считается за всё время.\n\n"
         "<b>11. Что находится внутри лутбоксов?</b>\n"
         "Случайный выигрыш монет разной степени редкости.\n\n"
         "<b>12. Как сменить никнейм?</b>\n"
