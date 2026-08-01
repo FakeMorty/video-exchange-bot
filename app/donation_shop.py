@@ -283,7 +283,7 @@ async def donate_confirm(callback: CallbackQuery, state: FSMContext):
         free_badge = "\n🆓 <b>(Бесплатно для админа)</b>" if admin_free else ""
         await callback.message.edit_text(
             f"✅ <b>Покупка успешна!</b>{free_badge}\n\n"
-            f"Вы приобрели: <b>{item['name']}</b>\n"
+            f"Ты приобрели: <b>{item['name']}</b>\n"
             f"Действует до: <b>{expires.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
             f"Спасибо за поддержку! 💙",
             parse_mode="HTML",
@@ -583,10 +583,10 @@ async def back_to_profile(callback: CallbackQuery):
     # Simple back: show profile hint
     try:
         await callback.message.edit_text(
-            "👤 Нажмите кнопку 👤 Профиль в главном меню, чтобы вернуться.",
+            "👤 Нажми кнопку 👤 Профиль в главном меню, чтобы вернуться.",
             reply_markup=None
         )
     except Exception:
-        await callback.message.answer("👤 Нажмите кнопку 👤 Профиль в главном меню.")
+        await callback.message.answer("👤 Нажми кнопку 👤 Профиль в главном меню.")
     await callback.answer()
 

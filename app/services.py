@@ -417,7 +417,7 @@ def validate_nickname_format(name: str) -> tuple[bool, str]:
     # Запрет слишком «мусорных» ников из 1-2 уникальных символов типа aaaa / ____ / ----
     unique_chars = set(name.lower().replace("_", "").replace("-", ""))
     if len(unique_chars) < 2 and len(name) >= NICKNAME_MIN_LENGTH:
-        return False, "Ник слишком простой. Используйте хотя бы 2 разные буквы/цифры."
+        return False, "Ник слишком простой. Используй хотя бы 2 разные буквы/цифры."
     return True, ""
 
 
@@ -748,7 +748,7 @@ async def set_display_name(session: AsyncSession, user: "User", name: str,
     if not is_first and not admin_free:
         cost = to_decimal(NICKNAME_CHANGE_COST)
         if user.balance < cost:
-            return False, f"Недостаточно монет. Нужно: {cost}, у вас: {user.balance}"
+            return False, f"Недостаточно монет. Нужно: {cost}, у тебя: {user.balance}"
         await change_balance_atomic(session, user.id, -cost, "nickname_change",
                                     details=f"{user.display_name} -> {name}")
 
@@ -1317,7 +1317,7 @@ async def claim_daily_bonus(session: AsyncSession, user_id: int) -> tuple[bool, 
         return False, "Пользователь не найден."
     now = utc_now()
     if user.last_bonus_at and user.last_bonus_at.date() == now.date():
-        return False, "Вы уже получили бонус сегодня."
+        return False, "Бонус за сегодня уже получен."
     streak = 1
     if user.last_bonus_at and (now.date() - user.last_bonus_at.date()).days == 1:
         streak = min(user.bonus_streak + 1, MAX_BONUS_STREAK)
@@ -2208,7 +2208,7 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         )
     )).scalar_one_or_none()
     if already:
-        return "Вы уже активировали этот промокод."
+        return "Этот промокод уже активирован."
     # Начисление
     amount = promo.coin_amount
     await change_balance_atomic(session, user.id, amount, "promocode_activation",
@@ -3471,7 +3471,7 @@ async def create_offer_rental(
     if cost < 0:
         return None, "Некорректная стоимость аренды."
     if user.balance < cost:
-        return None, f"Недостаточно монет. Нужно {cost:.0f}, у вас {user.balance:.0f}."
+        return None, f"Недостаточно монет. Нужно {cost:.0f}, у тебя {user.balance:.0f}."
 
     await change_balance_atomic(
         session,

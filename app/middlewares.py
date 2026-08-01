@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 
 DB_DOWN_TEXT = (
     "⚠️ Бот временно недоступен (ведутся технические работы). "
-    "Попробуйте, пожалуйста, позже."
+    "Попробуй, пожалуйста, позже."
 )
 
 # Троттлинг, чтобы при падении БД не спамить:
@@ -60,8 +60,8 @@ class BanCheckMiddleware(BaseMiddleware):
 
             if user and user.status == "banned":
                 if isinstance(event, Message):
-                    await event.answer("🚫 Вы заблокированы.")
+                    await event.answer("🚫 Доступ к боту для тебя заблокирован.")
                 elif isinstance(event, CallbackQuery):
-                    await event.answer("🚫 Вы заблокированы.", show_alert=True)
+                    await event.answer("🚫 Доступ к боту для тебя заблокирован.", show_alert=True)
                 return
         return await handler(event, data)

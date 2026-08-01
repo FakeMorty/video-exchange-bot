@@ -145,7 +145,7 @@ async def cmd_admin(message: Message):
         return
     sa = is_super_admin(message.from_user.id)
     await message.answer(
-        "⚙️ <b>Панель администратора</b>\n\nВыберите нужный раздел:",
+        "⚙️ <b>Панель администратора</b>\n\nВыбери нужный раздел:",
         parse_mode="HTML",
         reply_markup=admin_main_keyboard(is_super=sa)
     )
@@ -159,7 +159,7 @@ async def admin_center(callback: CallbackQuery):
     sa = is_super_admin(callback.from_user.id)
     await _safe_edit(
         callback,
-        "⚙️ <b>Панель администратора</b>\n\nВыберите нужный раздел:",
+        "⚙️ <b>Панель администратора</b>\n\nВыбери нужный раздел:",
         parse_mode="HTML",
         reply_markup=admin_main_keyboard(is_super=sa)
     )
@@ -371,7 +371,7 @@ async def admin_video_search_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminVideoSearchState.waiting_video_id)
     await _safe_edit(
         callback,
-        "🔎 Отправьте номер публикации в формате <code>#1234</code> или <code>1234</code>.\n\nТакже поиск всегда доступен командой <code>/video 1234</code>.",
+        "🔎 Отправь номер публикации в формате <code>#1234</code> или <code>1234</code>.\n\nТакже поиск всегда доступен командой <code>/video 1234</code>.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_queue_info")]]),
     )
@@ -485,7 +485,7 @@ async def reject_reason(callback: CallbackQuery, state: FSMContext):
         callback,
         f"❌ <b>Отклонение #{video_id}</b>\n\n"
         f"Базовая причина: <b>{reason_text}</b>\n\n"
-        f"Теперь отправьте <b>комментарий для пользователя</b>, где объясните, что именно не так с публикацией.",
+        f"Теперь отправь <b>комментарий для пользователя</b>, где объясни, что именно не так с публикацией.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_get_pending")]
@@ -500,7 +500,7 @@ async def reject_reason_comment(message: Message, state: FSMContext):
         return
     comment = (message.text or "").strip()
     if len(comment) < 3:
-        await message.answer("❌ Комментарий слишком короткий. Напишите понятное объяснение для пользователя.")
+        await message.answer("❌ Комментарий слишком короткий. Напиши понятное объяснение для пользователя.")
         return
 
     data = await state.get_data()
@@ -571,7 +571,7 @@ async def admin_events_menu(callback: CallbackQuery):
 async def event_create_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     await state.set_state(EventCreationState.waiting_name)
-    await callback.message.answer("🎉 Шаг 1: Введите название:")
+    await callback.message.answer("🎉 Шаг 1: Введи название:")
     await callback.answer()
 
 
@@ -716,7 +716,7 @@ async def admin_sale_stop(callback: CallbackQuery):
 async def admin_sale_create(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     await state.set_state(SaleState.waiting_percent)
-    await _safe_edit(callback, "Введите % (1-99):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_center")]]))
+    await _safe_edit(callback, "Введи % (1-99):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_center")]]))
 
 
 @router.message(SaleState.waiting_percent)
@@ -780,9 +780,9 @@ async def admin_direct_message_all(callback: CallbackQuery, state: FSMContext):
     await _safe_edit(
         callback,
         "📨 <b>Сообщение всем от админа</b>\n\n"
-        "Напишите текст, который бот отправит всем активным пользователям.\n\n"
+        "Напиши текст, который бот отправит всем активным пользователям.\n\n"
         "Пользователь увидит это в формате:\n"
-        "<code>📢 Вам сообщение от админа: ...</code>",
+        "<code>📢 Тебе сообщение от админа: ...</code>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_center")]
@@ -810,7 +810,7 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
     await _safe_edit(
         callback,
         "📢 <b>Управление рассылками и пуш-уведомлениями</b>\n\n"
-        "Выберите готовый шаблон для напоминания пользователям о функциях бота, или напишите свой собственный текст:",
+        "Выбери готовый шаблон для напоминания пользователям о функциях бота, или напиши свой собственный текст:",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -825,38 +825,38 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
     templates = {
         "bonus": (
             "🎁 <b>Еженедельная халява уже близко!</b>\n\n"
-            "Раз в неделю мы рассылаем секретный промокод на бесплатные монеты. Следите за сообщениями бота и не пропустите раздачу! 💰\n\n"
-            "👉 Перейдите в меню <b>🎟 Промокоды</b>"
+            "Раз в неделю мы рассылаем секретный промокод на бесплатные монеты. Следи за сообщениями бота и не пропусти раздачу! 💰\n\n"
+            "👉 Перейди в меню <b>🎟 Промокоды</b>"
         ),
         "lottery": (
             "🎰 <b>Секслото — розыгрыш монет</b>\n\n"
-            "Новый раунд уже открыт! Купите билет за монеты и следите за розыгрышем в Live. Размер призового фонда зависит от количества купленных билетов. 🎡\n\n"
-            "👉 Зайдите в меню <b>🎮 Игры ➔ 🎰 Секслото</b>"
+            "Новый раунд уже открыт! Купи билет за монеты и следи за розыгрышем в Live. Размер призового фонда зависит от количества купленных билетов. 🎡\n\n"
+            "👉 Зайди в меню <b>🎮 Игры ➔ 🎰 Секслото</b>"
         ),
         "katya": (
             "💋 <b>Катя заждалась тебя...</b>\n\n"
             "Твоя виртуальная подруга Катя скучает и хочет поболтать. Она подготовила новые пикантные темы для беседы! 😏🤸‍♀️\n\n"
-            "👉 Нажмите кнопку <b>💋 ИИ-Общение</b> в главном меню!"
+            "👉 Нажми кнопку <b>💋 ИИ-Общение</b> в главном меню!"
         ),
         "promo": (
-            "🎟 <b>Создавайте свои промокоды за Stars!</b>\n\n"
-            "Хотите порадовать подписчиков своего канала или друзей? Создайте свой уникальный промокод на любую сумму монет и подарите его им! 🎁\n\n"
-            "👉 Перейдите в меню <b>🎟 Промокоды</b>"
+            "🎟 <b>Создавай свои промокоды за Stars!</b>\n\n"
+            "Хочешь порадовать подписчиков своего канала или друзей? Создай свой уникальный промокод на любую сумму монет и подари его им! 🎁\n\n"
+            "👉 Перейди в меню <b>🎟 Промокоды</b>"
         ),
         "games": (
-            "🎁 <b>Откройте лутбокс!</b>\n\n"
-            "Иногда один лутбокс — это быстрый способ вернуться в игру и сорвать красивый дроп монет. Проверьте удачу!\n\n"
-            "👉 Перейдите в меню <b>🎮 Игры</b>"
+            "🎁 <b>Открой лутбокс!</b>\n\n"
+            "Иногда один лутбокс — это быстрый способ вернуться в игру и сорвать красивый дроп монет. Проверь удачу!\n\n"
+            "👉 Перейди в меню <b>🎮 Игры</b>"
         ),
         "quests": (
-            "👥 <b>Монеты закончились? Позовите друзей!</b>\n\n"
-            "Разошлите свою реферальную ссылку друзьям и получайте крупные награды за новых активных пользователей. Это самый быстрый способ снова пополнить баланс.\n\n"
-            "👉 Перейдите в меню <b>👥 Рефералы</b>"
+            "👥 <b>Монеты закончились? Позови друзей!</b>\n\n"
+            "Разошли свою реферальную ссылку друзьям и получай награды за новых активных пользователей. Это самый быстрый способ снова пополнить баланс.\n\n"
+            "👉 Перейди в меню <b>👥 Рефералы</b>"
         ),
         "vip": (
-            "👑 <b>Получите статус VIP-пользователя!</b>\n\n"
+            "👑 <b>Получи статус VIP-пользователя!</b>\n\n"
             "VIP даёт множитель начисления монет ×2, скидку на просмотр видео, просмотр фото без дневного лимита и дополнительные бонусы в экономике. ⭐\n\n"
-            "👉 Перейдите в меню <b>👑 VIP</b>!"
+            "👉 Перейди в меню <b>👑 VIP</b>!"
         )
     }
     
@@ -878,7 +878,7 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
         f"----------------------------------\n"
         f"{tpl_text}\n"
         f"----------------------------------\n\n"
-        f"Вы действительно хотите отправить это сообщение всем активным пользователям?",
+        f"Ты действительно хочешь отправить это сообщение всем активным пользователям?",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -890,7 +890,7 @@ async def cb_admin_broadcast_custom(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     await state.set_state(AdminBroadcastState.waiting_text)
     await state.update_data(broadcast_mode="promo")
-    await callback.message.answer("📢 Введите ваш пользовательский текст для промо-рассылки (поддерживается HTML-разметка):")
+    await callback.message.answer("📢 Введи твой пользовательский текст для промо-рассылки (поддерживается HTML-разметка):")
     await callback.answer()
 
 
@@ -909,7 +909,7 @@ async def process_broadcast(message: Message, state: FSMContext):
 
     if mode == "admin_direct":
         preview_text = (
-            "📢 <b>Вам сообщение от админа:</b>\n\n"
+            "📢 <b>Тебе сообщение от админа:</b>\n\n"
             f"{text_val}"
         )
         cancel_target = "admin_center"
@@ -917,7 +917,7 @@ async def process_broadcast(message: Message, state: FSMContext):
     else:
         preview_text = text_val
         cancel_target = "admin_broadcast"
-        header = "📢 <b>Предпросмотр вашей рассылки:</b>"
+        header = "📢 <b>Предпросмотр твоей рассылки:</b>"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin_broadcast_confirm")],
@@ -929,7 +929,7 @@ async def process_broadcast(message: Message, state: FSMContext):
         f"----------------------------------\n"
         f"{preview_text}\n"
         f"----------------------------------\n\n"
-        f"Вы действительно хотите отправить это сообщение всем активным пользователям?",
+        f"Ты действительно хочешь отправить это сообщение всем активным пользователям?",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -950,7 +950,7 @@ async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext,
         return
 
     if mode == "admin_direct":
-        outgoing_text = f"📢 <b>Вам сообщение от админа:</b>\n\n{text_val}"
+        outgoing_text = f"📢 <b>Тебе сообщение от админа:</b>\n\n{text_val}"
         start_text = "⏳ <b>Сообщение от админа отправляется всем активным пользователям...</b>"
         done_text = "✅ <b>Сообщение от админа успешно отправлено!</b>"
     else:
@@ -1003,7 +1003,7 @@ async def admin_manage_users(callback: CallbackQuery):
         total = (await session.execute(select(func.count(User.id)))).scalar_one()
         users = (await session.execute(select(User).order_by(User.id.desc()).offset(offset).limit(limit))).scalars().all()
         
-    text = f"👥 <b>Управление пользователями ({offset + 1}-{min(offset + limit, total)} из {total})</b>\n\nВыберите пользователя для управления:"
+    text = f"👥 <b>Управление пользователями ({offset + 1}-{min(offset + limit, total)} из {total})</b>\n\nВыбери пользователя для управления:"
     
     kb_rows = []
     for u in users:
@@ -1197,7 +1197,7 @@ async def cb_admin_user_edit_nick_start(callback: CallbackQuery, state: FSMConte
     await _safe_edit(
         callback,
         "✏️ <b>Изменение никнейма пользователя</b>\n\n"
-        "Отправьте мне <b>новый никнейм</b> для этого пользователя:\n"
+        "Отправь мне <b>новый никнейм</b> для этого пользователя:\n"
         "• От 4 до 20 символов\n"
         "• Буквы, цифры, _ и -\n"
         "• Без точек, ? и User&lt;id&gt;",
@@ -1223,7 +1223,7 @@ async def process_admin_user_edit_nick(message: Message, state: FSMContext):
     from app.services import validate_nickname_format, is_placeholder_nickname
     ok, err = validate_nickname_format(new_nick)
     if not ok:
-        await message.answer(f"❌ {err}\nВведите снова:")
+        await message.answer(f"❌ {err}\nВведи снова:")
         return
 
     async with async_session() as session:
@@ -1234,14 +1234,14 @@ async def process_admin_user_edit_nick(message: Message, state: FSMContext):
             return
 
         if is_placeholder_nickname(new_nick, user.telegram_id):
-            await message.answer("❌ Ник вида User&lt;id&gt; запрещён. Введите нормальный ник:")
+            await message.answer("❌ Ник вида User&lt;id&gt; запрещён. Введи нормальный ник:")
             return
 
         exists = (await session.execute(
             select(User).where(User.display_name == new_nick, User.id != user.id)
         )).scalars().first()
         if exists:
-            await message.answer("❌ Этот ник уже занят другим пользователем. Введите другой ник:")
+            await message.answer("❌ Этот ник уже занят другим пользователем. Введи другой ник:")
             return
 
         old_nick = user.display_name
@@ -1287,8 +1287,8 @@ async def cb_admin_user_give_coins_start(callback: CallbackQuery, state: FSMCont
     await _safe_edit(
         callback,
         "💰 <b>Начисление или списание монет</b>\n\n"
-        "Используйте быстрые кнопки ниже для начисления/списания монет в один клик,\n"
-        "либо отправьте число сообщением (например, <code>150</code> или <code>-50</code>).",
+        "Используй быстрые кнопки ниже для начисления/списания монет в один клик,\n"
+        "либо отправь число сообщением (например, <code>150</code> или <code>-50</code>).",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -1318,7 +1318,7 @@ async def _apply_admin_balance_change(bot, admin_telegram_id: int, user_id: int,
         await bot.send_message(
             telegram_id,
             f"💰 Администратор {action} <b>{abs(amount)}</b> монет.\n"
-            f"Ваш баланс: <b>{new_balance}</b> монет.",
+            f"Твой баланс: <b>{new_balance}</b> монет.",
             parse_mode="HTML",
         )
     except Exception:
@@ -1341,7 +1341,7 @@ async def cb_admin_user_give_coins_exec(callback: CallbackQuery, state: FSMConte
         return
     except Exception:
         logger.exception("Admin balance change failed")
-        await callback.answer("Не удалось изменить баланс. Попробуйте ещё раз.", show_alert=True)
+        await callback.answer("Не удалось изменить баланс. Попробуй ещё раз.", show_alert=True)
         return
 
     await callback.answer(
@@ -1359,14 +1359,14 @@ async def process_admin_user_give_coins(message: Message, state: FSMContext):
     try:
         amount = Decimal(val)
     except Exception:
-        await message.answer("❌ Некорректная сумма. Отправьте число, например <code>100</code> или <code>-50</code>.", parse_mode="HTML")
+        await message.answer("❌ Некорректная сумма. Отправь число, например <code>100</code> или <code>-50</code>.", parse_mode="HTML")
         return
 
     data = await state.get_data()
     user_id = data.get("target_user_id")
     if not user_id:
         await state.clear()
-        await message.answer("❌ Сессия устарела. Откройте пользователя в админке заново.")
+        await message.answer("❌ Сессия устарела. Открой пользователя в админке заново.")
         return
 
     try:
@@ -1378,7 +1378,7 @@ async def process_admin_user_give_coins(message: Message, state: FSMContext):
         return
     except Exception:
         logger.exception("Admin balance change failed")
-        await message.answer("❌ Не удалось изменить баланс. Попробуйте ещё раз.")
+        await message.answer("❌ Не удалось изменить баланс. Попробуй ещё раз.")
         return
 
     status_msg = "начислено" if amount > 0 else "списано"
@@ -1428,7 +1428,7 @@ async def cb_admin_user_send_msg_start(callback: CallbackQuery, state: FSMContex
     await _safe_edit(
         callback,
         "✉️ <b>Личное сообщение от бота</b>\n\n"
-        "Отправьте мне текст сообщения, которое хотите доставить этому пользователю лично от имени бота:",
+        "Отправь мне текст сообщения, которое хочешь доставить этому пользователю лично от имени бота:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_select_user:{user_id}")]
@@ -1443,7 +1443,7 @@ async def process_admin_user_send_msg(message: Message, state: FSMContext, bot):
         return
     text_val = (message.text or "").strip()
     if not text_val:
-        await message.answer("❌ Сообщение не может быть пустым. Введите текст:")
+        await message.answer("❌ Сообщение не может быть пустым. Введи текст:")
         return
 
     data = await state.get_data()
@@ -1807,13 +1807,13 @@ async def _send_offer_review_notification(bot, offer: Offer) -> None:
         if offer.status == "approved":
             await bot.send_message(
                 creator.telegram_id,
-                f"✅ Ваш оффер <b>{escape(offer.title)}</b> одобрен и опубликован.",
+                f"✅ Твой оффер <b>{escape(offer.title)}</b> одобрен и опубликован.",
                 parse_mode="HTML",
             )
         elif offer.status == "rejected":
             await bot.send_message(
                 creator.telegram_id,
-                f"❌ Ваш оффер <b>{escape(offer.title)}</b> отклонён.\n"
+                f"❌ Твой оффер <b>{escape(offer.title)}</b> отклонён.\n"
                 f"Причина: {escape(offer.rejection_reason or 'Не прошёл модерацию')}",
                 parse_mode="HTML",
             )
@@ -1868,7 +1868,7 @@ async def admin_offers_list(callback: CallbackQuery):
     rows.append([InlineKeyboardButton(text="◀ К офферам", callback_data="admin_offers_menu")])
 
     body = f"📋 <b>{title}</b>\n\n"
-    body += "Выберите заявку:" if offers else "На этой странице заявок нет."
+    body += "Выбери заявку:" if offers else "На этой странице заявок нет."
     await _safe_edit(
         callback,
         body,
@@ -2069,7 +2069,7 @@ async def admin_rentals_list(callback: CallbackQuery):
         rows.append(navigation)
     rows.append([InlineKeyboardButton(text="◀ К офферам", callback_data="admin_offers_menu")])
     text_value = "🧾 <b>Аренды на модерации</b>\n\n"
-    text_value += "Выберите заявку:" if rentals else "Очередь пуста."
+    text_value += "Выбери заявку:" if rentals else "Очередь пуста."
     await _safe_edit(
         callback,
         text_value,
@@ -2251,7 +2251,7 @@ async def admin_bot_settings(callback: CallbackQuery):
         [InlineKeyboardButton(text="🗑 Сбросить все настройки", callback_data="settings_reset_all")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")],
     ])
-    await _safe_edit(callback, "🔧 <b>Настройки бота</b>\n\nВыберите категорию:", parse_mode="HTML", reply_markup=kb)
+    await _safe_edit(callback, "🔧 <b>Настройки бота</b>\n\nВыбери категорию:", parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
@@ -2653,7 +2653,7 @@ async def settings_reset_all(callback: CallbackQuery):
         [InlineKeyboardButton(text="✅ Да, сбросить", callback_data="settings_reset_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_bot_settings")],
     ])
-    await _safe_edit(callback, "⚠️ <b>Вы уверены?</b>\n\nЭто удалит все пользовательские настройки бота. Значения вернутся к дефолтным из config.py.", parse_mode="HTML", reply_markup=kb)
+    await _safe_edit(callback, "⚠️ <b>Ты точно хочешь продолжить?</b>\n\nЭто удалит все пользовательские настройки бота. Значения вернутся к дефолтным из config.py.", parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
@@ -2696,15 +2696,15 @@ async def settings_edit_start(callback: CallbackQuery, state: FSMContext):
             ],
             [InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")],
         ]
-        await callback.message.answer("📅 <b>Выберите день недели для рассылки промокода:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+        await callback.message.answer("📅 <b>Выбери день недели для рассылки промокода:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
         await callback.answer()
         return
 
     await state.set_state(BotSettingsState.waiting_value)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_bot_settings")]])
     await callback.message.answer(
-        f"✏️ Введите новое значение для <code>{key}</code>:\n\n"
-        f"Для сброса к дефолту отправьте <code>-</code> (дефис).",
+        f"✏️ Введи новое значение для <code>{key}</code>:\n\n"
+        f"Для сброса к дефолту отправь <code>-</code> (дефис).",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -2786,9 +2786,9 @@ async def admin_set_welcome_text_start(callback: CallbackQuery, state: FSMContex
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="settings_welcome")]])
     await _safe_edit(
         callback,
-        "Введите новый текст приветствия.\n"
+        "Введи новый текст приветствия.\n"
         "Можно использовать HTML теги.\n"
-        "Для сброса текста отправьте <code>-</code> (дефис).",
+        "Для сброса текста отправь <code>-</code> (дефис).",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -2820,7 +2820,7 @@ async def admin_set_welcome_banner_start(callback: CallbackQuery, state: FSMCont
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="settings_welcome")]])
     await _safe_edit(
         callback,
-        "Отправьте новую картинку (фото), которая будет использоваться как приветственный баннер.",
+        "Отправь новую картинку (фото), которая будет использоваться как приветственный баннер.",
         reply_markup=kb
     )
     await callback.answer()
@@ -2988,7 +2988,7 @@ async def trusted_add_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(TrustedUploaderState.waiting_add)
     await callback.message.answer(
         "🤝 <b>Добавить доверенного автора</b>\n\n"
-        "Введите ID пользователя или @username:",
+        "Введи ID пользователя или @username:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data="admin_trusted_uploaders")]
@@ -3048,7 +3048,7 @@ async def trusted_remove_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(TrustedUploaderState.waiting_remove)
     await callback.message.answer(
         "➖ <b>Удалить доверенного автора</b>\n\n"
-        "Введите ID пользователя или @username:",
+        "Введи ID пользователя или @username:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data="admin_trusted_uploaders")]
@@ -3304,7 +3304,7 @@ async def admin_approve_all_confirm(callback: CallbackQuery, bot):
     await callback.message.edit_text(
         f"⏳ <b>Запущено фоновое одобрение!</b>\n\n"
         f"Бот начал обрабатывать <b>{total_pending}</b> файлов в фоновом режиме.\n"
-        f"Вы можете закрыть бота и заниматься своими делами. По завершении вы получите личное сообщение от бота! 🚀",
+        f"Ты можешь закрыть бота и заниматься своими делами. По завершении ты получишь личное сообщение от бота! 🚀",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ В админку", callback_data="admin_center")]
@@ -3471,7 +3471,7 @@ async def cb_admin_add_admin_start(callback: CallbackQuery, state: FSMContext):
     await _safe_edit(
         callback,
         "✏️ <b>Назначение администратора</b>\n\n"
-        "Отправьте мне <b>Telegram ID</b> пользователя, которого хотите назначить администратором в боте.\n\n"
+        "Отправь мне <b>Telegram ID</b> пользователя, которого хочешь назначить администратором в боте.\n\n"
         "<i>Пользователь должен хотя бы раз запустить бота перед этим, чтобы запись о нём была в базе данных.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -3488,7 +3488,7 @@ async def process_add_admin(message: Message, state: FSMContext):
         
     text_val = (message.text or "").strip()
     if not text_val.isdigit():
-        await message.answer("❌ Telegram ID должен состоять только из цифр. Пожалуйста, попробуйте снова или отправьте команду отмены.")
+        await message.answer("❌ Telegram ID должен состоять только из цифр. Пожалуйста, попробуйте снова или отправь команду отмены.")
         return
         
     tid = int(text_val)
@@ -3497,7 +3497,7 @@ async def process_add_admin(message: Message, state: FSMContext):
         if not user:
             await message.answer(
                 f"❌ Пользователь с Telegram ID <code>{tid}</code> не найден в базе данных.\n"
-                f"Убедитесь, что он запустил бота и создал профиль.",
+                f"Убедись, что он запустил бота и создал профиль.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="◀️ К админам", callback_data="admin_manage_admins")]
@@ -3565,7 +3565,7 @@ async def cb_admin_create_offer_start(callback: CallbackQuery, state: FSMContext
         "• публичные каналы / группы / чаты с username бот может проверять автоматически\n"
         "• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна — там подтверждение будет ручным\n"
         "• серые, мутные и запрещённые проекты не допускаются\n\n"
-        "Введите <b>название оффера</b> (например, <i>Подписка на игровой канал</i>):"
+        "Введи <b>название оффера</b> (например, <i>Подписка на игровой канал</i>):"
     )
     
     await _safe_edit(
@@ -3584,14 +3584,14 @@ async def process_offer_title(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     title = (message.text or "").strip()
     if not title or len(title) > 100:
-        await message.answer("❌ Введите название длиной от 1 до 100 символов:")
+        await message.answer("❌ Введи название длиной от 1 до 100 символов:")
         return
         
     await state.update_data(title=title)
     await state.set_state(AdminOfferCreateState.waiting_description)
     await message.answer(
         "📝 <b>Создание оффера (Шаг 2/10)</b>\n\n"
-        "Введите <b>описание оффера</b> (что нужно сделать пользователю):",
+        "Введи <b>описание оффера</b> (что нужно сделать пользователю):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
@@ -3604,14 +3604,14 @@ async def process_offer_description(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     description = (message.text or "").strip()
     if not description or len(description) > 1500:
-        await message.answer("❌ Введите описание длиной от 1 до 1500 символов:")
+        await message.answer("❌ Введи описание длиной от 1 до 1500 символов:")
         return
         
     await state.update_data(description=description)
     await state.set_state(AdminOfferCreateState.waiting_url)
     await message.answer(
         "🔗 <b>Создание оффера (Шаг 3/10)</b>\n\n"
-        "Введите <b>ссылку на Telegram-проект</b> — канал, группу, чат или бота\n"
+        "Введи <b>ссылку на Telegram-проект</b> — канал, группу, чат или бота\n"
         "(например, <code>https://t.me/my_channel</code>, <code>https://t.me/MyBot?start=promo</code>, <code>https://t.me/+invite</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -3632,7 +3632,7 @@ async def process_offer_url(message: Message, state: FSMContext):
     await state.set_state(AdminOfferCreateState.waiting_reward_preview)
     await message.answer(
         "💰 <b>Создание оффера (Шаг 4/10)</b>\n\n"
-        "Введите <b>награду за старт</b> (число монет, например, <code>50</code>):",
+        "Введи <b>награду за старт</b> (число монет, например, <code>50</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
@@ -3648,14 +3648,14 @@ async def process_offer_reward_preview(message: Message, state: FSMContext):
         reward = Decimal(val)
         if not reward.is_finite() or reward < 0: raise ValueError()
     except Exception:
-        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        await message.answer("❌ Некорректное число монет. Введи положительное число:")
         return
         
     await state.update_data(reward_preview=str(reward))
     await state.set_state(AdminOfferCreateState.waiting_reward_final)
     await message.answer(
         "💰 <b>Создание оффера (Шаг 5/10)</b>\n\n"
-        "Введите <b>награду за финальную подписку</b> (число монет, например, <code>350</code>):",
+        "Введи <b>награду за финальную подписку</b> (число монет, например, <code>350</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
@@ -3671,14 +3671,14 @@ async def process_offer_reward_final(message: Message, state: FSMContext):
         reward = Decimal(val)
         if not reward.is_finite() or reward < 0: raise ValueError()
     except Exception:
-        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        await message.answer("❌ Некорректное число монет. Введи положительное число:")
         return
         
     await state.update_data(reward_final=str(reward))
     await state.set_state(AdminOfferCreateState.waiting_penalty)
     await message.answer(
         "💰 <b>Создание оффера (Шаг 6/10)</b>\n\n"
-        "Введите <b>штраф за отписку</b> (сколько монет спишется дополнительно, если пользователь отпишется):\n"
+        "Введи <b>штраф за отписку</b> (сколько монет спишется дополнительно, если пользователь отпишется):\n"
         "<i>Рекомендуется: сумма, превышающая награду, чтобы отписка была невыгодной.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -3695,14 +3695,14 @@ async def process_offer_penalty(message: Message, state: FSMContext):
         penalty = Decimal(val)
         if not penalty.is_finite() or penalty < 0: raise ValueError()
     except Exception:
-        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        await message.answer("❌ Некорректное число монет. Введи положительное число:")
         return
         
     await state.update_data(penalty_unsubscribe=str(penalty))
     await state.set_state(AdminOfferCreateState.waiting_duration)
     await message.answer(
         "📅 <b>Создание оффера (Шаг 7/10)</b>\n\n"
-        "Сколько дней оффер должен быть активен после публикации? Введите число от 1 до 365:",
+        "Сколько дней оффер должен быть активен после публикации? Введи число от 1 до 365:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
@@ -3719,7 +3719,7 @@ async def process_offer_duration(message: Message, state: FSMContext):
         if not 1 <= duration_days <= 365:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите целое число дней от 1 до 365.")
+        await message.answer("❌ Введи целое число дней от 1 до 365.")
         return
 
     await state.update_data(duration_days=duration_days)
@@ -3744,7 +3744,7 @@ async def process_offer_rentable_yes(callback: CallbackQuery, state: FSMContext)
     await state.set_state(AdminOfferCreateState.waiting_rent_cost)
     await callback.message.answer(
         "💰 <b>Создание оффера (Шаг 9/10)</b>\n\n"
-        "Введите <b>стоимость аренды одного слота в день</b> (монеты):",
+        "Введи <b>стоимость аренды одного слота в день</b> (монеты):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
@@ -3816,14 +3816,14 @@ async def process_offer_rent_cost(message: Message, state: FSMContext):
         cost = Decimal(val)
         if not cost.is_finite() or cost < 0: raise ValueError()
     except Exception:
-        await message.answer("❌ Некорректное число монет. Введите положительное число:")
+        await message.answer("❌ Некорректное число монет. Введи положительное число:")
         return
         
     await state.update_data(rent_cost=str(cost))
     await state.set_state(AdminOfferCreateState.waiting_max_rentals)
     await message.answer(
         "🔢 <b>Создание оффера (Шаг 10/10)</b>\n\n"
-        "Введите <b>максимальное количество рекламных слотов</b> (сколько каналов может рекламироваться одновременно):",
+        "Введи <b>максимальное количество рекламных слотов</b> (сколько каналов может рекламироваться одновременно):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
@@ -3839,7 +3839,7 @@ async def process_offer_max_rentals(message: Message, state: FSMContext):
         if not 1 <= max_rentals <= 100:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите целое число слотов от 1 до 100:")
+        await message.answer("❌ Введи целое число слотов от 1 до 100:")
         return
 
     await state.update_data(max_rentals=max_rentals)
