@@ -63,6 +63,33 @@ def create_schema_from_models() -> None:
     asyncio.run(_run())
 
 
+def ensure_columns_step() -> None:
+    """Догоняет недостающие колонки моделей в существующих таблицах.
+
+    Страховка от дрейфа схемы, когда alembic считает, что БД на head
+    (и upgrade — no-op), а части колонок физически нет (см. кейс с
+    users.lootbox_pity_counter, который не добавляет ни одна миграция).
+    """
+    from app.db import engine, ensure_model_columns
+
+    print("==> Ensuring model columns exist (schema/model drift check)...")
+    try:
+        async def _run() -> list[str]:
+            try:
+                return await ensure_model_columns()
+            finally:
+                await engine.dispose()
+
+        added = asyncio.run(_run())
+        if added:
+            print(f"==> Added missing columns: {', '.join(added)}")
+        else:
+            print("==> Schema is in sync with models.")
+    except Exception as e:
+        # Не блокируем старт: бот поднимется, а ошибка останется в логах.
+        print(f"==> Column ensure failed: {e!r}. Continuing.")
+
+
 def main():
     db_url = os.getenv("DATABASE_URL", "").strip()
     is_sqlite = (not db_url) or "sqlite" in db_url
@@ -103,6 +130,7 @@ def main():
     ok, output = run(f"{ALEMBIC} upgrade head")
     if ok:
         print("==> Migrations applied successfully")
+        ensure_columns_step()
         return
 
     print(f"==> Migration failed:\n{output[:500]}")
@@ -156,6 +184,9 @@ asyncio.run(ensure_table())
         print("==> Unknown migration error. Attempting stamp + retry...")
         run(f"{ALEMBIC} stamp head")
         run(f"{ALEMBIC} upgrade head")
+
+    # Финальная страховка для существующей БД: догон недостающих колонок
+    ensure_columns_step()
 
 
 if __name__ == "__main__":

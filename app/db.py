@@ -79,6 +79,70 @@ async def reset_db():
         await conn.run_sync(Base.metadata.create_all)
 
 
+async def ensure_model_columns(target_engine=None) -> list[str]:
+    """Догоняет схему СУЩЕСТВУЮЩИХ таблиц до моделей: добавляет недостающие колонки.
+
+    init_db()/create_all НЕ изменяет существующие таблицы, а историческая
+    цепочка alembic не покрывает все изменения моделей (пример: колонка
+    users.lootbox_pity_counter есть в модели, но ни одна миграция её не
+    добавляет) — из-за такого дрейфа бот падает с UndefinedColumnError на
+    любой запрос.
+
+    Для каждой недостающей колонки выполняется ADD COLUMN IF NOT EXISTS
+    (без NOT NULL, чтобы не упасть на таблицах с данными) и бэкфилл
+    скалярным дефолтом из модели. Возвращает список добавленных колонок.
+    Идемпотентна — безопасно вызывать на каждом старте.
+    """
+    eng = target_engine or engine
+    sync_eng = getattr(eng, "sync_engine", eng)
+    if "sqlite" in str(sync_eng.url):
+        return []  # локальный SQLite: полагаемся на create_all
+
+    from sqlalchemy import inspect as sa_inspect, text
+    from sqlalchemy.schema import CreateColumn
+
+    dialect = sync_eng.dialect
+
+    def _existing_columns(sync_conn) -> dict[str, set[str]]:
+        inspector = sa_inspect(sync_conn)
+        return {
+            name: {c["name"] for c in inspector.get_columns(name)}
+            for name in Base.metadata.tables.keys()
+            if inspector.has_table(name)
+        }
+
+    added: list[str] = []
+    async with eng.begin() as conn:
+        existing = await conn.run_sync(_existing_columns)
+        for table in Base.metadata.sorted_tables:
+            cols_in_db = existing.get(table.name)
+            if cols_in_db is None:
+                continue  # таблицы нет — её создаст create_all
+            for col in table.columns:
+                if col.name in cols_in_db:
+                    continue
+                ddl = str(CreateColumn(col).compile(dialect=dialect))
+                # NOT NULL опускаем: на непустой таблице добавление NOT NULL
+                # колонки без server_default упало бы. Дефолт бэкфиллим ниже.
+                ddl = ddl.replace(" NOT NULL", "")
+                await conn.execute(
+                    text(f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS {ddl}')
+                )
+                added.append(f"{table.name}.{col.name}")
+                # Бэкфилл Python-side скалярного дефолта (default=0, default=False,
+                # default="active" и т.п.) — CreateColumn его в DDL не рендерит.
+                default = col.default
+                if default is not None and getattr(default, "is_scalar", False):
+                    await conn.execute(
+                        text(
+                            f'UPDATE "{table.name}" SET "{col.name}" = :v '
+                            f'WHERE "{col.name}" IS NULL'
+                        ),
+                        {"v": default.arg},
+                    )
+    return added
+
+
 # ============================
 # ДИАГНОСТИКА СБОЕВ БД
 # ============================
