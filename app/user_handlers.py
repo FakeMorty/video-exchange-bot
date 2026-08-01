@@ -104,6 +104,7 @@ from app.services import (
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
+    block_user,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -387,6 +388,10 @@ class FeedbackState(StatesGroup):
 
 class LotteryBuyState(StatesGroup):
     waiting_quantity = State()
+
+
+class StylesCaseState(StatesGroup):
+    configuring = State()
 
 
 # =========================
@@ -1048,12 +1053,17 @@ async def watch_video_content(callback: CallbackQuery):
                     return
 
                 try:
+                    uploader = await get_user_by_id(session, video.uploader_user_id)
+                    uploader_name = await get_styled_display_name(session, uploader) if uploader else "Автор"
+
                     await callback.message.answer_video(
                         video.telegram_file_id,
                         caption=(
                             f"🎬 Видео #{video.id}\n"
+                            f"👤 Автор: <b>{uploader_name}</b>\n"
                             f"💰 Списано: {cost} монет"
                         ),
+                        parse_mode="HTML",
                         reply_markup=video_rating_keyboard(video.id)
                     )
                 except Exception as e:
@@ -1231,9 +1241,16 @@ async def watch_photo_content(callback: CallbackQuery):
                     break
                 photos_tried += 1
                 try:
+                    uploader = await get_user_by_id(session, photo.uploader_user_id)
+                    uploader_name = await get_styled_display_name(session, uploader) if uploader else "Автор"
+
                     await callback.message.answer_photo(
                         photo.telegram_file_id,
-                        caption=f"🖼 Фото #{photo.id}",
+                        caption=(
+                            f"🖼 Фото #{photo.id}\n"
+                            f"👤 Автор: <b>{uploader_name}</b>"
+                        ),
+                        parse_mode="HTML",
                         reply_markup=photo_actions_keyboard(photo.id)
                     )
                 except Exception as e:
@@ -2023,7 +2040,7 @@ async def successful_payment(message: Message):
                 session.expunge_all()
                 await message.answer("Ошибка платежа: сумма не совпадает.")
                 return
-            reward, rarity_or_err = await open_lootbox_for_stars(
+            reward, rarity_or_err, new_pity = await open_lootbox_for_stars(
                 session,
                 telegram_user_id=message.from_user.id,
                 payment_payload=payload,
@@ -2040,7 +2057,8 @@ async def successful_payment(message: Message):
             icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
             await message.answer(
                 f"{icon} <b>Лутбокс открыт!</b>\n\n"
-                f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
+                f"Выигрыш: <b>+{reward:,.0f}</b> монет\n"
+                f"До гарантированного Редкого+: <b>{new_pity}</b>".replace(',', ' '),
                 parse_mode="HTML",
             )
     elif payload.startswith("user_offer_"):
@@ -2131,19 +2149,46 @@ async def successful_payment(message: Message):
             await message.answer("✅ Оплата получена!")
 
 
-def _lootbox_kb(coin_price: Decimal | None = None, star_price: int | None = None) -> InlineKeyboardMarkup:
+def _lootbox_kb(coin_price: Decimal | None = None, star_price: int | None = None, user_level: int = 1) -> InlineKeyboardMarkup:
+    from app.config import WEBHOOK_BASE
+    base = (WEBHOOK_BASE or "").rstrip("/")
+    cases_url = f"{base}/cases" if base else ""
+    
     coin_price = to_decimal(coin_price if coin_price is not None else LOOTBOX_COIN_PRICE)
     star_price = int(star_price if star_price is not None else LOOTBOX_STAR_PRICE)
-    return InlineKeyboardMarkup(inline_keyboard=[
+    
+    kb = []
+    if cases_url:
+        from aiogram.types.web_app_info import WebAppInfo
+        kb.append([InlineKeyboardButton(text="🔥 ОТКРЫТЬ С АНИМАЦИЕЙ (Mini App)", web_app=WebAppInfo(url=cases_url))])
+        
+    kb.extend([
         [InlineKeyboardButton(
-            text=f"🪙 Купить за {coin_price:,.0f} монет".replace(',', ' '),
-            callback_data="lootbox_buy:coins"
+            text=f"🪙 Обычный кейс ({coin_price:,.0f} монет)".replace(',', ' '),
+            callback_data="lootbox_buy:coins:common"
         )],
         [InlineKeyboardButton(
-            text=f"⭐ Купить за {star_price} Stars",
+            text=f"⭐ Обычный кейс ({star_price} Stars)",
             callback_data="lootbox_buy:stars"
         )],
+        [InlineKeyboardButton(
+            text=f"🎨 Кейс ников (250+ монет)",
+            callback_data="styles_lootbox_menu"
+        )],
     ])
+    
+    if user_level >= 10:
+        kb.append([InlineKeyboardButton(
+            text=f"💎 Элитный кейс (1 000 монет)",
+            callback_data="lootbox_buy:coins:elite"
+        )])
+    if user_level >= 20:
+        kb.append([InlineKeyboardButton(
+            text=f"🔥 Легендарный кейс (5 000 монет)",
+            callback_data="lootbox_buy:coins:legendary"
+        )])
+        
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 @router.callback_query(F.data == "lootbox_menu")
@@ -2156,17 +2201,32 @@ async def lootbox_menu(callback: CallbackQuery):
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         discount = await get_stars_discount(session, user.id) if user else 0.0
+        pity = 10 - (user.lootbox_pity_counter if user else 0)
+        level = user.level if user else 1
 
     coin_price = to_decimal(LOOTBOX_COIN_PRICE)
     base_star_price = int(LOOTBOX_STAR_PRICE)
     star_price = max(1, int(math.ceil(base_star_price * (1 - discount)))) if discount > 0 else base_star_price
+    
+    pity_text = f"\n✨ До гарантированного <b>Редкого+</b>: <b>{pity}</b> прокрутов."
+    
+    text = (
+        "🎁 <b>Лутбоксы</b>\n\n"
+        f"Обычный кейс: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n".replace(',', ' ') +
+        "Внутри — случайный выигрыш монет.\n" +
+        pity_text + "\n\n"
+        "🎨 <b>Кейс ников</b>: шанс 50% получить кастомный стиль или 50% вернуть монеты.\n"
+    )
+    
+    if level < 10:
+        text += "\n🔓 <i>Элитный кейс откроется на 10 уровне.</i>"
+    if level < 20:
+        text += "\n🔓 <i>Легендарный кейс откроется на 20 уровне.</i>"
+    
     await callback.message.answer(
-        ("🎁 <b>Лутбоксы</b>\n\n"
-         f"Цена: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n".replace(',', ' ') +
-         "Внутри — случайный выигрыш монет.\n"
-         "Редкие крупные выигрыши возможны, но не гарантированы."),
+        text,
         parse_mode="HTML",
-        reply_markup=_lootbox_kb(coin_price, star_price),
+        reply_markup=_lootbox_kb(coin_price, star_price, level),
     )
     await callback.answer()
 
@@ -2177,7 +2237,10 @@ async def lootbox_buy(callback: CallbackQuery):
         await callback.answer("Лутбоксы отключены.", show_alert=True)
         return
     from app.services import _roll_lootbox_reward_coins, open_lootbox_for_coins
-    kind = callback.data.split(":", 1)[1]
+    parts = callback.data.split(":")
+    kind = parts[1]
+    case_type = parts[2] if len(parts) > 2 else "common"
+    
     if kind == "coins":
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
@@ -2191,38 +2254,37 @@ async def lootbox_buy(callback: CallbackQuery):
             coin_price = to_decimal(LOOTBOX_COIN_PRICE)
             base_star_price = int(LOOTBOX_STAR_PRICE)
             display_star_price = max(1, int(math.ceil(base_star_price * (1 - discount)))) if discount > 0 else base_star_price
-            if not admin_free and user.balance < coin_price:
-                await callback.answer(f"Недостаточно монет. Нужно: {coin_price:.0f}", show_alert=True)
-                return
-
+            
             if admin_free:
                 # Бесплатный лутбокс для админа
-                reward, rarity = _roll_lootbox_reward_coins()
+                reward, rarity, new_pity = _roll_lootbox_reward_coins(user.lootbox_pity_counter, case_type)
+                user.lootbox_pity_counter = new_pity
                 user = await change_balance_atomic(
                     session,
                     user.id,
                     reward,
                     "lootbox_reward_admin_free",
-                    details=f"ADMIN_FREE rarity={rarity}"
+                    details=f"ADMIN_FREE kind={case_type} rarity={rarity}"
                 ) or user
                 session.add(LootboxOpen(
                     user_id=user.id, payment_payload=None, pay_currency="coins",
                     price_coins=Decimal("0"), price_stars=0, reward_coins=reward, rarity=rarity,
                 ))
                 await log_user_action(session, user.id, "lootbox_open_admin_free",
-                                      f"rarity={rarity}, reward={reward}")
+                                      f"kind={case_type}, rarity={rarity}, reward={reward}")
                 await session.commit()
                 icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
                 await callback.message.answer(
                     f"{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\n"
-                    f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
+                    f"Выигрыш: <b>+{reward:,.0f}</b> монет\n"
+                    f"До гарантированного Редкого+: <b>{10 - new_pity}</b>".replace(',', ' '),
                     parse_mode="HTML",
-                    reply_markup=_lootbox_kb(coin_price, display_star_price),
+                    reply_markup=_lootbox_kb(coin_price, display_star_price, user.level),
                 )
                 await callback.answer("🆓 Лутбокс открыт бесплатно!")
                 return
 
-            reward, rarity_or_err = await open_lootbox_for_coins(session, user.id)
+            reward, rarity_or_err, new_pity = await open_lootbox_for_coins(session, user.id, case_type)
         if reward is None:
             await callback.answer(rarity_or_err, show_alert=True)
             return
@@ -2230,9 +2292,10 @@ async def lootbox_buy(callback: CallbackQuery):
         icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
         await callback.message.answer(
             f"{icon} <b>Лутбокс открыт!</b>\n\n"
-            f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
+            f"Выигрыш: <b>+{reward:,.0f}</b> монет\n"
+            f"До гарантированного Редкого+: <b>{new_pity}</b>".replace(',', ' '),
             parse_mode="HTML",
-            reply_markup=_lootbox_kb(coin_price, display_star_price),
+            reply_markup=_lootbox_kb(coin_price, display_star_price, user.level),
         )
         await callback.answer()
         return
@@ -2296,8 +2359,238 @@ async def lootbox_buy(callback: CallbackQuery):
     await callback.answer()
 
 
+from app.nick_styles import (
+    CATEGORIES, STYLES, STYLES_BY_CAT,
+    style_inline_preview, style_label
+)
 
-@router.callback_query(F.data == "btn_buy")
+def _styles_case_kb(excluded_ids: list[int], current_price: Decimal) -> InlineKeyboardMarkup:
+    from app.nick_styles import CATEGORIES, STYLES_BY_CAT
+    kb = []
+    
+    # Сетка категорий
+    row = []
+    for cat_id, (icon, name) in CATEGORIES.items():
+        cat_styles = STYLES_BY_CAT[cat_id]
+        cat_ids = [s.id for s in cat_styles]
+        excluded_in_cat = len([sid for sid in cat_ids if sid in excluded_ids])
+        
+        if excluded_in_cat == len(cat_ids):
+            status = "❌"
+        elif excluded_in_cat > 0:
+            status = "⚠️"
+        else:
+            status = "✅"
+            
+        # Кнопка открывает список стилей категории
+        row.append(InlineKeyboardButton(
+            text=f"{status} {icon} {name}", 
+            callback_data=f"styles_case_view_cat:{cat_id}"
+        ))
+        if len(row) == 2:
+            kb.append(row)
+            row = []
+    if row:
+        kb.append(row)
+        
+    kb.append([InlineKeyboardButton(text=f"🎲 ОТКРЫТЬ ({current_price:.0f} монет)", callback_data="styles_case_open")])
+    kb.append([InlineKeyboardButton(text="◀️ Назад", callback_data="lootbox_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def _styles_list_kb(cat_id: int, excluded_ids: list[int]) -> InlineKeyboardMarkup:
+    from app.nick_styles import STYLES_BY_CAT, style_label
+    kb = []
+    cat_styles = STYLES_BY_CAT[cat_id]
+    
+    # По 2 стиля в ряд
+    row = []
+    for s in cat_styles:
+        status = "❌" if s.id in excluded_ids else "✅"
+        row.append(InlineKeyboardButton(
+            text=f"{status} {s.label}", 
+            callback_data=f"styles_case_toggle_style:{s.id}"
+        ))
+        if len(row) == 2:
+            kb.append(row)
+            row = []
+    if row:
+        kb.append(row)
+        
+    # Управление всей категорией
+    cat_ids = [s.id for s in cat_styles]
+    all_excluded = all(sid in excluded_ids for sid in cat_ids)
+    cat_toggle_text = "✅ Включить все" if all_excluded else "❌ Исключить все"
+    
+    kb.append([InlineKeyboardButton(text=cat_toggle_text, callback_data=f"styles_case_toggle_cat_all:{cat_id}")])
+    kb.append([InlineKeyboardButton(text="◀️ К категориям", callback_data="styles_lootbox_menu_refresh")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+@router.callback_query(F.data == "styles_lootbox_menu")
+async def styles_lootbox_menu(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(StylesCaseState.configuring)
+    data = await state.get_data()
+    excluded_ids = data.get("excluded_ids", [])
+    
+    from app.nick_styles import STYLES
+    total = len(STYLES)
+    remaining = total - len(excluded_ids)
+    price = (Decimal("250") * Decimal(total) / Decimal(remaining)).quantize(Decimal("1"), rounding=ROUND_DOWN)
+    
+    text = (
+        "🎨 <b>Кейс ников</b>\n\n"
+        "В этом кейсе вы можете выбить кастомный стиль для ника на 7 дней.\n"
+        "• Шанс 50%: Рандомный стиль\n"
+        "• Шанс 50%: Утешительный приз 10-250 монет\n\n"
+        f"<b>Текущая цена:</b> {price:.0f} монет\n"
+        f"<b>Доступно стилей:</b> {remaining}/{total}\n\n"
+        "Выберите категорию ниже, чтобы настроить доступные стили точечно. "
+        "Удаление стилей повышает шанс на остальные, но <b>увеличивает цену</b>."
+    )
+    
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=_styles_case_kb(excluded_ids, price))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "styles_lootbox_menu_refresh")
+async def styles_lootbox_menu_refresh(callback: CallbackQuery, state: FSMContext):
+    """Возврат к категориям с редактированием сообщения"""
+    data = await state.get_data()
+    excluded_ids = data.get("excluded_ids", [])
+    
+    from app.nick_styles import STYLES
+    total = len(STYLES)
+    remaining = total - len(excluded_ids)
+    price = (Decimal("250") * Decimal(total) / Decimal(remaining)).quantize(Decimal("1"), rounding=ROUND_DOWN)
+    
+    text = (
+        "🎨 <b>Кейс ников</b>\n\n"
+        f"<b>Текущая цена:</b> {price:.0f} монет\n"
+        f"<b>Доступно стилей:</b> {remaining}/{total}\n\n"
+        "Выберите категорию для точечной настройки:"
+    )
+    
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_styles_case_kb(excluded_ids, price))
+    await callback.answer()
+
+
+@router.callback_query(StylesCaseState.configuring, F.data.startswith("styles_case_view_cat:"))
+async def styles_case_view_cat(callback: CallbackQuery, state: FSMContext):
+    cat_id = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    excluded_ids = data.get("excluded_ids", [])
+    
+    from app.nick_styles import CATEGORIES
+    icon, name = CATEGORIES[cat_id]
+    
+    text = (
+        f"{icon} <b>Категория: {name}</b>\n\n"
+        "Нажмите на стиль, чтобы включить или исключить его из кейса."
+    )
+    
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_styles_list_kb(cat_id, excluded_ids))
+    await callback.answer()
+
+
+@router.callback_query(StylesCaseState.configuring, F.data.startswith("styles_case_toggle_style:"))
+async def styles_case_toggle_style(callback: CallbackQuery, state: FSMContext):
+    style_id = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    excluded_ids = list(data.get("excluded_ids", []))
+    
+    from app.nick_styles import STYLES, STYLES_BY_CAT
+    
+    if style_id in excluded_ids:
+        excluded_ids.remove(style_id)
+    else:
+        # Safeguard: cannot exclude ALL styles
+        if len(excluded_ids) >= len(STYLES) - 1:
+            await callback.answer("В кейсе должен остаться хотя бы один стиль!", show_alert=True)
+            return
+        excluded_ids.append(style_id)
+        
+    await state.update_data(excluded_ids=excluded_ids)
+    
+    # Рефреш списка стилей в текущей категории
+    s_obj = STYLES[style_id]
+    await callback.message.edit_reply_markup(reply_markup=_styles_list_kb(s_obj.cat_id, excluded_ids))
+    await callback.answer()
+
+
+@router.callback_query(StylesCaseState.configuring, F.data.startswith("styles_case_toggle_cat_all:"))
+async def styles_case_toggle_cat_all(callback: CallbackQuery, state: FSMContext):
+    cat_id = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    excluded_ids = list(data.get("excluded_ids", []))
+    
+    from app.nick_styles import STYLES_BY_CAT, STYLES
+    cat_styles = STYLES_BY_CAT[cat_id]
+    cat_style_ids = [s.id for s in cat_styles]
+    
+    all_excluded = all(sid in excluded_ids for sid in cat_style_ids)
+    if all_excluded:
+        # Включаем все стили категории обратно
+        excluded_ids = [sid for sid in excluded_ids if sid not in cat_style_ids]
+    else:
+        # Исключаем все стили категории (с проверкой на последний выживший)
+        other_excluded_count = len([sid for sid in excluded_ids if sid not in cat_style_ids])
+        if other_excluded_count + len(cat_style_ids) >= len(STYLES):
+             # Оставляем хотя бы один
+             available_to_exclude = (len(STYLES) - 1) - other_excluded_count
+             if available_to_exclude <= 0:
+                 await callback.answer("Нельзя исключить все стили!", show_alert=True)
+                 return
+             # Исключаем только часть? Нет, лучше просто запретить.
+             await callback.answer("Нельзя исключить все стили в боте!", show_alert=True)
+             return
+             
+        for sid in cat_style_ids:
+            if sid not in excluded_ids:
+                excluded_ids.append(sid)
+                
+    await state.update_data(excluded_ids=excluded_ids)
+    await callback.message.edit_reply_markup(reply_markup=_styles_list_kb(cat_id, excluded_ids))
+    await callback.answer()
+
+
+@router.callback_query(StylesCaseState.configuring, F.data == "styles_case_open")
+async def styles_case_open(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    excluded_ids = data.get("excluded_ids", [])
+    
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            return
+            
+        from app.services import open_styles_lootbox
+        reward, kind, price = await open_styles_lootbox(session, user.id, excluded_ids)
+        
+    if reward is None:
+        await callback.answer(kind, show_alert=True)
+        return
+        
+    if kind == "style":
+        from app.nick_styles import style_inline_preview, style_label
+        preview = style_inline_preview(reward)
+        label = style_label(reward)
+        msg = (
+            f"✨ <b>ВЫ ВЫИГРАЛИ СТИЛЬ!</b>\n\n"
+            f"Название: <b>{label}</b>\n"
+            f"Вид: <code>{preview}</code>\n\n"
+            f"Стиль активирован на 7 дней! Вы можете увидеть его в профиле."
+        )
+    else:
+        msg = (
+            f"🪙 <b>Утешительный приз!</b>\n\n"
+            f"Вы получили <b>{reward:.0f} монет</b> на баланс."
+        )
+        
+    await callback.message.answer(msg, parse_mode="HTML")
+    # Reset to main lootbox menu
+    await state.clear()
+    await lootbox_menu(callback)
 async def cb_btn_buy(callback: CallbackQuery, state: FSMContext):
     # Reuse btn_buy logic
     from aiogram.types import Message as TGMessage
@@ -3834,6 +4127,33 @@ async def report_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.answer("❌ Жалоба отменена.")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("block_author:"))
+async def cb_block_author(callback: CallbackQuery):
+    video_id = int(callback.data.split(":")[1])
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        video = await get_video_by_id(session, video_id)
+        if not user or not video:
+            await callback.answer("Ошибка.")
+            return
+        
+        if video.uploader_user_id == user.id:
+            await callback.answer("Вы не можете заблокировать самого себя.", show_alert=True)
+            return
+
+        success = await block_user(session, user.id, video.uploader_user_id)
+        if success:
+            await callback.answer("Автор заблокирован. Вы больше не увидите его контент.", show_alert=True)
+            # Можно предложить переключиться на следующее видео
+            await callback.message.answer(
+                "✅ Автор заблокирован. Вы больше не увидите его видео и фото.\n"
+                "Нажмите «Следующее», чтобы продолжить просмотр других авторов.",
+                reply_markup=video_error_keyboard() if video.content_type == "video" else photo_error_keyboard()
+            )
+        else:
+            await callback.answer("Этот автор уже заблокирован для вас.", show_alert=True)
 
 
 # ====================================================
