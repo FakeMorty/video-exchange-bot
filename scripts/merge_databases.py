@@ -48,6 +48,90 @@ async def _load_parent_ids(dest_conn, parent_table, parent_col, cache):
     return cache[key]
 
 
+async def build_user_id_map(source_conn, dest_conn) -> dict:
+    """{source_user_id: dest_user_id} для «двойников».
+
+    Пока merge был сломан, бот уже перезапустился на новой БД и часть людей
+    успела нажать /start: они перерегистрировались с НОВЫМ id (и нулевым
+    профилем). Их telegram_id в dest занят, поэтому исходная строка users с
+    их старым id вставиться не может (unique по telegram_id), и UPSERT по PK
+    тут не спасает. Для таких людей правильно: профиль из source накатить на
+    существующий dest-id, а все дочерние строки со старого id перемапить.
+    """
+    src = await source_conn.execute(text("SELECT id, telegram_id FROM users"))
+    dest = await dest_conn.execute(text("SELECT id, telegram_id FROM users"))
+    dest_by_tg = {tg: i for i, tg in dest.fetchall()}
+    id_map = {}
+    for sid, tg in src.fetchall():
+        did = dest_by_tg.get(tg)
+        if did is not None and did != sid:
+            id_map[sid] = did
+    if id_map:
+        tg_by_sid = {sid: tg for sid, tg in (await source_conn.execute(
+            text("SELECT id, telegram_id FROM users"))).fetchall()}
+        logger.info(
+            f"Detected {len(id_map)} duplicate user identities (re-registered "
+            f"on new DB): " + ", ".join(
+                f"src#{s}->dest#{d} (tg {tg_by_sid.get(s)})" for s, d in sorted(id_map.items())
+            )
+        )
+    return id_map
+
+
+async def reconcile_duplicate_users(dest_conn, user_id_map):
+    """Финальная рассклейка двойников ПОСЛЕ переноса всех таблиц.
+
+    1) Дочерние строки в dest, всё ещё ссылающиеся на старый id (могли
+       попасть туда прошлыми прогонами merge), переписываем на новый id.
+    2) Дублирующую строку users со старым id (если успела влиться ранее)
+       удаляем — после ремапа на неё никто не ссылается.
+    Новые вставки уже перемаплены на этапе фильтрации в merge_table.
+    """
+    if not user_id_map:
+        return
+    fk_refs = [
+        (t.name, c.name)
+        for t in Base.metadata.sorted_tables
+        for c in t.columns
+        for fk in c.foreign_keys
+        if fk.column.table.name == "users" and fk.column.name == "id"
+    ]
+    for sid, did in user_id_map.items():
+        for tname, cname in fk_refs:
+            try:
+                await dest_conn.execute(
+                    text(f'UPDATE "{tname}" SET "{cname}" = :did WHERE "{cname}" = :sid'),
+                    {"did": did, "sid": sid},
+                )
+                await dest_conn.commit()
+            except IntegrityError:
+                # Конфликт уникальности (у нового id уже есть такая строка,
+                # напр. в user_ad_states) — старые дубли просто убираем.
+                await dest_conn.rollback()
+                logger.warning(
+                    f"reconcile: unique conflict remapping {tname}.{cname} "
+                    f"{sid}->{did}, deleting sid rows instead"
+                )
+                try:
+                    await dest_conn.execute(
+                        text(f'DELETE FROM "{tname}" WHERE "{cname}" = :sid'),
+                        {"sid": sid},
+                    )
+                    await dest_conn.commit()
+                except Exception:
+                    await dest_conn.rollback()
+        try:
+            res = await dest_conn.execute(
+                text("DELETE FROM users WHERE id = :sid"), {"sid": sid}
+            )
+            await dest_conn.commit()
+            if res.rowcount:
+                logger.info(f"reconcile: deleted duplicate users row #{sid} (canonical id now #{did})")
+        except IntegrityError as e:
+            await dest_conn.rollback()
+            logger.warning(f"reconcile: could not delete duplicate user #{sid}: {e}")
+
+
 def _conflict_stmt(stmt, table, col_names):
     """ON CONFLICT по PK: для «изменяемых» сущностей — UPSERT свежими значениями.
 
@@ -74,7 +158,7 @@ def _conflict_stmt(stmt, table, col_names):
     return stmt.on_conflict_do_nothing()
 
 
-async def merge_table(table, source_conn, dest_conn):
+async def merge_table(table, source_conn, dest_conn, user_id_map=None):
     table_name = table.name
     logger.info(f"Merging table: {table_name}")
 
@@ -131,6 +215,47 @@ async def merge_table(table, source_conn, dest_conn):
     # Map column names from the select result (which are plain column names)
     col_names = [c.name for c in model_columns]
     data = [dict(zip(col_names, row)) for row in rows]
+
+    user_id_map = user_id_map or {}
+
+    # --- «Двойники» users: профиль source накатываем на существующий dest-id,
+    # саму строку-двойник не вставляем (её telegram_id занят свежей записью) ---
+    if table_name == "users" and user_id_map:
+        dup_rows = [r for r in data if r.get("id") in user_id_map]
+        data = [r for r in data if r.get("id") not in user_id_map]
+        set_cols = [c for c in col_names if c != "id"]
+        for r in dup_rows:
+            sets = ", ".join(f'"{c}" = :{c}' for c in set_cols)
+            params = {c: r[c] for c in set_cols}
+            params["_did"] = user_id_map[r["id"]]
+            await dest_conn.execute(
+                text(f'UPDATE users SET {sets} WHERE id = :_did'), params
+            )
+        if dup_rows:
+            await dest_conn.commit()
+            logger.info(
+                f"users: applied source profile onto {len(dup_rows)} "
+                f"re-registered dest rows (identity reconciliation)"
+            )
+
+    # --- Перемапливаем FK→users.id для детей двойников на их dest-id ---
+    if user_id_map:
+        translated = 0
+        for col in model_columns:
+            if not col.foreign_keys:
+                continue
+            fk = next(iter(col.foreign_keys))
+            if fk.column.table.name == "users" and fk.column.name == "id":
+                for r in data:
+                    v = r.get(col.name)
+                    if v in user_id_map:
+                        r[col.name] = user_id_map[v]
+                        translated += 1
+        if translated:
+            logger.info(
+                f"Table {table_name}: remapped {translated} FK references "
+                f"to reconciled user identities"
+            )
 
     # --- Отсекаем «сирот»: строки, ссылающиеся на отсутствующих родителей ---
     # В старой базе остались записи на удалённых вручную юзеров/видео (FK там
@@ -264,16 +389,30 @@ async def main():
     try:
         async with source_engine.connect() as source_conn:
             async with dest_engine.connect() as dest_conn:
+                # Сначала — карта двойников (перерегистрации на новой БД),
+                # чтобы дети двойников перемапились при вставке.
+                user_id_map = await build_user_id_map(source_conn, dest_conn)
+
                 # Get tables in dependency order
                 tables = Base.metadata.sorted_tables
 
                 for table in tables:
                     try:
-                        total_rows += await merge_table(table, source_conn, dest_conn)
+                        total_rows += await merge_table(
+                            table, source_conn, dest_conn, user_id_map
+                        )
                     except Exception as e:
                         logger.error(f"Failed to merge table {table.name}: {e}")
                         failed.append((table.name, str(e)))
                         await dest_conn.rollback()
+
+                # Финальная рассклейка двойников: дети со старых id → новые,
+                # дублирующие строки users удаляем.
+                try:
+                    await reconcile_duplicate_users(dest_conn, user_id_map)
+                except Exception as e:
+                    logger.error(f"Failed to reconcile duplicate users: {e}")
+                    await dest_conn.rollback()
     finally:
         await source_engine.dispose()
         await dest_engine.dispose()
