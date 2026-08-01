@@ -171,37 +171,77 @@ async def notify_admins(bot, text: str, *, parse_mode: str = "HTML") -> int:
 # ============================
 # ЛУТБОКСЫ
 # ============================
-def _roll_lootbox_reward_coins() -> tuple[Decimal, str]:
+def _roll_lootbox_reward_coins(pity_counter: int = 0, kind: str = "common") -> tuple[Decimal, str, int]:
+    """
+    Rolls reward. Returns (amount, rarity, new_pity_counter).
+    Pity: if pity_counter >= 9, next is guaranteed Rare+.
+    """
     r = random.random()
-    if r < 0.70:
-        return to_decimal(random.randint(10, 30)), "common"
-    if r < 0.95:
-        return to_decimal(random.randint(40, 100)), "rare"
-    if r < 0.995:
-        return to_decimal(random.randint(140, 300)), "epic"
-    return to_decimal(random.randint(500, 2000)), "jackpot"
+    if pity_counter >= 9:
+        r = 0.70 + (random.random() * 0.30)
+    
+    if kind == "elite":
+        # Elite case (Level 10+): better rewards, higher costs
+        if r < 0.60: # 60% chance for rare-ish
+            return to_decimal(random.randint(100, 250)), "rare", pity_counter + 1
+        if r < 0.90:
+            return to_decimal(random.randint(300, 700)), "epic", 0
+        return to_decimal(random.randint(1000, 5000)), "jackpot", 0
+    elif kind == "legendary":
+        # Legendary case (Level 20+): huge rewards
+        if r < 0.50:
+            return to_decimal(random.randint(500, 1000)), "epic", pity_counter + 1
+        return to_decimal(random.randint(2000, 15000)), "jackpot", 0
+    else:
+        # Standard common case
+        if r < 0.70:
+            return to_decimal(random.randint(10, 30)), "common", pity_counter + 1
+        if r < 0.95:
+            return to_decimal(random.randint(40, 100)), "rare", 0
+        if r < 0.995:
+            return to_decimal(random.randint(140, 300)), "epic", 0
+        return to_decimal(random.randint(500, 2000)), "jackpot", 0
 
 
-async def open_lootbox_for_coins(session: AsyncSession, user_id: int) -> tuple[Decimal, str] | tuple[None, str]:
+async def open_lootbox_for_coins(session: AsyncSession, user_id: int, kind: str = "common") -> tuple[Decimal, str, int] | tuple[None, str, int]:
     if not ENABLE_LOOTBOXES:
-        return None, "Лутбоксы временно отключены."
+        return None, "Лутбоксы временно отключены.", 0
     user = await get_user_by_id(session, user_id)
     if not user:
-        return None, "Пользователь не найден."
+        return None, "Пользователь не найден.", 0
 
-    price = to_decimal(LOOTBOX_COIN_PRICE)
+    prices = {
+        "common": to_decimal(LOOTBOX_COIN_PRICE),
+        "elite": Decimal("1000"),
+        "legendary": Decimal("5000"),
+    }
+    levels = {
+        "common": 1,
+        "elite": 10,
+        "legendary": 20,
+    }
+    
+    price = prices.get(kind, prices["common"])
+    req_level = levels.get(kind, 1)
+    
+    if user.level < req_level:
+        return None, f"Требуется уровень {req_level}.", 0
+
     if user.balance < price:
-        return None, "Недостаточно монет."
+        return None, "Недостаточно монет.", 0
 
-    reward, rarity = _roll_lootbox_reward_coins()
+    # Using separate pity per case type could be done, but let's stick to one for simplicity 
+    # or just use the common one. User might prefer it reset on any non-common win.
+    reward, rarity, new_pity = _roll_lootbox_reward_coins(user.lootbox_pity_counter, kind)
+    user.lootbox_pity_counter = new_pity
 
-    await change_balance_atomic(session, user.id, -price, "lootbox_buy", details="currency=coins")
+    await change_balance_atomic(session, user.id, -price, f"lootbox_buy_{kind}", details="currency=coins")
     await change_balance_atomic(
         session,
         user.id,
         reward,
         "lootbox_reward",
-        details=f"rarity={rarity}",
+        details=f"kind={kind};rarity={rarity}",
     )
     session.add(LootboxOpen(
         user_id=user.id,
@@ -213,32 +253,33 @@ async def open_lootbox_for_coins(session: AsyncSession, user_id: int) -> tuple[D
         rarity=rarity,
     ))
     await session.commit()
-    return reward, rarity
+    return reward, rarity, 10 - new_pity
 
 
 async def open_lootbox_for_stars(
     session: AsyncSession,
     telegram_user_id: int,
     payment_payload: str,
-) -> tuple[Decimal, str] | tuple[None, str]:
+) -> tuple[Decimal, str, int] | tuple[None, str, int]:
     """
     Called after successful Telegram Stars payment.
     Idempotent by payload.
     """
     if not ENABLE_LOOTBOXES:
-        return None, "Лутбоксы временно отключены."
+        return None, "Лутбоксы временно отключены.", 0
 
     user = await get_user(session, telegram_user_id)
     if not user:
-        return None, "Пользователь не найден."
+        return None, "Пользователь не найден.", 0
 
     existing = (await session.execute(
         select(LootboxOpen).where(LootboxOpen.payment_payload == payment_payload)
     )).scalar_one_or_none()
     if existing:
-        return None, "Этот платёж уже обработан."
+        return None, "Этот платёж уже обработан.", 0
 
-    reward, rarity = _roll_lootbox_reward_coins()
+    reward, rarity, new_pity = _roll_lootbox_reward_coins(user.lootbox_pity_counter)
+    user.lootbox_pity_counter = new_pity
     stars_price = int(LOOTBOX_STAR_PRICE)
 
     await change_balance_atomic(
@@ -259,7 +300,56 @@ async def open_lootbox_for_stars(
     ))
     await log_user_action(session, user.id, "lootbox_open", f"payload={payment_payload}")
     await session.commit()
-    return reward, rarity
+    return reward, rarity, 10 - new_pity
+
+
+async def open_styles_lootbox(
+    session: AsyncSession,
+    user_id: int,
+    excluded_style_ids: list[int],
+) -> tuple[int | Decimal, str, Decimal] | tuple[None, str, Decimal]:
+    """
+    Nickname Styles Case.
+    Cost: 250 * (168 / (168 - len(excluded_style_ids)))
+    50% chance: Random custom style (active for 7 days).
+    50% chance: 10-250 coins (step 10).
+    """
+    from app.nick_styles import STYLES
+    total_styles = len(STYLES)
+    remaining_styles = total_styles - len(excluded_style_ids)
+    
+    if remaining_styles < 1:
+        return None, "Нельзя исключить все стили!", Decimal("0")
+        
+    base_price = Decimal("250")
+    price = (base_price * Decimal(total_styles) / Decimal(remaining_styles)).quantize(Decimal("1"), rounding=ROUND_DOWN)
+    
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return None, "Пользователь не найден.", price
+        
+    if user.balance < price:
+        return None, f"Недостаточно монет. Нужно {price:.0f}.", price
+        
+    await change_balance_atomic(session, user.id, -price, "styles_lootbox_buy", details=f"excl={len(excluded_style_ids)}")
+    
+    r = random.random()
+    if r < 0.50:
+        # Style reward
+        available_ids = [sid for sid in STYLES.keys() if sid not in excluded_style_ids]
+        win_style_id = random.choice(available_ids)
+        # Activate for 7 days
+        await activate_perk(session, user.id, "custom_nick", 7, style_id=win_style_id)
+        await log_user_action(session, user.id, "styles_lootbox_win_style", f"style_id={win_style_id}")
+        await session.commit()
+        return win_style_id, "style", price
+    else:
+        # Coins reward
+        win_coins = Decimal(random.choice(range(10, 260, 10)))
+        await change_balance_atomic(session, user.id, win_coins, "styles_lootbox_win_coins")
+        await log_user_action(session, user.id, "styles_lootbox_win_coins", f"amount={win_coins}")
+        await session.commit()
+        return win_coins, "coins", price
 
 def to_decimal(val) -> Decimal:
     return Decimal(str(val))
@@ -989,23 +1079,33 @@ async def auto_approve_if_trusted(
 
 
 async def get_random_video_for_user(session: AsyncSession, user_id: int) -> "Video | None":
+    from app.models import BlockedUser
     return (await session.execute(
         select(Video).where(
             Video.status == "approved",
             Video.content_type == "video",
             Video.uploader_user_id != user_id,
-            ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists()
+            ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists(),
+            ~select(BlockedUser.id).where(
+                BlockedUser.user_id == user_id,
+                BlockedUser.blocked_user_id == Video.uploader_user_id
+            ).exists()
         ).order_by(func.random()).limit(1)
     )).scalar_one_or_none()
 
 
 async def get_random_photo_for_user(session: AsyncSession, user_id: int) -> "Video | None":
+    from app.models import BlockedUser
     return (await session.execute(
         select(Video).where(
             Video.status == "approved",
             Video.content_type == "photo",
             Video.uploader_user_id != user_id,
-            ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists()
+            ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists(),
+            ~select(BlockedUser.id).where(
+                BlockedUser.user_id == user_id,
+                BlockedUser.blocked_user_id == Video.uploader_user_id
+            ).exists()
         ).order_by(func.random()).limit(1)
     )).scalar_one_or_none()
 
@@ -2996,6 +3096,33 @@ async def dismiss_report(session: AsyncSession, report_id: int, admin_id: int) -
     report.reviewed_by = admin_id
     await session.commit()
     return True
+
+
+async def block_user(session: AsyncSession, user_id: int, blocked_user_id: int) -> bool:
+    """Блокирует автора для пользователя. Возвращает True если заблокирован впервые."""
+    from app.models import BlockedUser
+    from sqlalchemy.exc import IntegrityError
+
+    if user_id == blocked_user_id:
+        return False
+
+    existing = (await session.execute(
+        select(BlockedUser).where(
+            BlockedUser.user_id == user_id,
+            BlockedUser.blocked_user_id == blocked_user_id
+        )
+    )).scalar_one_or_none()
+
+    if existing:
+        return False
+
+    try:
+        session.add(BlockedUser(user_id=user_id, blocked_user_id=blocked_user_id))
+        await session.commit()
+        return True
+    except IntegrityError:
+        await session.rollback()
+        return False
 
 
 # ============================

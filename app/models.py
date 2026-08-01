@@ -81,6 +81,27 @@ class User(Base):
     )
     perks: Mapped[List["UserPerk"]] = relationship(back_populates="user")
     katya_chats: Mapped[List["KatyaChat"]] = relationship(back_populates="user")
+    blocked_users: Mapped[List["BlockedUser"]] = relationship(
+        "BlockedUser",
+        foreign_keys="BlockedUser.user_id",
+        back_populates="user",
+    )
+    lootbox_pity_counter: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class BlockedUser(Base):
+    __tablename__ = "blocked_users"
+    __table_args__ = (
+        UniqueConstraint("user_id", "blocked_user_id", name="uq_user_blocked_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    blocked_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    user: Mapped["User"] = relationship(foreign_keys=[user_id], back_populates="blocked_users")
+    blocked_user: Mapped["User"] = relationship(foreign_keys=[blocked_user_id])
 
 
 class LootboxOpen(Base):

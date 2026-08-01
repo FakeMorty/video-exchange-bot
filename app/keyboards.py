@@ -143,6 +143,7 @@ def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{video_id}"),
             InlineKeyboardButton(text="🚨 Жалоба", callback_data=f"report_video:{video_id}"),
         ],
+        [InlineKeyboardButton(text="🚫 Заблокировать автора", callback_data=f"block_author:{video_id}")],
         [InlineKeyboardButton(text="📝 Следующее", callback_data="watch_next")],
     ])
 
@@ -152,8 +153,9 @@ def photo_actions_keyboard(photo_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{photo_id}")],
         [
             InlineKeyboardButton(text="🚨 Жалоба", callback_data=f"report_video:{photo_id}"),
-            InlineKeyboardButton(text="📝 Следующее фото", callback_data="watch_next_photo"),
+            InlineKeyboardButton(text="🚫 Блок автора", callback_data=f"block_author:{photo_id}"),
         ],
+        [InlineKeyboardButton(text="📝 Следующее фото", callback_data="watch_next_photo")],
     ])
 
 
@@ -229,11 +231,21 @@ def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
 
 
 def games_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    from app.config import WEBHOOK_BASE
+    base = (WEBHOOK_BASE or "").rstrip("/")
+    cases_url = f"{base}/cases" if base else ""
+    
+    kb = []
+    if cases_url:
+        from aiogram.types.web_app_info import WebAppInfo
+        kb.append([InlineKeyboardButton(text="🎁 Кейсы (Mini App)", web_app=WebAppInfo(url=cases_url))])
+        
+    kb.extend([
         [InlineKeyboardButton(text=BTN_ARCADE, callback_data="arcade_menu")],
         [InlineKeyboardButton(text=BTN_LOOTBOXES, callback_data="lootbox_menu")],
         [InlineKeyboardButton(text=BTN_LOTTERY, callback_data="open_lottery")],
     ])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 def tops_menu_keyboard() -> InlineKeyboardMarkup:

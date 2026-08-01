@@ -2201,8 +2201,471 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
 
 
 # ============================
-# 🚀 КОСМИЧЕСКАЯ АРКАДА (Mini App)
+# 🎁 КЕЙСЫ (Mini App)
 # ============================
+
+CASES_PAGE_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Кейсы</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+  --bg: #0f1015;
+  --panel: #1a1c23;
+  --accent: #ffb700;
+  --blue: #4b69ff;
+  --purple: #8847ff;
+  --pink: #d32ce6;
+  --red: #eb4b4b;
+  --gold: #e4ae39;
+  --text: #ffffff;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', Roboto, sans-serif;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.header {
+  padding: 15px;
+  background: var(--panel);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid rgba(255,255,255,0.05);
+}
+.balance { font-weight: bold; color: var(--accent); font-size: 18px; }
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  gap: 30px;
+}
+
+/* Spinner Styles */
+.spinner-container {
+  width: 100%;
+  max-width: 600px;
+  height: 140px;
+  background: var(--panel);
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: inset 0 0 40px rgba(0,0,0,0.5);
+}
+.spinner-container::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  z-index: 10;
+  box-shadow: 0 0 15px var(--accent);
+}
+.spinner-track {
+  display: flex;
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  transition: transform 7s cubic-bezier(0.1, 0, 0.1, 1);
+}
+.item {
+  width: 120px;
+  height: 100%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid rgba(255,255,255,0.05);
+  position: relative;
+  padding: 10px;
+  text-align: center;
+}
+.item-bg {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+}
+.item-icon { font-size: 40px; margin-bottom: 5px; filter: drop-shadow(0 0 10px rgba(255,255,255,0.2)); }
+.item-label { font-size: 11px; font-weight: bold; text-transform: uppercase; opacity: 0.8; }
+.item-value { font-size: 14px; font-weight: 900; }
+
+.rarity-common { color: var(--blue); }
+.rarity-rare { color: var(--purple); }
+.rarity-epic { color: var(--pink); }
+.rarity-jackpot { color: var(--red); }
+.rarity-gold { color: var(--gold); }
+
+.bg-common { background: var(--blue); }
+.bg-rare { background: var(--purple); }
+.bg-epic { background: var(--pink); }
+.bg-jackpot { background: var(--red); }
+.bg-gold { background: var(--gold); }
+
+.controls {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.btn-open {
+  background: linear-gradient(to bottom, #4CAF50, #2E7D32);
+  color: white;
+  border: none;
+  padding: 18px;
+  border-radius: 8px;
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 4px 0 #1B5E20;
+  text-transform: uppercase;
+}
+.btn-open:active { transform: translateY(2px); box-shadow: 0 2px 0 #1B5E20; }
+.btn-open:disabled { background: #555; box-shadow: 0 4px 0 #333; opacity: 0.6; }
+
+.pity-info { font-size: 13px; color: #888; text-align: center; }
+
+.case-selector {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 10px;
+}
+.case-card {
+  flex-shrink: 0;
+  width: 120px;
+  background: var(--panel);
+  padding: 15px;
+  border-radius: 12px;
+  text-align: center;
+  border: 2px solid transparent;
+}
+.case-card.active { border-color: var(--accent); background: rgba(255,183,0,0.05); }
+.case-card-icon { font-size: 30px; margin-bottom: 10px; }
+.case-card-name { font-size: 12px; font-weight: bold; margin-bottom: 5px; }
+.case-card-price { font-size: 14px; color: var(--accent); font-weight: bold; }
+
+#win-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.9);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  animation: fadeIn 0.5s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.win-title { font-size: 24px; color: var(--accent); margin-bottom: 20px; }
+.win-item { font-size: 80px; margin-bottom: 20px; }
+.win-name { font-size: 20px; font-weight: bold; margin-bottom: 30px; }
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>КЕЙСЫ <span id="case-name-top">ОБЫЧНЫЙ</span></div>
+  <div class="balance"><span id="balance-val">0.00</span> 🪙</div>
+</div>
+
+<div class="main">
+  <div class="case-selector" id="case-selector">
+    <!-- Кнопки выбора кейсов -->
+  </div>
+
+  <div class="spinner-container">
+    <div class="spinner-track" id="spinner-track">
+      <!-- Элементы будут тут -->
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn-open" id="btn-open">ОТКРЫТЬ ЗА <span id="open-price">100</span></button>
+    <div class="pity-info" id="pity-info">До гаранта Редкого+: 10</div>
+  </div>
+</div>
+
+<div id="win-overlay">
+  <div class="win-title">ПРЕДМЕТ ПОЛУЧЕН!</div>
+  <div class="win-item" id="win-icon">🎁</div>
+  <div class="win-name" id="win-name">???</div>
+  <button class="btn-open" onclick="closeWin()">ОТЛИЧНО</button>
+</div>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+const track = document.getElementById('spinner-track');
+const btnOpen = document.getElementById('btn-open');
+const winOverlay = document.getElementById('win-overlay');
+
+let balance = 0;
+let currentCase = 'common';
+let pity = 10;
+let isSpinning = false;
+
+const RARITIES = {
+  common: { name: 'Армейское', color: 'blue' },
+  rare: { name: 'Запрещенное', color: 'purple' },
+  epic: { name: 'Засекреченное', color: 'pink' },
+  jackpot: { name: 'Тайное', color: 'red' },
+  gold: { name: 'Золотое', color: 'gold' }
+};
+
+const ITEMS_DATA = {
+  coins: { icon: '🪙', label: 'Монеты' },
+  style: { icon: '🎨', label: 'Стиль ника' }
+};
+
+function createItemEl(data) {
+  const div = document.createElement('div');
+  div.className = `item rarity-${data.rarity}`;
+  div.innerHTML = `
+    <div class="item-icon">${ITEMS_DATA[data.type].icon}</div>
+    <div class="item-label">${RARITIES[data.rarity].name}</div>
+    <div class="item-value">${data.value}</div>
+    <div class="item-bg bg-${data.rarity}"></div>
+  `;
+  return div;
+}
+
+async function loadState() {
+  const res = await fetch('/api/cases/state', {
+    headers: { 'X-Telegram-Init-Data': tg.initData }
+  });
+  const data = await res.json();
+  if (data.ok) {
+    balance = data.balance;
+    document.getElementById('balance-val').innerText = balance.toFixed(2);
+    document.getElementById('pity-info').innerText = `До гаранта Редкого+: ${data.pity}`;
+    
+    const selector = document.getElementById('case-selector');
+    selector.innerHTML = '';
+    data.cases.forEach(c => {
+      const card = document.createElement('div');
+      card.className = `case-card ${currentCase === c.id ? 'active' : ''}`;
+      if (data.user_level < c.req_level) card.style.opacity = '0.5';
+      card.innerHTML = `
+        <div class="case-card-icon">${c.icon}</div>
+        <div class="case-card-name">${c.name}</div>
+        <div class="case-card-price">${c.price} 🪙</div>
+      `;
+      card.onclick = () => {
+        if (isSpinning) return;
+        if (data.user_level < c.req_level) {
+          tg.showAlert('Требуется уровень ' + c.req_level);
+          return;
+        }
+        currentCase = c.id;
+        document.getElementById('case-name-top').innerText = c.name.toUpperCase();
+        document.getElementById('open-price').innerText = c.price;
+        loadState(); // refresh active class
+      };
+      selector.appendChild(card);
+    });
+  }
+}
+
+async function openCase() {
+  if (isSpinning) return;
+  
+  btnOpen.disabled = true;
+  
+  const res = await fetch('/api/cases/open', {
+    method: 'POST',
+    headers: { 
+      'X-Telegram-Init-Data': tg.initData,
+      'Content-Type': 'application/json' 
+    },
+    body: JSON.stringify({ case_id: currentCase })
+  });
+  const data = await res.json();
+  
+  if (!data.ok) {
+    tg.showAlert(data.error);
+    btnOpen.disabled = false;
+    return;
+  }
+  
+  isSpinning = true;
+  
+  // Build track
+  track.innerHTML = '';
+  track.style.transition = 'none';
+  track.style.transform = 'translateX(0)';
+  
+  const totalItems = 50;
+  const winningIndex = 45;
+  const items = data.sequence; // Array of items from server
+  
+  items.forEach((item, i) => {
+    track.appendChild(createItemEl(item));
+  });
+  
+  // Calculate offset to land on winningIndex
+  const itemWidth = 120;
+  const containerWidth = document.querySelector('.spinner-container').clientWidth;
+  const centerOffset = containerWidth / 2;
+  // Random jitter within the winning item
+  const jitter = Math.floor(Math.random() * 80) - 40; 
+  const finalX = - (winningIndex * itemWidth + itemWidth/2 - centerOffset + jitter);
+  
+  setTimeout(() => {
+    track.style.transition = 'transform 7s cubic-bezier(0.1, 0, 0.1, 1)';
+    track.style.transform = `translateX(${finalX}px)`;
+    
+    // Play sound logic (visual only for now)
+  }, 50);
+  
+  setTimeout(() => {
+    showWin(data.win);
+    loadState();
+    isSpinning = false;
+    btnOpen.disabled = false;
+  }, 7500);
+}
+
+function showWin(item) {
+  document.getElementById('win-icon').innerText = ITEMS_DATA[item.type].icon;
+  document.getElementById('win-name').innerText = item.value + (item.type === 'style' ? '' : ' монет');
+  document.getElementById('win-name').className = `win-name rarity-${item.rarity}`;
+  winOverlay.style.display = 'flex';
+  tg.HapticFeedback.notificationOccurred('success');
+}
+
+function closeWin() {
+  winOverlay.style.display = 'none';
+}
+
+btnOpen.onclick = openCase;
+
+loadState();
+</script>
+</body>
+</html>
+"""
+
+async def cases_page_handler(request: web.Request) -> web.Response:
+    return web.Response(text=CASES_PAGE_HTML, content_type="text/html")
+
+
+async def api_cases_state(request: web.Request) -> web.Response:
+    telegram_user_id = _get_webapp_user_id(request)
+    if not telegram_user_id:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+    
+    async with async_session() as session:
+        user = await get_user_by_id(session, telegram_user_id)
+        if not user:
+            return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
+        
+        from app.config import LOOTBOX_COIN_PRICE
+        cases = [
+            {"id": "common", "name": "Обычный", "icon": "🎁", "price": float(LOOTBOX_COIN_PRICE), "req_level": 1},
+            {"id": "elite", "name": "Элитный", "icon": "💎", "price": 1000.0, "req_level": 10},
+            {"id": "legendary", "name": "Легендарный", "icon": "🔥", "price": 5000.0, "req_level": 20},
+            {"id": "styles", "name": "Кейс ников", "icon": "🎨", "price": 250.0, "req_level": 1},
+        ]
+        
+        return web.json_response({
+            "ok": True,
+            "balance": float(user.balance),
+            "pity": 10 - (user.lootbox_pity_counter or 0),
+            "user_level": user.level,
+            "cases": cases
+        })
+
+async def api_cases_open(request: web.Request) -> web.Response:
+    telegram_user_id = _get_webapp_user_id(request)
+    if not telegram_user_id:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+    
+    try:
+        data = await request.json()
+        case_id = data.get("case_id", "common")
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+
+    async with async_session() as session:
+        user = await get_user_by_id(session, telegram_user_id)
+        if not user:
+             return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
+        
+        from app.services import open_lootbox_for_coins, open_styles_lootbox, _roll_lootbox_reward_coins
+        
+        win_item = None
+        if case_id == "styles":
+            # Styles case in Mini App uses no exclusions for simplicity or uses what's in state? 
+            # For now, let's say it's basic opening
+            reward, kind, price = await open_styles_lootbox(session, user.id, [])
+            if reward is None:
+                return web.json_response({"ok": False, "error": kind})
+            
+            if kind == "style":
+                from app.nick_styles import style_label
+                win_item = {"type": "style", "value": style_label(reward), "rarity": "epic"}
+            else:
+                win_item = {"type": "coins", "value": float(reward), "rarity": "common" if reward < 100 else "rare"}
+        else:
+            reward, rarity, pity_left = await open_lootbox_for_coins(session, user.id, case_id)
+            if reward is None:
+                return web.json_response({"ok": False, "error": rarity})
+            win_item = {"type": "coins", "value": float(reward), "rarity": rarity}
+
+        # Generate sequence for CS2 animation
+        # Index 45 is our win
+        sequence = []
+        rarities_pool = ["common", "rare", "epic", "jackpot"]
+        for i in range(50):
+            if i == 45:
+                sequence.append(win_item)
+            else:
+                # Random fake items
+                if case_id == "styles":
+                    fake_kind = random.choice(["style", "coins"])
+                    if fake_kind == "style":
+                        from app.nick_styles import STYLES
+                        fake_style = STYLES[random.randint(1, len(STYLES))]
+                        sequence.append({"type": "style", "value": fake_style.label, "rarity": "epic"})
+                    else:
+                        fake_val = random.randint(10, 250)
+                        sequence.append({"type": "coins", "value": float(fake_val), "rarity": "common"})
+                else:
+                    fake_rarity = random.choices(rarities_pool, weights=[70, 25, 4, 1])[0]
+                    fake_val = random.randint(10, 1000)
+                    sequence.append({"type": "coins", "value": float(fake_val), "rarity": fake_rarity})
+
+        return web.json_response({
+            "ok": True,
+            "win": win_item,
+            "sequence": sequence,
+            "balance": float(user.balance)
+        })
 # HTML5 Galaga-подобная аркада. Все исходы считает сервер (crash-модель):
 # при старте забега разыгрывается скрытая crash-волна, клиент лишь играет
 # и вызывает /api/arcade/wave — накрутить выигрыш невозможно.
@@ -2994,6 +3457,11 @@ async def main():
     app.router.add_post("/api/arcade/wave", api_arcade_wave)
     app.router.add_post("/api/arcade/cashout", api_arcade_cashout)
     app.router.add_get("/api/arcade/top", api_arcade_top)
+
+    # 🎁 Кейсы (Mini App)
+    app.router.add_get("/cases", cases_page_handler)
+    app.router.add_get("/api/cases/state", api_cases_state)
+    app.router.add_post("/api/cases/open", api_cases_open)
 
     runner = web.AppRunner(app)
     await runner.setup()
