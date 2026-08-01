@@ -3,6 +3,7 @@ import logging
 import sys
 import os
 from sqlalchemy import select, text, inspect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Add project root to sys.path
@@ -36,6 +37,17 @@ def _inspect_dest_columns(sync_conn, table_name):
     return {c["name"] for c in inspector.get_columns(table_name)}
 
 
+async def _load_parent_ids(dest_conn, parent_table, parent_col, cache):
+    """Множество существующих в dest значений родительского ключа (с кэшем)."""
+    key = (parent_table, parent_col)
+    if key not in cache:
+        res = await dest_conn.execute(
+            text(f'SELECT "{parent_col}" FROM "{parent_table}"')
+        )
+        cache[key] = {row[0] for row in res.fetchall()}
+    return cache[key]
+
+
 async def merge_table(table, source_conn, dest_conn):
     table_name = table.name
     logger.info(f"Merging table: {table_name}")
@@ -64,19 +76,24 @@ async def merge_table(table, source_conn, dest_conn):
         if c.name in source_columns and c.name in dest_columns
     ]
 
-    skipped = (source_columns & {c.name for c in table.columns}) - dest_columns
-    if skipped:
+    skipped_cols = (source_columns & {c.name for c in table.columns}) - dest_columns
+    if skipped_cols:
         logger.warning(
             f"Table {table_name}: columns present in source but missing in dest "
-            f"({', '.join(sorted(skipped))}) – values for them will NOT be merged."
+            f"({', '.join(sorted(skipped_cols))}) – values for them will NOT be merged."
         )
 
     if not model_columns:
         logger.warning(f"Table {table_name} has no matching columns in source/dest – skipping.")
         return 0
 
-    # Build a SELECT that only includes columns present in the source
+    # Build a SELECT that only includes columns present in the source.
+    # ORDER BY PK — детерминированный порядок батчей (важно для self-FK, когда
+    # строка ссылается на уже вставленную более раннюю запись).
     stmt = select(*model_columns)
+    pk_cols = [c for c in model_columns if c.primary_key]
+    if pk_cols:
+        stmt = stmt.order_by(pk_cols[0])
     result = await source_conn.execute(stmt)
     rows = result.fetchall()
     if not rows:
@@ -89,19 +106,72 @@ async def merge_table(table, source_conn, dest_conn):
     col_names = [c.name for c in model_columns]
     data = [dict(zip(col_names, row)) for row in rows]
 
+    # --- Отсекаем «сирот»: строки, ссылающиеся на отсутствующих родителей ---
+    # В старой базе остались записи на удалённых вручную юзеров/видео (FK там
+    # когда-то обходили) — одна такая строка роняет ВЕСЬ батч на 500 строк с
+    # ForeignKeyViolationError. Родительские таблицы к этому моменту уже слиты
+    # в dest (таблицы обходятся в топологическом порядке sorted_tables).
+    parent_id_cache: dict = {}
+    for col in model_columns:
+        if not col.foreign_keys:
+            continue
+        fk = next(iter(col.foreign_keys))
+        parent_t, parent_c = fk.column.table.name, fk.column.name
+        allowed = await _load_parent_ids(dest_conn, parent_t, parent_c, parent_id_cache)
+        if parent_t == table.name:
+            # Self-FK (users.referred_by_user_id): разрешаем также id из самой
+            # выборки — такие строки вставляются раньше в пределах батча
+            # (ORDER BY pk делает это предсказуемым).
+            allowed = allowed | {r.get("id") for r in data if r.get("id") is not None}
+        before = len(data)
+        data = [
+            r for r in data
+            if r.get(col.name) is None or r.get(col.name) in allowed
+        ]
+        dropped = before - len(data)
+        if dropped:
+            logger.warning(
+                f"Table {table_name}: skipped {dropped} orphan rows "
+                f"(missing parent {parent_t}.{parent_c} for FK column {col.name})"
+            )
+
+    if not data:
+        logger.info(f"Table {table_name}: nothing to merge after orphan filtering.")
+        return 0
+
     # We want to use ON CONFLICT DO NOTHING for PostgreSQL
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    # Split into batches to avoid huge queries
+    # Split into batches to avoid huge queries.
+    # COMMIT ПОСЛЕ КАЖДОГО БАТЧА: одна битая строка не должна откатывать
+    # успешно вставленные предыдущие батчи той же таблицы.
     batch_size = 500
+    salvaged_skips = 0
     for i in range(0, len(data), batch_size):
         batch = data[i:i + batch_size]
-        # Insert only the columns that exist in source
         stmt = pg_insert(table).values(batch)
         stmt = stmt.on_conflict_do_nothing()
-        await dest_conn.execute(stmt)
+        try:
+            await dest_conn.execute(stmt)
+        except IntegrityError:
+            # Сирота/нарушение констрейнта где-то внутри батча — откатываем
+            # батч и сливаем его построчно, пропуская только битые строки.
+            await dest_conn.rollback()
+            for row in batch:
+                try:
+                    await dest_conn.execute(
+                        pg_insert(table).values([row]).on_conflict_do_nothing()
+                    )
+                except IntegrityError:
+                    await dest_conn.rollback()
+                    salvaged_skips += 1
+        await dest_conn.commit()
 
-    await dest_conn.commit()
+    if salvaged_skips:
+        logger.warning(
+            f"Table {table_name}: {salvaged_skips} rows skipped during "
+            f"row-by-row salvage (FK/constraint violations)"
+        )
 
     # Update sequence for tables with serial/identity columns
     try:
@@ -117,8 +187,9 @@ async def merge_table(table, source_conn, dest_conn):
     except Exception as e:
         logger.warning(f"Failed to update sequence for {table_name}: {e}")
 
-    logger.info(f"Successfully merged {len(rows)} rows into {table_name}.")
-    return len(rows)
+    merged = len(data) - salvaged_skips
+    logger.info(f"Successfully merged {merged} rows into {table_name}.")
+    return merged
 
 
 async def main():
