@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.models import Base
-from app.db import _fix_url, ensure_model_columns
+from app.db import _fix_url, ensure_model_columns, _is_supabase_pooler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -134,8 +134,18 @@ async def main():
     # For Neon/Supabase we need SSL
     connect_args = {"ssl": "require"}
 
-    source_engine = create_async_engine(source_url, connect_args=connect_args)
-    dest_engine = create_async_engine(dest_url, connect_args=connect_args)
+    def _engine_for(url: str):
+        args = dict(connect_args)
+        if _is_supabase_pooler(url):
+            # Supavisor в transaction mode не поддерживает prepared
+            # statements — отключаем их кэш в asyncpg, иначе будет
+            # DuplicatePreparedStatementError (та же логика, что в app/db.py,
+            # безвредна и для session pooler).
+            args["statement_cache_size"] = 0
+        return create_async_engine(url, connect_args=args)
+
+    source_engine = _engine_for(source_url)
+    dest_engine = _engine_for(dest_url)
 
     # Целевая БД может отставать от моделей (create_all не ALTER'ит существующие
     # таблицы, а цепочка alembic неполная — см. users.lootbox_pity_counter).
