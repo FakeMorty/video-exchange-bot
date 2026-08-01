@@ -48,6 +48,32 @@ async def _load_parent_ids(dest_conn, parent_table, parent_col, cache):
     return cache[key]
 
 
+def _conflict_stmt(stmt, table, col_names):
+    """ON CONFLICT по PK: для «изменяемых» сущностей — UPSERT свежими значениями.
+
+    Dest может содержать УСТАРЕВШИЙ слепок той же строки (типовой кейс: база
+    Supabase со старыми балансами, догоняемая из более свежей Neon). DO NOTHING
+    оставил бы устаревшие данные навсегда, поэтому для таблиц с одноколоночным
+    PK делаем DO UPDATE всеми колонками из выборки (кроме PK). Колонки-логи
+    аппендятся идентичными значениями, так что для них upsert безвреден.
+    Для композитных PK — консервативный DO NOTHING.
+    """
+    pk_cols = list(table.primary_key.columns)
+    if len(pk_cols) == 1:
+        pk = pk_cols[0]
+        if pk.name in col_names:
+            set_map = {
+                name: stmt.excluded[name]
+                for name in col_names
+                if name != pk.name
+            }
+            if set_map:
+                return stmt.on_conflict_do_update(
+                    index_elements=[pk.name], set_=set_map
+                )
+    return stmt.on_conflict_do_nothing()
+
+
 async def merge_table(table, source_conn, dest_conn):
     table_name = table.name
     logger.info(f"Merging table: {table_name}")
@@ -149,8 +175,7 @@ async def merge_table(table, source_conn, dest_conn):
     salvaged_skips = 0
     for i in range(0, len(data), batch_size):
         batch = data[i:i + batch_size]
-        stmt = pg_insert(table).values(batch)
-        stmt = stmt.on_conflict_do_nothing()
+        stmt = _conflict_stmt(pg_insert(table).values(batch), table, col_names)
         try:
             await dest_conn.execute(stmt)
         except IntegrityError:
@@ -160,7 +185,9 @@ async def merge_table(table, source_conn, dest_conn):
             for row in batch:
                 try:
                     await dest_conn.execute(
-                        pg_insert(table).values([row]).on_conflict_do_nothing()
+                        _conflict_stmt(
+                            pg_insert(table).values([row]), table, col_names
+                        )
                     )
                 except IntegrityError:
                     await dest_conn.rollback()
