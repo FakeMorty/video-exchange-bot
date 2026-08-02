@@ -203,20 +203,8 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             await message.answer("🚫 Доступ к боту для тебя заблокирован.")
             return
 
-        if is_new:
-            try:
-                username_line = f"Username: @{escape(message.from_user.username)}\n" if message.from_user.username else ""
-                ref_line = f"Реф-код: <code>{escape(referral_code)}</code>\n" if referral_code else ""
-                await notify_admins(
-                    message.bot,
-                    f"🆕 <b>Новый пользователь</b>\n"
-                    f"ID: <code>{message.from_user.id}</code>\n"
-                    f"{username_line}"
-                    f"{ref_line}"
-                    f"Имя: {escape(message.from_user.first_name or '—')}",
-                )
-            except Exception:
-                pass
+        # Уведомление админам о новом пользователе уходит НЕ на первый /start,
+        # а когда пользователь впервые установит себе ник (см. process_nickname).
 
         if not user.agreed_to_rules:
             from app.keyboards import rules_keyboard
@@ -586,6 +574,7 @@ async def process_nickname(message: Message, state: FSMContext):
         if not user:
             await state.clear()
             return
+        had_valid_nick = has_valid_nickname(user)
         admin_free = await is_admin_free_eligible(session, message.from_user.id, user)
         ok, msg = await set_display_name(session, user, name, admin_free=admin_free)
 
@@ -595,6 +584,21 @@ async def process_nickname(message: Message, state: FSMContext):
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             await send_welcome_banner(message, session, user)
+        # Первый валидный ник = пользователь реально «появился» в боте.
+        # Только теперь уведомляем админов о новом пользователе.
+        if not had_valid_nick:
+            try:
+                username_line = f"Username: @{escape(message.from_user.username)}\n" if message.from_user.username else ""
+                await notify_admins(
+                    message.bot,
+                    f"🆕 <b>Новый пользователь</b>\n"
+                    f"ID: <code>{message.from_user.id}</code>\n"
+                    f"{username_line}"
+                    f"Ник: <b>{escape(user.display_name or '—')}</b>\n"
+                    f"Имя: {escape(message.from_user.first_name or '—')}",
+                )
+            except Exception:
+                pass
 
 
 # =========================
