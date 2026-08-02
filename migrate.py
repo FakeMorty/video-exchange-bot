@@ -64,18 +64,23 @@ def create_schema_from_models() -> None:
 
 
 def ensure_columns_step() -> None:
-    """Догоняет недостающие колонки моделей в существующих таблицах.
+    """Создаёт отсутствующие таблицы и догоняет недостающие колонки моделей.
 
-    Страховка от дрейфа схемы, когда alembic считает, что БД на head
-    (и upgrade — no-op), а части колонок физически нет (см. кейс с
-    users.lootbox_pity_counter, который не добавляет ни одна миграция).
+    Две страховки от дрейфа схемы на СУЩЕСТВУЮЩЕЙ БД:
+    1) create_all создаёт таблицы, которых ещё нет (напр. blocked_users не
+       существовала в свежей БД, и кнопка «Заблокировать автора» падала с
+       UndefinedTable, пока таблицу не создал merge-скрипт);
+    2) ensure_model_columns додаёт колонки (кейс users.lootbox_pity_counter,
+       не покрытый ни одной alembic-миграцией).
+    Оба шага идемпотентны — безопасны на каждом старте.
     """
-    from app.db import engine, ensure_model_columns
+    from app.db import engine, ensure_model_columns, init_db
 
-    print("==> Ensuring model columns exist (schema/model drift check)...")
+    print("==> Ensuring missing tables & model columns exist (schema/model drift check)...")
     try:
         async def _run() -> list[str]:
             try:
+                await init_db()  # create_all: создаст только ОТСУТСТВУЮЩИЕ таблицы
                 return await ensure_model_columns()
             finally:
                 await engine.dispose()

@@ -2578,9 +2578,10 @@ async def api_cases_state(request: web.Request) -> web.Response:
     telegram_user_id = _get_webapp_user_id(request)
     if not telegram_user_id:
         return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
-    
+
+    from app.services import get_user  # lookup по telegram_id, а не по PK
     async with async_session() as session:
-        user = await get_user_by_id(session, telegram_user_id)
+        user = await get_user(session, telegram_user_id)
         if not user:
             return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
         
@@ -2611,8 +2612,9 @@ async def api_cases_open(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"ok": False, "error": "bad_request"}, status=400)
 
+    from app.services import get_user  # lookup по telegram_id, а не по PK
     async with async_session() as session:
-        user = await get_user_by_id(session, telegram_user_id)
+        user = await get_user(session, telegram_user_id)
         if not user:
              return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
         
