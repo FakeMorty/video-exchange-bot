@@ -3976,8 +3976,8 @@ async def promo_activate_code(message: Message, state: FSMContext):
                 return
                 
             import random
-            reward_multiplier = random.randint(1, 20)
-            reward = Decimal(str(reward_multiplier * 10))
+            # Награда: случайно от 200 до 1500 монет, строго кратно 10
+            reward = Decimal(str(random.randint(20, 150) * 10))
             
             user = await change_balance_atomic(
                 session,
@@ -4218,8 +4218,8 @@ async def btn_faq(message: Message, state: FSMContext):
         "Ты можешь создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n"
         "<b>7. Как работает реферальная система?</b>\n"
         f"Открой раздел 👥 Рефералы, скопируй свою ссылку и отправь друзьям. За активного приглашённого ты получаешь <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n"
-        "<b>8. Есть ли ежедневный бонус?</b>\n"
-        "Нет. Ежедневная халява отключена — вместо неё теперь работает еженедельный секретный промокод.\n\n"
+        "<b>8. Как работает еженедельная халява?</b>\n"
+        "Каждую неделю выпадает новое секретное слово (в течение года слова не повторяются). Введи его в разделе 🎁 <b>Еженедельная Халява</b> (меню 🎟 Промокоды) и получи случайно от 200 до 1500 монет. Актуальное слово ищи в наших соцсетях!\n\n"
         "<b>9. Есть ли квесты?</b>\n"
         "Нет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n"
         "<b>10. Где посмотреть топы игроков?</b>\n"
@@ -4269,22 +4269,54 @@ FREEBIE_WORDS = [
 ]
 
 def get_current_freebie_word() -> str:
+    """Секретное слово текущей ISO-недели.
+
+    Реестр из 53 слов перемешивается детерминированным рандомом с сидом на
+    текущий год: внутри года порядок случайный и слова НЕ повторяются
+    (53 слова ≥ 53 недель, неделя N ↦ индекс N-1 перестановки), а с нового
+    года — новая перестановка. Сид одинаков во всех процессах, поэтому слово
+    стабильно без хранения состояния в БД.
+    """
+    import random as _random
     from app.models import utc_now
-    week = utc_now().isocalendar()[1]
-    idx = (week - 1) % 53
-    return FREEBIE_WORDS[idx]
+    iso = utc_now().isocalendar()
+    year, week = iso[0], iso[1]
+    words = FREEBIE_WORDS.copy()
+    _random.Random(f"freebie-weekly-{year}").shuffle(words)
+    return words[(week - 1) % len(words)]
 
 
 @router.callback_query(F.data == "promo_freebie_start")
 async def cb_promo_freebie_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
+
+    # Уже забирал халяву на этой неделе?
+    from app.models import utc_now
+    iso = utc_now().isocalendar()
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+    if user and user.last_freebie_week == iso[1] and user.last_freebie_year == iso[0]:
+        await callback.message.answer(
+            "🎁 <b>Еженедельная халява</b>\n\n"
+            "Ты уже забирал награду на этой неделе! Возвращайся на следующей — слово будет новое. 😉",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="btn_promo_back")],
+            ])
+        )
+        await callback.answer()
+        return
+
+    # Запускаем ввод секретного слова (обработка — в promo_activate_code)
+    await state.set_state(PromoActivateState.waiting_code)
+    await state.update_data(freebie_mode=True)
     await callback.message.answer(
         "🎁 <b>Еженедельная халява</b>\n\n"
-        "Теперь она работает через автоматическую рассылку секретного промокода.\n"
-        "Бот сам пришлёт код в заданный день и час — тебе останется только активировать его через <b>/start promo_...</b> или в разделе <b>🔑 Активировать промокод</b>.",
+        "Введи <b>секретное слово недели</b> (регистр не важен).\n"
+        "Угадаешь — получишь случайную награду от 200 до 1500 монет!\n\n"
+        "<i>Слово меняется каждую неделю и не повторяется в течение года.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔑 Активировать промокод", callback_data="promo_activate")],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="btn_promo_back")],
         ])
     )
