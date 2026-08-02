@@ -2241,7 +2241,7 @@ async def admin_bot_settings(callback: CallbackQuery):
         [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
         [InlineKeyboardButton(text="🎁 Лутбоксы", callback_data="settings_games")],
         [InlineKeyboardButton(text="🚀 Аркада", callback_data="settings_arcade")],
-        [InlineKeyboardButton(text="🎁 Еженедельный промокод", callback_data="settings_weekly_promo")],
+        [InlineKeyboardButton(text="🎁 Еженедельная халява", callback_data="settings_weekly_promo")],
         [InlineKeyboardButton(text="📺 Реклама", callback_data="settings_ads")],
         [InlineKeyboardButton(text="✏️ Никнеймы", callback_data="settings_nicks")],
         [InlineKeyboardButton(text="🎟 Промокоды", callback_data="settings_promos")],
@@ -2552,24 +2552,22 @@ async def settings_weekly_promo(callback: CallbackQuery):
         from app.services import get_setting
         wd = await get_setting(session, "weekly_promo_day", "")
         wh = await get_setting(session, "weekly_promo_hour", "")
-        wa = await get_setting(session, "weekly_promo_amount", "")
-    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR, WEEKLY_PROMO_AMOUNT
+    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR
     def v(db_val, default):
         return f"{db_val or default}"
     day_names = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
     current_day = int(wd) if str(wd).isdigit() else WEEKLY_PROMO_DAY
 
     text = (
-        "🎁 <b>Настройки Еженедельного Промокода</b>\n\n"
-        f"<b>День недели:</b> {day_names[current_day] if 0 <= current_day < 7 else current_day}\n"
+        "🎁 <b>Настройки Еженедельной Халявы</b>\n\n"
+        "Раз в неделю бот рассылает всем пользователям <b>секретное слово недели</b>. "
+        "За ввод слова: случайно <b>200–1500 монет</b> (один раз на человека за неделю).\n\n"
+        f"<b>День недели рассылки:</b> {day_names[current_day] if 0 <= current_day < 7 else current_day}\n"
         f"<b>Час по UTC (0-23):</b> {v(wh, WEEKLY_PROMO_HOUR)}\n"
-        f"<b>Сумма монет:</b> {v(wa, WEEKLY_PROMO_AMOUNT)}\n"
-        f"<b>Кол-во активаций:</b> ∞\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Выбрать день недели", callback_data="settings_edit:weekly_promo_day")],
         [InlineKeyboardButton(text="✏️ Час по UTC", callback_data="settings_edit:weekly_promo_hour")],
-        [InlineKeyboardButton(text="✏️ Сумма", callback_data="settings_edit:weekly_promo_amount")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)

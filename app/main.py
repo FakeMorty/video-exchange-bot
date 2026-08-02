@@ -2128,76 +2128,75 @@ async def retention_worker(bot: Bot, stop_event: asyncio.Event):
                 break
             await asyncio.sleep(1)
 
+async def weekly_freebie_broadcast(bot: Bot) -> int | None:
+    """Раз в неделю рассылает пользователям секретное слово халявы.
+
+    День недели и час берутся из настроек бота (админка: weekly_promo_day /
+    weekly_promo_hour, час в UTC). Рассылка выполняется ровно один раз за
+    ISO-неделю: отметка хранится в БД (настройка weekly_promo_last_sent_week),
+    поэтому перезапуск/редеплой НЕ приводит к повторной рассылке. Если в
+    назначенный час сервис был выключен — шлём при первом тике позже в тот же день.
+
+    Возвращает число отправленных сообщений или None, если не время/уже отправлено.
+    """
+    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR
+    from app.models import User
+    from app.services import get_setting, set_setting
+    from app.user_handlers import get_current_freebie_word
+
+    now_utc = datetime.now(timezone.utc)
+    async with async_session() as session:
+        db_day = await get_setting(session, "weekly_promo_day", "")
+        db_hour = await get_setting(session, "weekly_promo_hour", "")
+        p_day = int(db_day) if db_day.isdigit() else WEEKLY_PROMO_DAY
+        p_hour = int(db_hour) if db_hour.isdigit() else WEEKLY_PROMO_HOUR
+
+        if now_utc.weekday() != p_day or now_utc.hour < p_hour:
+            return None
+
+        iso = now_utc.isocalendar()
+        week_key = f"{iso[0]}-W{iso[1]:02d}"
+        if (await get_setting(session, "weekly_promo_last_sent_week", "")) == week_key:
+            return None
+
+        word = get_current_freebie_word()
+        users = (await session.execute(
+            select(User.telegram_id).where(User.status == "active")
+        )).scalars().all()
+
+        msg = (
+            "🎁 <b>ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА — новое слово недели!</b>\n\n"
+            f"Секретное слово этой недели: <code>{word}</code>\n\n"
+            "Введи его в разделе 🎟 <b>Промокоды</b> → 🎁 <b>Еженедельная Халява</b> "
+            "и получи случайную награду <b>от 200 до 1500 монет</b>!\n\n"
+            "<i>Слово действует до конца недели, награда — один раз на человека. "
+            "На следующей неделе слово будет новое. 😉</i>"
+        )
+
+        sent = 0
+        for uid in users:
+            try:
+                await bot.send_message(uid, msg, parse_mode="HTML")
+                sent += 1
+                if sent % 30 == 0:
+                    await asyncio.sleep(0.5)
+            except Exception:
+                pass
+
+        await set_setting(session, "weekly_promo_last_sent_week", week_key)
+        await session.commit()
+        return sent
+
+
 async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
-    import string, random
-    from sqlalchemy import select
-    from app.config import WEEKLY_PROMO_DAY, WEEKLY_PROMO_HOUR, WEEKLY_PROMO_AMOUNT, WEEKLY_PROMO_USES
-    from app.models import Promocode, User
-    from app.services import to_decimal
-    
-    last_run_week = None
-    
+    # Тикает раз в минуту; вся логика (расписание из админки + защита от
+    # повторной отправки) живёт в weekly_freebie_broadcast.
     while not stop_event.is_set():
         try:
-            now_utc = datetime.now(timezone.utc)
-
-            async with async_session() as session:
-                from app.services import get_setting
-
-                db_day = await get_setting(session, "weekly_promo_day", "")
-                db_hour = await get_setting(session, "weekly_promo_hour", "")
-                db_amount = await get_setting(session, "weekly_promo_amount", "")
-
-                p_day = int(db_day) if db_day.isdigit() else WEEKLY_PROMO_DAY
-                p_hour = int(db_hour) if db_hour.isdigit() else WEEKLY_PROMO_HOUR
-                p_amount = float(db_amount) if db_amount else WEEKLY_PROMO_AMOUNT
-                p_uses = 999999
-
-                # Настройка часа в админке подписана как UTC — соблюдаем это в рантайме.
-                if now_utc.weekday() == p_day and now_utc.hour == p_hour:
-                    current_week = now_utc.isocalendar()[1]
-                    if last_run_week != current_week:
-                        last_run_week = current_week
-                        
-                        code = "FREEBIE_" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-                        
-                        super_admin_id = ADMINS[0] if ADMINS else 1
-                        admin_user = (await session.execute(select(User).where(User.telegram_id == super_admin_id))).scalars().first()
-                        creator_id = admin_user.id if admin_user else 1
-                        
-                        promo = Promocode(
-                            creator_user_id=creator_id,
-                            code=code,
-                            coin_amount=to_decimal(p_amount),
-                            max_uses=p_uses,
-                            used_count=0,
-                            is_active=True,
-                            expires_at=now_utc + timedelta(days=2)
-                        )
-                        session.add(promo)
-                        await session.commit()
-                        
-                        users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
-                        
-                        msg = (
-                            "🎁 <b>ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА!</b>\n\n"
-                            f"Лови секретный промокод на <b>{p_amount}</b> монет!\n"
-                            f"Активировать: <code>/start promo_{code}</code>\n\n"
-                            "<i>Количество активаций не ограничено.</i>"
-                        )
-                        
-                        sent = 0
-                        for uid in users:
-                            try:
-                                await bot.send_message(uid, msg, parse_mode="HTML")
-                                sent += 1
-                                if sent % 30 == 0:
-                                    await asyncio.sleep(0.5)
-                            except Exception:
-                                pass
+            await weekly_freebie_broadcast(bot)
         except Exception as e:
-            logger.error(f"Weekly promo worker error: {e}")
-            
+            logger.error(f"Weekly freebie worker error: {e}")
+
         await asyncio.sleep(60)
 
 
