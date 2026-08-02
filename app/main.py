@@ -2431,11 +2431,11 @@ let pity = 10;
 let isSpinning = false;
 
 const RARITIES = {
-  common: { name: 'Армейское', color: 'blue' },
-  rare: { name: 'Запрещенное', color: 'purple' },
-  epic: { name: 'Засекреченное', color: 'pink' },
-  jackpot: { name: 'Тайное', color: 'red' },
-  gold: { name: 'Золотое', color: 'gold' }
+  common: { name: 'Обычная', color: 'blue' },
+  rare: { name: 'Редкая', color: 'purple' },
+  epic: { name: 'Эпическая', color: 'pink' },
+  jackpot: { name: 'Джекпот', color: 'red' },
+  gold: { name: 'Золотая', color: 'gold' }
 };
 
 const ITEMS_DATA = {
@@ -2647,7 +2647,7 @@ async def api_cases_open(request: web.Request) -> web.Response:
                 return web.json_response({"ok": False, "error": rarity})
             win_item = {"type": "coins", "value": float(reward), "rarity": rarity}
 
-        # Generate sequence for CS2 animation
+        # Generate sequence for the roulette animation
         # Index 45 is our win
         sequence = []
         rarities_pool = ["common", "rare", "epic", "jackpot"]
