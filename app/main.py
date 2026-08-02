@@ -2,6 +2,7 @@ from app.models import LotteryTicket, User, utc_now, LotteryRound
 import os
 import json
 import hmac
+import random
 import hashlib
 import urllib.parse
 from sqlalchemy import func
@@ -2496,18 +2497,25 @@ async function openCase() {
   
   btnOpen.disabled = true;
   
-  const res = await fetch('/api/cases/open', {
-    method: 'POST',
-    headers: { 
-      'X-Telegram-Init-Data': tg.initData,
-      'Content-Type': 'application/json' 
-    },
-    body: JSON.stringify({ case_id: currentCase })
-  });
-  const data = await res.json();
+  let data;
+  try {
+    const res = await fetch('/api/cases/open', {
+      method: 'POST',
+      headers: { 
+        'X-Telegram-Init-Data': tg.initData,
+        'Content-Type': 'application/json' 
+      },
+      body: JSON.stringify({ case_id: currentCase })
+    });
+    data = await res.json();
+  } catch (e) {
+    tg.showAlert('Ошибка соединения. Попробуй ещё раз.');
+    btnOpen.disabled = false;
+    return;
+  }
   
   if (!data.ok) {
-    tg.showAlert(data.error);
+    tg.showAlert(data.error || 'Не удалось открыть кейс.');
     btnOpen.disabled = false;
     return;
   }

@@ -5,7 +5,7 @@ import random
 import math
 import asyncio
 from datetime import datetime, timezone, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from collections import defaultdict
 
 from aiogram import Router, F
@@ -70,7 +70,7 @@ from app.models import (
     utc_now,
 )
 from app.services import (
-    get_or_create_user, get_user, get_user_by_id, get_setting, save_video, save_photo,
+    get_or_create_user, get_user, get_user_by_id, get_video_by_id, get_setting, save_video, save_photo,
     get_xp_multiplier, get_coin_multiplier, get_stars_discount,
     get_random_video_for_user, get_random_photo_for_user,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
