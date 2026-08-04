@@ -39,6 +39,8 @@ from app.config import (
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     DAILY_BONUS_STREAK_BASE, DAILY_BONUS_STREAK_INCREASE,
     MAX_BONUS_STREAK,
+    UPSELL_AFTER_VIEWS, DAILY_VIDEO_UPLOAD_LIMIT,
+    COMEBACK_BONUS_AMOUNT, ONBOARDING_DRIP_ENABLED,
     DAILY_PHOTO_LIMIT,
     FREE_GAMES_PER_SESSION, GAME_SESSION_HOURS, GAME_SESSION_COST,
     PROMOCODE_CREATION_STAR_RATE,
@@ -1327,6 +1329,156 @@ async def claim_daily_bonus(session: AsyncSession, user_id: int) -> tuple[bool, 
     user.bonus_streak = streak
     await session.commit()
     return True, f"Ежедневный бонус: +{reward:.0f} монет! Дней подряд: {streak}"
+
+
+# ============================
+# АВТО-БОНУС ЗА ЕЖЕДНЕВНЫЙ ВОЗВРАТ (стрик удержания)
+# ============================
+async def auto_daily_return_bonus(session: AsyncSession, user: "User") -> tuple[Decimal, int] | None:
+    """Один раз в день при первой активности начисляет стрик-бонус.
+
+    Суммы читаются из настроек (админка): daily_bonus_base / daily_bonus_increase /
+    daily_bonus_streak_max. Возвращает (сумма, стрик) или None, если сегодня уже был.
+    """
+    if not user:
+        return None
+    now = utc_now()
+    if user.last_bonus_at and user.last_bonus_at.date() == now.date():
+        return None
+    streak_max = int(float(await get_config_value(session, "daily_bonus_streak_max", MAX_BONUS_STREAK) or MAX_BONUS_STREAK))
+    base = float(await get_config_value(session, "daily_bonus_base", DAILY_BONUS_STREAK_BASE) or DAILY_BONUS_STREAK_BASE)
+    increase = float(await get_config_value(session, "daily_bonus_increase", DAILY_BONUS_STREAK_INCREASE) or DAILY_BONUS_STREAK_INCREASE)
+    streak = 1
+    if user.last_bonus_at and (now.date() - user.last_bonus_at.date()).days == 1:
+        streak = min(int(user.bonus_streak or 0) + 1, streak_max)
+    reward = to_decimal(base + increase * (streak - 1))
+    await change_balance_atomic(session, user.id, reward, "daily_return_bonus", details=f"streak={streak}")
+    user.last_bonus_at = now
+    user.bonus_streak = streak
+    await session.commit()
+    return to_decimal(reward), streak
+
+
+# ============================
+# ВОРОНКА ОПЛАТЫ / РЕТЕНШН-ТРИГГЕРЫ
+# ============================
+STARTER_PACK_KEY = "starterpack"
+
+
+async def has_successful_payments(session: AsyncSession, user_id: int) -> bool:
+    return (await session.execute(
+        select(Payment.id).where(Payment.user_id == user_id, Payment.status == "paid").limit(1)
+    )).scalar_one_or_none() is not None
+
+
+async def is_starter_pack_eligible(session: AsyncSession, user: "User | None") -> bool:
+    """Старт-пак доступен только до первой успешной оплаты."""
+    if not user:
+        return False
+    return not await has_successful_payments(session, user.id)
+
+
+def _day_start(dt: datetime | None = None) -> datetime:
+    d = (dt or utc_now()).date()
+    return datetime(d.year, d.month, d.day)
+
+
+async def count_views_today(session: AsyncSession, user_id: int) -> int:
+    return int((await session.execute(
+        select(func.count(VideoView.id)).where(
+            VideoView.user_id == user_id,
+            VideoView.watched_at >= _day_start(),
+        )
+    )).scalar_one())
+
+
+async def has_action_since(session: AsyncSession, user_id: int, action: str, since: datetime) -> bool:
+    return (await session.execute(
+        select(UserActionLog.id).where(
+            UserActionLog.user_id == user_id,
+            UserActionLog.action == action,
+            UserActionLog.created_at >= since,
+        ).limit(1)
+    )).scalar_one_or_none() is not None
+
+
+async def has_action_today(session: AsyncSession, user_id: int, action: str) -> bool:
+    return await has_action_since(session, user_id, action, _day_start())
+
+
+async def maybe_send_zalip_upsell(session: AsyncSession, bot, user: "User", *,
+                                  views_today: int, reply_markup=None) -> bool:
+    """«Залип»-триггер: после N просмотров за день мягко предлагаем первый платёж.
+
+    Строго один раз в день и только тем, кто ещё ни разу не платил. Возвращает
+    True, если сообщение ушло. Ошибки отправки гасим — это реклама, не механика.
+    """
+    threshold = int(float(await get_config_value(session, "upsell_after_views", UPSELL_AFTER_VIEWS) or UPSELL_AFTER_VIEWS))
+    if threshold <= 0 or views_today != threshold:
+        return False
+    if await has_successful_payments(session, user.id):
+        return False
+    if await has_action_today(session, user.id, "zalip_upsell"):
+        return False
+    starter = STARS_PACKAGES.get(STARTER_PACK_KEY) or {}
+    text = (
+        "🔥 <b>Залип? Тогда тебе сюда.</b>\n\n"
+        f"Специально для первого платежа — старт-пак: <b>{starter.get('coins', '?')} монет "
+        f"всего за {starter.get('stars', '?')} Stars</b>. Доступен один раз!\n\n"
+        "Пополни баланс и смотри дальше без остановок. 💸"
+    )
+    try:
+        await bot.send_message(user.telegram_id, text, parse_mode="HTML", reply_markup=reply_markup)
+    except Exception:
+        return False
+    await log_user_action(session, user.id, "zalip_upsell", f"views_today={views_today}")
+    await session.commit()
+    return True
+
+
+async def check_daily_video_upload_possible(session: AsyncSession, user_id: int) -> tuple[bool, int, int]:
+    """Дневной лимит загрузок видео на автора. (можно?, загружено сегодня, лимит)"""
+    limit = int(float(await get_config_value(session, "daily_video_upload_limit", DAILY_VIDEO_UPLOAD_LIMIT) or DAILY_VIDEO_UPLOAD_LIMIT))
+    if limit <= 0:
+        return True, 0, 0
+    done = int((await session.execute(
+        select(func.count(Video.id)).where(
+            Video.uploader_user_id == user_id,
+            Video.created_at >= _day_start(),
+        )
+    )).scalar_one())
+    return done < limit, done, limit
+
+
+async def get_never_payer_nicknamed_targets(session: AsyncSession) -> list[int]:
+    """Сегмент «ник установлен, но ни одной оплаты» — самая жирная нетронутая аудитория."""
+    paid_sq = select(Payment.user_id).where(Payment.status == "paid")
+    rows = (await session.execute(
+        select(User.telegram_id).where(
+            User.status == "active",
+            User.nickname_set == True,  # noqa: E712
+            ~User.id.in_(paid_sq),
+        )
+    )).scalars().all()
+    return list(rows)
+
+
+async def get_last_activity_map(session: AsyncSession) -> dict[int, datetime]:
+    """user_id -> последнее известное действие (логи, просмотры, платежи)."""
+    result: dict[int, datetime] = {}
+    for model, col, ts_col in (
+        (UserActionLog, UserActionLog.user_id, UserActionLog.created_at),
+        (VideoView, VideoView.user_id, VideoView.watched_at),
+        (Payment, Payment.user_id, Payment.created_at),
+    ):
+        for uid, last_seen in (await session.execute(
+            select(col, func.max(ts_col)).group_by(col)
+        )).all():
+            if last_seen is None:
+                continue
+            if uid not in result or last_seen > result[uid]:
+                result[uid] = last_seen
+    return result
 
 
 # ============================
@@ -2838,6 +2990,8 @@ async def get_current_prices(session: AsyncSession, user_id: int | None = None):
                 vip_price = _discount_stars_amount(vip_price, discount)
             if applies_coins:
                 for k in packs:
+                    if k == "starterpack":
+                        continue  # цена старт-пака фиксированная — он и так самый дешёвый
                     packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], discount)
 
         # Персональная скидка за перк — отдельная от акций, накладывается сверху.
@@ -2846,6 +3000,8 @@ async def get_current_prices(session: AsyncSession, user_id: int | None = None):
             if stars_discount > 0:
                 vip_price = _discount_stars_amount(vip_price, stars_discount)
                 for k in packs:
+                    if k == "starterpack":
+                        continue  # цена старт-пака фиксированная
                     packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], stars_discount)
 
         return vip_price, packs, sale
@@ -3622,6 +3778,11 @@ _SETTINGS_DEFAULTS = {
     "daily_bonus_increase": DAILY_BONUS_STREAK_INCREASE,
     "daily_bonus_streak_max": MAX_BONUS_STREAK,
     "first_purchase_daily_bonus": FIRST_PURCHASE_DAILY_BONUS,
+    # Воронка оплаты и удержание
+    "upsell_after_views": UPSELL_AFTER_VIEWS,
+    "comeback_bonus_amount": COMEBACK_BONUS_AMOUNT,
+    "onboarding_drip_enabled": int(ONBOARDING_DRIP_ENABLED),
+    "daily_video_upload_limit": DAILY_VIDEO_UPLOAD_LIMIT,
     # VIP
     "vip_price_stars": VIP_PRICE_STARS,
     "vip_duration_days": VIP_DURATION_DAYS,

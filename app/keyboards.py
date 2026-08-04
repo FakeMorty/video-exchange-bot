@@ -340,8 +340,15 @@ def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
 
 def buy_coins_keyboard(packs: dict) -> InlineKeyboardMarkup:
     buttons = []
-    priority = ["pack_50", "pack_100", "pack_200"]
     seen = set()
+    sp = packs.get("starterpack")
+    if sp:
+        buttons.append([InlineKeyboardButton(
+            text=f"🎁 Старт-пак: {sp['coins']} монет за {sp['stars']} Stars (только 1 раз)",
+            callback_data="buy:starterpack",
+        )])
+        seen.add("starterpack")
+    priority = ["pack_50", "pack_100", "pack_200"]
     for p_id in priority:
         if p_id in packs:
             p_data = packs[p_id]

@@ -89,7 +89,24 @@ REFERRAL_MILESTONES = {
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 10.0)
 
 # Viewer-friendly пакеты Stars
+# ── Воронка оплаты: старт-пак первого платежа (низкий порог входа) ──
+# Показывается только тем, у кого ещё не было оплаченных платежей.
+# Цена фиксированная, скидки событий/перков на него НЕ действуют.
+STARTER_PACK_STARS = _get_int("STARTER_PACK_STARS", 9)
+STARTER_PACK_COINS = _get_int("STARTER_PACK_COINS", 500)
+# Через сколько просмотров за день показать «залипшему» юзеру оффер первого платежа
+UPSELL_AFTER_VIEWS = _get_int("UPSELL_AFTER_VIEWS", 8)
+# ── Удержание: онбординг-цепочка и бонус за возвращение ──
+ONBOARDING_DRIP_ENABLED = _get_bool("ONBOARDING_DRIP_ENABLED", True)
+COMEBACK_BONUS_AMOUNT = _get_float("COMEBACK_BONUS_AMOUNT", 100.0)
+COMEBACK_INACTIVE_MIN_HOURS = _get_int("COMEBACK_INACTIVE_MIN_HOURS", 48)
+COMEBACK_INACTIVE_MAX_HOURS = _get_int("COMEBACK_INACTIVE_MAX_HOURS", 96)
+COMEBACK_COOLDOWN_DAYS = _get_int("COMEBACK_COOLDOWN_DAYS", 7)
+# ── Контент: дневной лимит загрузок видео на автора (0 = без лимита) ──
+DAILY_VIDEO_UPLOAD_LIMIT = _get_int("DAILY_VIDEO_UPLOAD_LIMIT", 100)
+
 STARS_PACKAGES = {
+    "starterpack": {"stars": STARTER_PACK_STARS, "coins": STARTER_PACK_COINS, "title": f"Старт-пак: {STARTER_PACK_COINS} монет"},
     "pack_50":  {"stars": 50,  "coins": 500,  "title": "500 монет"},
     "pack_100": {"stars": 100, "coins": 1000, "title": "1 000 монет"},
     "pack_200": {"stars": 200, "coins": 2200, "title": "2 200 монет"},

@@ -104,7 +104,8 @@ from app.services import (
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
-    block_user,
+    block_user, is_starter_pack_eligible, count_views_today, maybe_send_zalip_upsell,
+    check_daily_video_upload_possible,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -1030,9 +1031,18 @@ async def watch_video_content(callback: CallbackQuery):
                 ref_link = f"https://t.me/{bot_info.username}?start={user.referral_code}"
                 missing = max(to_decimal(cost) - to_decimal(user.balance), Decimal("0"))
                 _, packs, _ = await get_current_prices(session, user.id)
+                starter_ok = await is_starter_pack_eligible(session, user)
+                if not starter_ok:
+                    packs = {k: v for k, v in packs.items() if k != "starterpack"}
                 suggested_pack = _suggest_viewer_pack(packs, need=missing + to_decimal(cost * 8))
                 suggested_text = ""
-                if suggested_pack:
+                if starter_ok and "starterpack" in packs:
+                    sp = packs["starterpack"]
+                    suggested_text = (
+                        f"\n🎁 <b>Первое пополнение — старт-пак:</b> {sp['coins']} монет "
+                        f"всего за {sp['stars']} Stars! <i>(один раз и только для тебя)</i>"
+                    )
+                elif suggested_pack:
                     approx_views = int(float(suggested_pack.get("coins", 0)) // max(float(cost), 1.0))
                     suggested_text = (
                         f"\n⚡ <b>Быстрый вариант:</b> {suggested_pack['coins']} монет за {suggested_pack['stars']} Stars"
@@ -1127,6 +1137,17 @@ async def watch_video_content(callback: CallbackQuery):
 
                     # Увеличиваем счётчик просмотров и проверяем нужно ли показать рекламу
                     await increment_video_watched(session, user.id)
+
+                    # «Залип»-триггер: мягкий оффер первого платежа в момент вовлечённости
+                    try:
+                        views_today = await count_views_today(session, user.id)
+                        await maybe_send_zalip_upsell(
+                            session, callback.bot, user,
+                            views_today=views_today,
+                            reply_markup=low_balance_offer_keyboard(),
+                        )
+                    except Exception:
+                        logger.exception("Zalip upsell failed (non-critical)")
 
                     if await should_show_ad_after_video(session, user.id):
                         await _show_ad_or_event(callback, session, user)
@@ -1562,6 +1583,18 @@ async def handle_video_upload(message: Message):
             await require_nickname(message, user)
             return
 
+        # Дневной лимит загрузок видео (админы — без ограничений)
+        if not is_admin_or_super(message.from_user.id, user):
+            allowed, done_today, limit = await check_daily_video_upload_possible(session, user.id)
+            if not allowed:
+                await message.answer(
+                    f"📤 <b>Дневной лимит загрузок исчерпан.</b>\n\n"
+                    f"Сегодня ты уже загрузил {done_today} видео (лимит {limit} в сутки).\n"
+                    f"Вернись завтра — и спасибо за контент! 🙂",
+                    parse_mode="HTML",
+                )
+                return
+
         v = message.video
         saved, is_duplicate = await save_video(
             session, user.id,
@@ -1719,6 +1752,11 @@ async def btn_buy(message: Message, state: FSMContext):
             vip_price, packs, sale = await get_current_prices(session, user.id)
             events = await get_active_events(session)
 
+            # Старт-пак первого платежа показываем только тем, кто ещё не платил
+            starter_eligible = await is_starter_pack_eligible(session, user)
+            if not starter_eligible:
+                packs = {k: v for k, v in packs.items() if k != "starterpack"}
+
             # Admin free badge
             admin_free_badge = ""
             if await is_admin_free_eligible(session, message.from_user.id, user):
@@ -1743,8 +1781,17 @@ async def btn_buy(message: Message, state: FSMContext):
                 pass
         bonus_text += f"\n🎁 Первая покупка дня: +{FIRST_PURCHASE_DAILY_BONUS} монет бонусом."
 
+        starter_line = ""
+        if "starterpack" in packs:
+            sp = packs["starterpack"]
+            starter_line = (
+                f"🎁 <b>Старт-пак для первого платежа: {sp['coins']} монет всего за {sp['stars']} Stars!</b>\n"
+                f"<i>Доступен один раз — потом исчезнет из списка.</i>\n\n"
+            )
+
         await message.answer(
             f"💳 <b>Пополнение баланса</b>{sale_badge}{admin_free_badge}{bonus_text}\n\n"
+            f"{starter_line}"
             f"Собрали 3 понятных пакета под тех, кто хочет быстро вернуться к просмотру:\n"
             f"• <b>500 монет</b> — быстрый старт\n"
             f"• <b>1 000 монет</b> — популярный пакет\n"
@@ -1772,6 +1819,10 @@ async def cb_buy_pack(callback: CallbackQuery):
         user = await get_user(session, callback.from_user.id)
         if not user:
             await callback.answer()
+            return
+
+        if pack_key == "starterpack" and not await is_starter_pack_eligible(session, user):
+            await callback.answer("Старт-пак доступен только первым платежом.", show_alert=True)
             return
 
         _, current_packs, _ = await get_current_prices(session, user.id)
@@ -4209,7 +4260,7 @@ async def btn_faq(message: Message, state: FSMContext):
         "ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "<b>1. Как зарабатывать монеты?</b>\n"
-        "Загружайте видео и фото, выполняй офферы и приглашайте друзей по реферальной ссылке. Точные награды зависят от текущих настроек бота.\n\n"
+        "Загружайте видео и фото, выполняй офферы и приглашайте друзей по реферальной ссылке. А ещё просто заходи каждый день — бот сам начислит бонус за серию дней подряд! Точные награды зависят от текущих настроек бота.\n\n"
         "<b>2. Как смотреть контент других авторов?</b>\n"
         "Нажми кнопку 🎬 Смотреть и выбери интересующий формат.\n\n"
         "<b>3. Что дает подписка VIP?</b>\n"

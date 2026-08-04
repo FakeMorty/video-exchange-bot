@@ -2201,6 +2201,140 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
 
 
 # ============================
+# 🔄 УДЕРЖАНИЕ: онбординг-дрип новичкам + бонус за возвращение
+# ============================
+
+# (ключ лога, окно возраста аккаунта в часах [min, max]) — каждый шаг строго один раз
+_ONBOARDING_DRIP_WINDOWS = [
+    ("onboard_drip_1", 2, 26),
+    ("onboard_drip_2", 26, 50),
+    ("onboard_drip_3", 74, 98),
+]
+
+
+def _onboarding_drip_text(action_key: str, ref_link: str, ref_reward) -> str:
+    if action_key == "onboard_drip_1":
+        return (
+            "👋 <b>Ну как тебе у нас?</b>\n\n"
+            "Коротко о главном:\n"
+            "• 💰 <b>Офферы</b> — монеты за подписки на каналы\n"
+            "• 🎁 Каждую неделю бот рассылает <b>секретное слово халявы</b> (200–1500 монет)\n"
+            "• 🔥 За ежедневный заход — <b>автоматический бонус</b>, растёт с серией дней\n\n"
+            "Загляни в разделы 💰 Офферы и 🎟 Промокоды — там сейчас самое интересное."
+        )
+    if action_key == "onboard_drip_2":
+        return (
+            "👥 <b>Друзья = монеты!</b>\n\n"
+            f"За каждого активного приглашённого начисляем <b>+{ref_reward} монет</b>. "
+            "Просто отправь свою ссылку знакомому:\n"
+            f"<code>{ref_link}</code>\n\n"
+            "Один активный друг ≈ десятки просмотров бесплатно. 🚀"
+        )
+    return (
+        "👀 <b>Мы тут контент обновили…</b>\n\n"
+        "Загляни в ленту — много нового. За сегодняшний заход уже ждёт стрик-бонус, "
+        "а в 🎟 Промокодах может лежать халявное слово недели. 😉"
+    )
+
+
+async def onboarding_retention_pass(bot: Bot) -> dict:
+    """Один проход воркера удержания: дрип-цепочка онбординга + бонус за возвращение.
+
+    Идемпотентно через UserActionLog: ни один шаг не шлётся дважды.
+    Возвращает {'drip': count, 'comeback': count}.
+    """
+    from app.config import (
+        ONBOARDING_DRIP_ENABLED, COMEBACK_BONUS_AMOUNT,
+        COMEBACK_INACTIVE_MIN_HOURS, COMEBACK_INACTIVE_MAX_HOURS,
+        COMEBACK_COOLDOWN_DAYS, REFERRAL_REWARD_INVITER,
+    )
+    from app.services import (
+        get_setting, get_config_value, log_user_action, to_decimal,
+        change_balance_atomic, get_last_activity_map, has_action_since,
+    )
+
+    stats = {"drip": 0, "comeback": 0}
+    now = utc_now()
+    bot_info = await bot.get_me()
+
+    async with async_session() as session:
+        drip_val = (await get_setting(session, "onboarding_drip_enabled", "") or "").strip().lower()
+        drip_enabled = (drip_val in ("1", "true", "on", "yes")) if drip_val else bool(ONBOARDING_DRIP_ENABLED)
+
+        users = (await session.execute(
+            select(User).where(User.status == "active")
+        )).scalars().all()
+
+        # --- Дрип-цепочка для новичков ---
+        if drip_enabled:
+            for action_key, h_min, h_max in _ONBOARDING_DRIP_WINDOWS:
+                for user in users:
+                    if not user.created_at:
+                        continue
+                    age_h = (now - user.created_at).total_seconds() / 3600
+                    if not (h_min <= age_h <= h_max):
+                        continue
+                    if await has_action_since(session, user.id, action_key, datetime.min):
+                        continue
+                    ref_link = f"https://t.me/{bot_info.username}?start={user.referral_code or ''}"
+                    text = _onboarding_drip_text(action_key, ref_link, REFERRAL_REWARD_INVITER)
+                    try:
+                        await bot.send_message(user.telegram_id, text, parse_mode="HTML")
+                    except Exception:
+                        continue  # юзер заблокировал бота — не отмечаем шаг как пройденный
+                    await log_user_action(session, user.id, action_key, f"age_h={age_h:.1f}", auto_commit=False)
+                    stats["drip"] += 1
+
+        # --- Бонус за возвращение (2–4 дня не активен) ---
+        cb_amount = float(await get_config_value(session, "comeback_bonus_amount", COMEBACK_BONUS_AMOUNT) or COMEBACK_BONUS_AMOUNT)
+        if cb_amount > 0:
+            last_map = await get_last_activity_map(session)
+            cooldown_since = now - timedelta(days=COMEBACK_COOLDOWN_DAYS)
+            for user in users:
+                candidates = [user.created_at]
+                if user.last_bonus_at:
+                    candidates.append(user.last_bonus_at)
+                if last_map.get(user.id):
+                    candidates.append(last_map[user.id])
+                last_seen = max(c for c in candidates if c)
+                idle_h = (now - last_seen).total_seconds() / 3600
+                if not (COMEBACK_INACTIVE_MIN_HOURS <= idle_h <= COMEBACK_INACTIVE_MAX_HOURS):
+                    continue
+                if await has_action_since(session, user.id, "comeback_bonus", cooldown_since):
+                    continue
+                try:
+                    await bot.send_message(
+                        user.telegram_id,
+                        "🥺 <b>Мы скучали!</b>\n\n"
+                        f"Возвращайся: тебе уже начислен бонус <b>+{cb_amount:.0f} монет</b>, "
+                        "Подготовлены свежие видео, а в 🎟 Промокодах ждёт слово халявы недели!",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    continue  # недоставлено — не платим и не отмечаем
+                await change_balance_atomic(session, user.id, to_decimal(cb_amount), "comeback_bonus", details=f"idle_h={idle_h:.0f}")
+                await log_user_action(session, user.id, "comeback_bonus", f"idle_h={idle_h:.0f}", auto_commit=False)
+                stats["comeback"] += 1
+
+        await session.commit()
+    return stats
+
+
+async def onboarding_retention_worker(bot: Bot, stop_event: asyncio.Event):
+    # Один проход каждые 30 минут. Вся логика в onboarding_retention_pass.
+    while not stop_event.is_set():
+        try:
+            await onboarding_retention_pass(bot)
+        except Exception as e:
+            logger.error(f"Onboarding retention worker error: {e}")
+
+        for _ in range(1800):
+            if stop_event.is_set():
+                break
+            await asyncio.sleep(1)
+
+
+# ============================
 # 🎁 КЕЙСЫ (Mini App)
 # ============================
 
@@ -3498,6 +3632,7 @@ async def main():
 
         retention_task = asyncio.create_task(retention_worker(bot, stop_event))
         promo_task = asyncio.create_task(weekly_promo_worker(bot, stop_event))
+        onboarding_task = asyncio.create_task(onboarding_retention_worker(bot, stop_event))
 
         if ENABLE_LOTTERY:
             lottery_task = asyncio.create_task(lottery_worker(bot, stop_event))

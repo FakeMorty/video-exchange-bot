@@ -803,6 +803,7 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🎁 Лутбоксы", callback_data="admin_broadcast_tpl:games")],
         [InlineKeyboardButton(text="👥 Рефералка", callback_data="admin_broadcast_tpl:quests")],
         [InlineKeyboardButton(text="👑 Привилегии VIP-подписки", callback_data="admin_broadcast_tpl:vip")],
+        [InlineKeyboardButton(text="🎯 Сегмент: ник есть, покупок 0", callback_data="admin_broadcast_tpl:segment_nopay")],
         [InlineKeyboardButton(text="✍️ Написать свой текст (HTML)", callback_data="admin_broadcast_custom")],
         [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_center")]
     ])
@@ -859,26 +860,50 @@ async def cb_admin_broadcast_tpl(callback: CallbackQuery, state: FSMContext):
             "👉 Перейди в меню <b>👑 VIP</b>!"
         )
     }
+
+    segment_mode = (tpl_name == "segment_nopay")
+    seg_count = 0
+    if segment_mode:
+        from app.config import STARTER_PACK_STARS, STARTER_PACK_COINS
+        from app.services import get_never_payer_nicknamed_targets
+        async with async_session() as session:
+            seg_count = len(await get_never_payer_nicknamed_targets(session))
+        templates["segment_nopay"] = (
+            "🎁 <b>Специальное предложение — только для тебя!</b>\n\n"
+            "Ты уже освоился в боте, но ещё ни разу не пополнял баланс. "
+            f"Для первого платежа мы собрали старт-пак: <b>{STARTER_PACK_COINS} монет всего за {STARTER_PACK_STARS} Stars</b> — "
+            "выгоднее любого другого пакета. Доступен строго один раз!\n\n"
+            "👉 Жми <b>💰 Пополнить</b> в главном меню — пакет уже ждёт тебя первым в списке!"
+        )
     
     tpl_text = templates.get(tpl_name)
     if not tpl_text:
         await callback.answer("Ошибка шаблона", show_alert=True)
         return
         
-    await state.update_data(broadcast_text=tpl_text, broadcast_mode="promo")
+    await state.update_data(
+        broadcast_text=tpl_text,
+        broadcast_mode="promo",
+        broadcast_segment=("nopay" if segment_mode else ""),
+    )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Запустить рассылку", callback_data="admin_broadcast_confirm")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_broadcast")]
     ])
     
+    confirm_tail = (
+        f"Отправить это <b>{seg_count}</b> пользователям из сегмента «все с ником, 0 покупок»?"
+        if segment_mode else
+        "Ты действительно хочешь отправить это сообщение всем активным пользователям?"
+    )
     await _safe_edit(
         callback,
         f"📢 <b>Предпросмотр рассылки:</b>\n\n"
         f"----------------------------------\n"
         f"{tpl_text}\n"
         f"----------------------------------\n\n"
-        f"Ты действительно хочешь отправить это сообщение всем активным пользователям?",
+        f"{confirm_tail}",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -943,6 +968,7 @@ async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext,
     data = await state.get_data()
     text_val = data.get("broadcast_text")
     mode = data.get("broadcast_mode", "promo")
+    segment = data.get("broadcast_segment", "") or ""
     await state.clear()
 
     if not text_val:
@@ -963,7 +989,11 @@ async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext,
 
     async def run_broadcast_task():
         async with async_session() as session:
-            users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
+            if segment == "nopay":
+                from app.services import get_never_payer_nicknamed_targets
+                users = await get_never_payer_nicknamed_targets(session)
+            else:
+                users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
 
         sent = 0
         for tid in users:

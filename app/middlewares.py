@@ -5,7 +5,7 @@ from aiogram.types import Message, CallbackQuery
 
 from app.db import async_session, is_db_unavailable_error
 from app.services import get_user
-from app.logger import get_logger, log_warning
+from app.logger import get_logger, log_warning, log_error
 
 logger = get_logger(__name__)
 
@@ -64,4 +64,29 @@ class BanCheckMiddleware(BaseMiddleware):
                 elif isinstance(event, CallbackQuery):
                     await event.answer("🚫 Доступ к боту для тебя заблокирован.", show_alert=True)
                 return
+
+            # Авто-бонус за ежедневный возврат (стрик удержания): один раз в день
+            # при первой активности. Не мешает обработке апдейта при любой ошибке.
+            if user:
+                try:
+                    from app.services import auto_daily_return_bonus
+                    granted = await auto_daily_return_bonus(session, user)
+                    if granted:
+                        reward, streak = granted
+                        try:
+                            await data["bot"].send_message(
+                                user_id,
+                                "🔥 <b>Ежедневный бонус за возвращение!</b>\n\n"
+                                f"Начислено: <b>+{reward:.0f}</b> монет\n"
+                                f"Дней подряд: <b>{streak}</b>\n\n"
+                                "Заходи каждый день — бонус растёт с серией!",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
+                except Exception as e:
+                    try:
+                        log_error(logger, f"Daily return bonus error: {e}")
+                    except Exception:
+                        pass
         return await handler(event, data)
