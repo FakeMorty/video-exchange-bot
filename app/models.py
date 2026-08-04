@@ -538,6 +538,23 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     creator: Mapped["User"] = relationship(foreign_keys=[created_by])
+
+
+class PromoMessage(Base):
+    """Сообщение автоматической ротации промо-рассылок.
+
+    Раньше шаблоны были захардкожены в main.py — теперь они живут в БД,
+    чтобы админ мог добавлять свои, редактировать и удалять любые
+    (раздел «📣 Промо-рассылки» → «📋 Авто-рассылки (ротация)»).
+    kind: "builtin" — дефолтные (засеяны скриптом), "custom" — добавленные админом.
+    """
+    __tablename__ = "promo_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="custom")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 class UserPerk(Base):
     """
     Активный перк пользователя (кастомный ник, бустер монет/XP и т.д.)

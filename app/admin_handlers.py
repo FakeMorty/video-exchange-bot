@@ -137,6 +137,12 @@ class EventCreationState(StatesGroup):
     confirm = State()
 
 
+class PromoRotationState(StatesGroup):
+    """Редактирование пула авто-ротации промо-рассылок («📋 Авто-рассылки»)."""
+    waiting_add_text = State()
+    waiting_edit_text = State()
+
+
 # =========================
 # ADMIN PANEL
 # =========================
@@ -806,17 +812,242 @@ async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="👑 Привилегии VIP-подписки", callback_data="admin_broadcast_tpl:vip")],
         [InlineKeyboardButton(text="🎯 Сегмент: ник есть, покупок 0", callback_data="admin_broadcast_tpl:segment_nopay")],
         [InlineKeyboardButton(text="✍️ Написать свой текст (HTML)", callback_data="admin_broadcast_custom")],
+        [InlineKeyboardButton(text="📋 Авто-рассылки (ротация)", callback_data="admin_promo_rot")],
         [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_center")]
     ])
-    
+
     await _safe_edit(
         callback,
         "📢 <b>Управление рассылками и пуш-уведомлениями</b>\n\n"
-        "Выбери готовый шаблон для напоминания пользователям о функциях бота, или напиши свой собственный текст:",
+        "Выбери готовый шаблон для напоминания пользователям о функциях бота, или напиши свой собственный текст.\n\n"
+        "📋 <b>Авто-рассылки (ротация)</b> — сообщения, которые бот сам рассылает всем "
+        "каждые 20 мин – 6 ч. Там же можно добавлять свои, редактировать и удалять.",
         parse_mode="HTML",
         reply_markup=kb
     )
     await callback.answer()
+
+
+# =========================
+# АВТО-РАССЫЛКИ (РОТАЦИЯ): список / добавить / править / удалить
+# =========================
+PROMO_ROT_PAGE_SIZE = 6
+
+
+def _promo_preview(text: str, n: int = 46) -> str:
+    t = " ".join((text or "").split())
+    return t[:n] + ("…" if len(t) > n else "")
+
+
+async def _render_promo_rot_list(callback: CallbackQuery, offset: int = 0):
+    """Экран со списком сообщений ротации + кнопки ✏️/🗑 у каждого."""
+    from app.services import (
+        count_promo_messages, list_promo_messages, get_active_events,
+        seed_default_promo_messages,
+    )
+    async with async_session() as session:
+        await seed_default_promo_messages(session)  # первый заход: засеять дефолт
+        total = await count_promo_messages(session)
+        items = await list_promo_messages(session, offset=offset, limit=PROMO_ROT_PAGE_SIZE)
+        events = await get_active_events(session)
+
+    lines = [f"📋 <b>Авто-рассылки (ротация)</b> — {total} шт.\n"]
+    lines.append("Бот случайно выбирает одно сообщение и рассылает всем каждые 20 мин – 6 ч.")
+    if events:
+        lines.append(f"➕ Плюс {len(events)} активное событие — карточки событий крутятся в ротации автоматически.")
+    lines.append("")
+
+    kb_rows = []
+    for i, m in enumerate(items):
+        num = offset + i + 1
+        icon = "⚙️" if m.kind == "builtin" else "✍️"
+        lines.append(f"{num}. {icon} <code>{escape(_promo_preview(m.text))}</code>")
+        kb_rows.append([
+            InlineKeyboardButton(text=f"✏️ Редактировать {num}", callback_data=f"admin_promo_rot_edit:{m.id}"),
+            InlineKeyboardButton(text=f"🗑 Удалить {num}", callback_data=f"admin_promo_rot_del:{m.id}"),
+        ])
+
+    if not items and total == 0:
+        lines.append("<i>Список пуст — добавь первое сообщение кнопкой ниже.</i>")
+
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin_promo_rot_pg:{max(0, offset - PROMO_ROT_PAGE_SIZE)}"))
+    if offset + PROMO_ROT_PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"admin_promo_rot_pg:{offset + PROMO_ROT_PAGE_SIZE}"))
+    if nav:
+        kb_rows.append(nav)
+
+    kb_rows.append([InlineKeyboardButton(text="➕ Добавить своё сообщение", callback_data="admin_promo_rot_add")])
+    kb_rows.append([InlineKeyboardButton(text="◀️ К рассылкам", callback_data="admin_broadcast")])
+
+    await _safe_edit(
+        callback,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_promo_rot")
+async def admin_promo_rot(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await _render_promo_rot_list(callback, 0)
+
+
+@router.callback_query(F.data.startswith("admin_promo_rot_pg:"))
+async def admin_promo_rot_page(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    offset = int(callback.data.split(":", 1)[1])
+    await _render_promo_rot_list(callback, offset)
+
+
+@router.callback_query(F.data == "admin_promo_rot_add")
+async def admin_promo_rot_add(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(PromoRotationState.waiting_add_text)
+    await callback.message.answer(
+        "➕ <b>Новое сообщение ротации</b>\n\n"
+        "Отправь текст (поддерживается HTML-разметка). Оно встанет в общий пул "
+        "и будет приходить пользователям наравне с остальными промо-рассылками:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_promo_rot")
+        ]]),
+    )
+    await callback.answer()
+
+
+@router.message(PromoRotationState.waiting_add_text)
+async def promo_rot_add_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    text_val = (message.text or "").strip()
+    if not text_val:
+        await message.answer("❌ Текст не может быть пустым.")
+        return
+    if len(text_val) > 3500:
+        await message.answer("❌ Слишком длинно (макс. 3500 символов).")
+        return
+    from app.services import add_promo_message
+    async with async_session() as session:
+        msg = await add_promo_message(session, text_val, kind="custom")
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Добавлено в ротацию (№{msg.id}).</b>\n\n"
+        f"----------------------------------\n"
+        f"{text_val}\n"
+        f"----------------------------------\n\n"
+        f"Теперь оно будет приходить пользователям наравне с остальными промо-рассылками.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📋 К списку ротации", callback_data="admin_promo_rot")
+        ]]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_promo_rot_edit:"))
+async def admin_promo_rot_edit(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    msg_id = int(callback.data.split(":", 1)[1])
+    from app.services import get_promo_message
+    async with async_session() as session:
+        msg = await get_promo_message(session, msg_id)
+        text_val = msg.text if msg else None
+    if text_val is None:
+        await callback.answer("Сообщение не найдено (уже удалено?)", show_alert=True)
+        return
+    await state.set_state(PromoRotationState.waiting_edit_text)
+    await state.update_data(promo_edit_id=msg_id)
+    await callback.message.answer(
+        f"✏️ <b>Редактирование сообщения №{msg_id}</b>\n\n"
+        f"Текущий текст:\n<pre>{escape(text_val)}</pre>\n"
+        f"Отправь новый текст (HTML-разметка поддерживается):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_promo_rot")
+        ]]),
+    )
+    await callback.answer()
+
+
+@router.message(PromoRotationState.waiting_edit_text)
+async def promo_rot_edit_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    text_val = (message.text or "").strip()
+    if not text_val:
+        await message.answer("❌ Текст не может быть пустым.")
+        return
+    if len(text_val) > 3500:
+        await message.answer("❌ Слишком длинно (макс. 3500 символов).")
+        return
+    data = await state.get_data()
+    msg_id = int(data.get("promo_edit_id") or 0)
+    from app.services import update_promo_message
+    async with async_session() as session:
+        ok = await update_promo_message(session, msg_id, text_val)
+    await state.clear()
+    await message.answer(
+        ("✅ <b>Сообщение обновлено.</b>\n\n----------------------------------\n" + text_val) if ok
+        else "⚠️ Сообщение не найдено — возможно, его уже удалили.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📋 К списку ротации", callback_data="admin_promo_rot")
+        ]]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_promo_rot_del:"))
+async def admin_promo_rot_delete_ask(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    msg_id = int(callback.data.split(":", 1)[1])
+    from app.services import get_promo_message
+    async with async_session() as session:
+        msg = await get_promo_message(session, msg_id)
+        text_val = msg.text if msg else None
+    if text_val is None:
+        await callback.answer("Сообщение не найдено (уже удалено?)", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"admin_promo_rot_delok:{msg_id}")],
+        [InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_promo_rot")],
+    ])
+    await _safe_edit(
+        callback,
+        f"🗑 <b>Удалить сообщение №{msg_id} из ротации?</b>\n\n"
+        f"----------------------------------\n"
+        f"<code>{escape(_promo_preview(text_val, 300))}</code>\n"
+        f"----------------------------------\n\n"
+        f"Оно больше не будет приходить пользователям автоматически.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_promo_rot_delok:"))
+async def admin_promo_rot_delete_do(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    msg_id = int(callback.data.split(":", 1)[1])
+    from app.services import delete_promo_message
+    async with async_session() as session:
+        await delete_promo_message(session, msg_id)
+    # Обновлённый список сам подтверждает удаление (двойной answer не нужен).
+    await _render_promo_rot_list(callback, 0)
 
 
 @router.callback_query(F.data.startswith("admin_broadcast_tpl:"))

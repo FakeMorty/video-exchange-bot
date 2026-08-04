@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
     utc_now,
-    ActiveSale, Event,
+    ActiveSale, Event, PromoMessage,
     User, Video, VideoView, VideoRating, Payment,
     Offer, OfferParticipation,
     Comment, ContentReaction, GameHistory,
@@ -3445,28 +3445,12 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
         users = (await session.execute(
             select(User.telegram_id, User.first_name).where(User.status == "active")
         )).all()
-    
-    applies = []
-    if event.applies_vip:
-        applies.append("VIP")
-    if event.applies_coins:
-        applies.append("монеты")
-    if event.applies_lootbox:
-        applies.append("лутбоксы")
-    if event.applies_cases:
-        applies.append("кейсы")
-    
-    applies_text = ", ".join(applies) if applies else "всё"
-    end_text = event.end_date.strftime("%d.%m.%Y")
-    
-    text = (
-        f"🎉 <b>{event.name}</b>\n\n"
-        f"{event.description}\n\n"
-        f"🔥 Скидка <b>{event.discount_percent}%</b> на {applies_text}!\n"
-        f"⏰ Акция до {end_text}\n\n"
-        f"Не пропусти!"
-    )
-    
+
+    # Caption к фото ограничен 1024 символами — build_event_promo_text при
+    # необходимости обрежет длинное описание, иначе send_photo упадёт молча.
+    max_len = PROMO_CAPTION_MAX if event.image_file_id else PROMO_TEXT_MAX
+    text = build_event_promo_text(event, max_len=max_len)
+
     sent = 0
     for tid, first_name in users:
         try:
@@ -3481,6 +3465,142 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
             pass
     
     return sent
+
+
+# ============================
+# АВТО-РОТАЦИЯ ПРОМО-РАССЫЛОК (БД-шаблоны + события)
+# ============================
+PROMO_SEED_MARKER_KEY = "promo_messages_seeded_v1"
+# Лимиты Telegram: подпись к фото ≤1024, обычное сообщение ≤4096.
+PROMO_CAPTION_MAX = 1000
+PROMO_TEXT_MAX = 4000
+
+
+async def seed_default_promo_messages(session: AsyncSession) -> int:
+    """Одноразовый сид дефолтных шаблонов ротации (16 штук из DEFAULT_PROMO_MESSAGES).
+
+    Идемпотентен по маркеру в bot_settings: если админ потом удалит шаблоны,
+    повторно они НЕ воскресают. Возвращает количество добавленных.
+    """
+    from app.config import DEFAULT_PROMO_MESSAGES
+    from app.models import BotSetting
+    marker = (await session.execute(
+        select(BotSetting).where(BotSetting.key == PROMO_SEED_MARKER_KEY)
+    )).scalar_one_or_none()
+    if marker:
+        return 0
+    for tpl in DEFAULT_PROMO_MESSAGES:
+        session.add(PromoMessage(text=tpl, kind="builtin", is_active=True))
+    session.add(BotSetting(key=PROMO_SEED_MARKER_KEY, value="1"))
+    await session.commit()
+    return len(DEFAULT_PROMO_MESSAGES)
+
+
+async def count_promo_messages(session: AsyncSession) -> int:
+    return (await session.execute(
+        select(func.count(PromoMessage.id))
+    )).scalar_one()
+
+
+async def list_promo_messages(session: AsyncSession, offset: int = 0, limit: int = 8) -> list[PromoMessage]:
+    return (await session.execute(
+        select(PromoMessage).order_by(PromoMessage.id.asc()).offset(offset).limit(limit)
+    )).scalars().all()
+
+
+async def get_promo_message(session: AsyncSession, msg_id: int) -> PromoMessage | None:
+    return (await session.execute(
+        select(PromoMessage).where(PromoMessage.id == msg_id)
+    )).scalar_one_or_none()
+
+
+async def add_promo_message(session: AsyncSession, text: str, kind: str = "custom") -> PromoMessage:
+    msg = PromoMessage(text=text.strip(), kind=kind, is_active=True)
+    session.add(msg)
+    await session.commit()
+    await session.refresh(msg)
+    return msg
+
+
+async def update_promo_message(session: AsyncSession, msg_id: int, text: str) -> bool:
+    msg = await get_promo_message(session, msg_id)
+    if not msg:
+        return False
+    msg.text = text.strip()
+    await session.commit()
+    return True
+
+
+async def delete_promo_message(session: AsyncSession, msg_id: int) -> bool:
+    msg = await get_promo_message(session, msg_id)
+    if not msg:
+        return False
+    await session.delete(msg)
+    await session.commit()
+    return True
+
+
+def build_event_promo_text(event: Event, max_len: int | None = None) -> str:
+    """Готовая карточка события для рассылки/ротации (HTML).
+
+    Если задан max_len (напр. 1000 для подписи к фото), описание обрезается
+    так, чтобы весь текст влез — иначе send_photo молча падает по длине
+    caption и событие никому не уходит.
+    """
+    applies = []
+    if event.applies_vip:
+        applies.append("VIP")
+    if event.applies_coins:
+        applies.append("монеты")
+    if event.applies_lootbox:
+        applies.append("лутбоксы")
+    if event.applies_cases:
+        applies.append("кейсы")
+    applies_text = ", ".join(applies) if applies else "всё"
+    end_text = event.end_date.strftime("%d.%m.%Y")
+
+    def _render(descr: str) -> str:
+        return (
+            f"🎉 <b>{event.name}</b>\n\n"
+            f"{descr}\n\n"
+            f"🔥 Скидка <b>{event.discount_percent}%</b> на {applies_text}!\n"
+            f"⏰ Акция до {end_text}\n\n"
+            f"Не пропусти!"
+        )
+
+    descr = event.description or ""
+    text = _render(descr)
+    if max_len and len(text) > max_len:
+        overhead = len(_render(""))
+        allowed = max(0, max_len - overhead - 1)
+        text = _render(descr[:allowed] + "…" if allowed < len(descr) else descr)
+    return text
+
+
+async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
+    """Пул сообщений для автоматической ротации:
+
+    - активные промо-сообщения из БД (дефолтные + добавленные админом);
+    - по карточке на каждое активное событие (с фото, если есть) — чтобы
+      события напоминали о себе по тому же принципу, что и промо-рассылки.
+
+    Возвращает список словарей {"text": str, "image_file_id": str|None}.
+    """
+    pool: list[dict] = []
+    messages = (await session.execute(
+        select(PromoMessage).where(PromoMessage.is_active == True).order_by(PromoMessage.id.asc())  # noqa: E712
+    )).scalars().all()
+    for m in messages:
+        pool.append({"text": m.text, "image_file_id": None})
+
+    events = await get_active_events(session)
+    for ev in events:
+        max_len = PROMO_CAPTION_MAX if ev.image_file_id else PROMO_TEXT_MAX
+        pool.append({
+            "text": build_event_promo_text(ev, max_len=max_len),
+            "image_file_id": ev.image_file_id,
+        })
+    return pool
 
 
 async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
