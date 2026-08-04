@@ -142,6 +142,11 @@ def _conflict_stmt(stmt, table, col_names):
     аппендятся идентичными значениями, так что для них upsert безвреден.
     Для композитных PK — консервативный DO NOTHING.
     """
+    # Настройки бота никогда не перезаписываем старым слепком: в dest они
+    # всегда свежее (баннер, цены, переключатели админов меняются постоянно).
+    # Даже при ручном прогоне merge старые значения не должны затирать текущие.
+    if table.name == "bot_settings":
+        return stmt.on_conflict_do_nothing()
     pk_cols = list(table.primary_key.columns)
     if len(pk_cols) == 1:
         pk = pk_cols[0]
@@ -347,6 +352,21 @@ async def merge_table(table, source_conn, dest_conn, user_id_map=None):
 async def main():
     if len(sys.argv) < 3:
         print("Usage: python merge_databases.py <SOURCE_URL> <DEST_URL>")
+        return
+
+    # Перенос Neon -> Supabase — ОДНОРАЗОВАЯ операция, она уже выполнена.
+    # Скрипт исторически вызывался из Start Command на каждом деплое, и
+    # повторный безусловный UPSERT из замороженной старой БД затирал более
+    # свежие данные dest (реальный инцидент: сбрасывался приветственный баннер
+    # — авто-маркер merge_completed_v1 не ставился, если падала хоть одна
+    # таблица, поэтому баннер затирался на КАЖДОМ деплое).
+    # Теперь по умолчанию пропускаем перенос целиком. Ручной полный прогон:
+    # RUN_DB_MERGE=1 python scripts/merge_databases.py <SRC> <DEST>
+    if os.environ.get("RUN_DB_MERGE") != "1":
+        logger.info(
+            "Merge пропущен: миграция Neon->Supabase завершена. "
+            "Для ручного повторного переноса запусти с RUN_DB_MERGE=1."
+        )
         return
 
     source_url = _fix_url(sys.argv[1])
