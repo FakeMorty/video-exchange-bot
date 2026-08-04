@@ -383,6 +383,24 @@ async def main():
     except Exception as e:
         logger.warning(f"Could not ensure dest columns (continuing anyway): {e}")
 
+    # Миграция — одноразовая операция. UPSERT из замороженной старой БД иначе
+    # затирает БОЛЕЕ СВЕЖИЕ данные dest при каждом деплое (реальный инцидент:
+    # сбрасывался приветственный баннер из настроек). Если миграция уже успешно
+    # завершена — пропускаем весь перенос.
+    from sqlalchemy import text as sa_text
+    try:
+        async with dest_engine.connect() as probe:
+            done = (await probe.execute(
+                sa_text("SELECT 1 FROM bot_settings WHERE key = 'merge_completed_v1'")
+            )).scalar_one_or_none()
+        if done:
+            logger.info("Marker merge_completed_v1 found — миграция уже выполнена, пропускаю весь перенос.")
+            await source_engine.dispose()
+            await dest_engine.dispose()
+            return
+    except Exception as e:
+        logger.warning(f"Could not check merge marker (continuing with merge): {e}")
+
     failed = []   # list of (table_name, error)
     total_rows = 0
 
@@ -428,6 +446,18 @@ async def main():
         logger.error("=" * 70)
     else:
         logger.info(f"Merge completed successfully. Total rows copied: {total_rows}.")
+        # Миграция завершена — ставим маркер, чтобы будущие деплои НЕ перезаливали
+        # устаревший слепок старой БД поверх свежих данных dest.
+        try:
+            mark_engine = _engine_for(dest_url)
+            async with mark_engine.begin() as conn:
+                await conn.execute(
+                    sa_text("INSERT INTO bot_settings (key, value) VALUES ('merge_completed_v1', '1') ON CONFLICT (key) DO NOTHING")
+                )
+            await mark_engine.dispose()
+            logger.info("Set merge_completed_v1 marker: будущие прогоны будут пропущены.")
+        except Exception as e:
+            logger.warning(f"Could not set merge marker (continuing): {e}")
 
 
 if __name__ == "__main__":

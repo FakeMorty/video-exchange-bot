@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
-from sqlalchemy import select, func, desc, update, or_
+from sqlalchemy import select, func, desc, update, or_, Text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
@@ -1461,6 +1461,26 @@ async def get_never_payer_nicknamed_targets(session: AsyncSession) -> list[int]:
         )
     )).scalars().all()
     return list(rows)
+
+
+async def search_users_admin(session: AsyncSession, query: str, limit: int = 8) -> list["User"]:
+    """Поиск пользователей для админки: частичное совпадение по нику/username,
+    префикс по Telegram ID. Регистр не важен; символы % и _ в запросе безопасны."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    pattern = f"%{q.replace('%', '').replace('_', ' ')}%"
+    lowered = pattern.lower()
+    conds = [
+        func.lower(func.coalesce(User.display_name, "")).like(lowered),
+        func.lower(func.coalesce(User.username, "")).like(lowered),
+    ]
+    digits = "".join(ch for ch in q if ch.isdigit())
+    if len(digits) >= 3:
+        conds.append(func.cast(User.telegram_id, Text).like(f"{digits}%"))
+    return (await session.execute(
+        select(User).where(or_(*conds)).order_by(User.id.desc()).limit(limit)
+    )).scalars().all()
 
 
 async def get_last_activity_map(session: AsyncSession) -> dict[int, datetime]:

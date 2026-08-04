@@ -77,6 +77,7 @@ class AdminUserState(StatesGroup):
     waiting_message_text = State()
     waiting_dossier_id = State()
     waiting_new_nickname = State()
+    waiting_user_search = State()
 
 
 class ModerationRejectState(StatesGroup):
@@ -1022,8 +1023,9 @@ async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext,
 # USER MGMT
 # =========================
 @router.callback_query(F.data.startswith("admin_manage_users"))
-async def admin_manage_users(callback: CallbackQuery):
+async def admin_manage_users(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
+    await state.clear()
     
     parts = callback.data.split(":")
     offset = int(parts[1]) if len(parts) > 1 else 0
@@ -1054,10 +1056,67 @@ async def admin_manage_users(callback: CallbackQuery):
     if nav_row:
         kb_rows.append(nav_row)
         
+    kb_rows.append([InlineKeyboardButton(text="🔎 Поиск по нику/ID", callback_data="admin_user_search")])
     kb_rows.append([InlineKeyboardButton(text="◀ Назад в админку", callback_data="admin_center")])
     
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_user_search")
+async def admin_user_search_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(AdminUserState.waiting_user_search)
+    await callback.message.answer(
+        "🔎 <b>Поиск пользователя</b>\n\n"
+        "Введи ник (можно частично, регистр не важен) или Telegram ID.\n"
+        "Покажу до 8 совпадений:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_manage_users:0")
+        ]]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminUserState.waiting_user_search)
+async def admin_user_search_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    from app.services import search_users_admin
+    query_text = (message.text or "").strip()
+    await state.clear()
+
+    async with async_session() as session:
+        found = await search_users_admin(session, query_text)
+
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀ Назад к списку", callback_data="admin_manage_users:0")]
+    ])
+    if not found:
+        await message.answer(
+            f"🔎 По запросу «{escape(query_text)}» никого не нашлось.",
+            parse_mode="HTML",
+            reply_markup=back_kb,
+        )
+        return
+
+    kb_rows = []
+    for u in found:
+        name = u.display_name or u.username or f"User {u.telegram_id}"
+        status_icon = "🚫" if u.status == "banned" else "👤"
+        kb_rows.append([InlineKeyboardButton(
+            text=f"{status_icon} {name[:24]} (ID: {u.telegram_id})",
+            callback_data=f"admin_select_user:{u.id}"
+        )])
+    kb_rows.append([InlineKeyboardButton(text="◀ Назад к списку", callback_data="admin_manage_users:0")])
+    await message.answer(
+        f"🔎 <b>Найдено: {len(found)}</b> (показано до 8). Выбери пользователя:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
 
 
 async def show_user_profile(callback: CallbackQuery, user_id: int):
