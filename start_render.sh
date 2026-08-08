@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+export PYTHONUNBUFFERED=1
+
 # Страховка: если на Render в Build Command не стоит установка зависимостей
 # (ModuleNotFoundError: sqlalchemy — реальный инцидент 2026-08-04, когда
 # `bash start_render.sh` случайно попал в Build Command вместо
@@ -11,7 +13,7 @@ if ! python3 -c "import sqlalchemy, aiogram" >/dev/null 2>&1; then
 fi
 
 echo "==> Running safe migrations..."
-python3 migrate.py
+python3 -u migrate.py
 
 echo "==> Starting bot..."
-exec python -m app.main
+exec python3 -u -m app.main

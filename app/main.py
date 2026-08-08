@@ -1,3 +1,7 @@
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 from app.models import LotteryTicket, User, utc_now, LotteryRound
 import os
 import json
@@ -3758,7 +3762,9 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
     await site.start()
-    print("==> HTTP server listening on port", int(PORT or 10000))
+    print(f"==> HTTP server listening on port {int(PORT or 10000)}", flush=True)
+    print("==> Available at your primary URL", flush=True)
+    print("==> Your service is live 🎉", flush=True)
 
     stop_event = asyncio.Event()
     audit_task = None

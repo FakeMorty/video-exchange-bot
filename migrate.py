@@ -18,6 +18,9 @@ import shutil
 import subprocess
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 # alembic может не быть в PATH (напр. venv не активирован) — тогда зовём через python -m
 ALEMBIC = shutil.which("alembic") or f'"{sys.executable}" -m alembic'
 
