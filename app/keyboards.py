@@ -108,6 +108,8 @@ def rejection_reason_keyboard(video_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 Дубликат", callback_data=f"reject_reason:{video_id}:duplicate")],
         [InlineKeyboardButton(text="🚫 Не по теме", callback_data=f"reject_reason:{video_id}:off_topic")],
         [InlineKeyboardButton(text="🔞 Запрещёнка", callback_data=f"reject_reason:{video_id}:forbidden")],
+        [InlineKeyboardButton(text="📜 Не соответствует правилам", callback_data=f"reject_reason:{video_id}:rules_violation")],
+        [InlineKeyboardButton(text="⚠️ Шок-контент", callback_data=f"reject_reason:{video_id}:shock_content")],
         [InlineKeyboardButton(text="❓ Другое", callback_data=f"reject_reason:{video_id}:other")],
     ])
 

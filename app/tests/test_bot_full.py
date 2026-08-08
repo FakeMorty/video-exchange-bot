@@ -3164,7 +3164,8 @@ async def test_suite_promo_rotation():
     assert n1 == len(DEFAULT_PROMO_MESSAGES) and n2 == 0 and total == len(DEFAULT_PROMO_MESSAGES), \
         f"seed: n1={n1} n2={n2} total={total}"
     assert all(m.kind == "builtin" for m in items)
-    assert sorted(m.text for m in items) == sorted(DEFAULT_PROMO_MESSAGES)
+    expected_texts = [d["text"] if isinstance(d, dict) else d for d in DEFAULT_PROMO_MESSAGES]
+    assert sorted(m.text for m in items) == sorted(expected_texts)
 
     # 2-4) add/edit/delete custom сразу видны в пуле
     async with async_session() as s:
@@ -3289,3 +3290,176 @@ async def test_suite_weekly_freebie():
         res4 = await weekly_freebie_broadcast(BOT)
         assert res4 is None and len(sent) == 3, f"future hour sent: {res4}"
     print(f"PASS  weekly-freebie: слово '{word}' активным, 1 раз/неделю, день/час соблюдены")
+
+
+@pytest.mark.asyncio
+async def test_new_rejection_reasons_and_immediate_reject():
+    from app.keyboards import rejection_reason_keyboard
+    from app.admin_handlers import reject_reason
+    from app.models import User, Video, Base
+    from unittest.mock import AsyncMock, patch
+    from aiogram.fsm.context import FSMContext
+
+    # 1. Keyboard tests
+    kb = rejection_reason_keyboard(999)
+    texts = [btn.text for row in kb.inline_keyboard for btn in row]
+    cb_datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+    
+    assert any("Не соответствует правилам" in t for t in texts)
+    assert any("Шок-контент" in t for t in texts)
+    assert "reject_reason:999:rules_violation" in cb_datas
+    assert "reject_reason:999:shock_content" in cb_datas
+
+    # 2. Immediate reject logic
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        uploader = User(telegram_id=555111, balance=Decimal("10.00"), nickname_set=True, display_name="Uploader")
+        session.add(uploader)
+        await session.flush()
+        v = Video(uploader_user_id=uploader.id, telegram_file_id="v_rules", telegram_file_unique_id="uniq_v_rules", status="pending")
+        session.add(v)
+        await session.commit()
+        vid_id = v.id
+
+    with patch("app.admin_handlers.async_session", Session), \
+         patch("app.admin_handlers.check_admin", AsyncMock(return_value=True)):
+
+        cb = AsyncMock()
+        cb.from_user.id = 999999
+        cb.data = f"reject_reason:{vid_id}:rules_violation"
+        cb.bot = AsyncMock()
+        cb.message = AsyncMock()
+        state = AsyncMock(spec=FSMContext)
+
+        await reject_reason(cb, state)
+
+        # State should NOT be waiting_comment for rules_violation
+        state.set_state.assert_not_called()
+
+        async with Session() as session:
+            updated_v = (await session.execute(select(Video).where(Video.id == vid_id))).scalar_one()
+            assert updated_v.status == "rejected"
+            assert updated_v.rejection_reason == "Не соответствует правилам"
+
+        # Check uploader was notified
+        cb.bot.send_message.assert_called_once_with(
+            555111,
+            f"❌ Публикация #{vid_id} отклонена.\nПричина: Не соответствует правилам"
+        )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_decision_notifications():
+    from app.admin_handlers import report_dismiss, report_remove_video
+    from app.models import User, Video, VideoReport, Base
+    from unittest.mock import AsyncMock, patch
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        reporter1 = User(telegram_id=777001, display_name="R1")
+        reporter2 = User(telegram_id=777002, display_name="R2")
+        uploader = User(telegram_id=777003, display_name="U")
+        session.add_all([reporter1, reporter2, uploader])
+        await session.flush()
+
+        v1 = Video(uploader_user_id=uploader.id, telegram_file_id="v1", telegram_file_unique_id="u1", status="approved")
+        v2 = Video(uploader_user_id=uploader.id, telegram_file_id="v2", telegram_file_unique_id="u2", status="approved")
+        session.add_all([v1, v2])
+        await session.flush()
+
+        rep1 = VideoReport(video_id=v1.id, reporter_user_id=reporter1.id, reason="spam", status="pending")
+        rep2 = VideoReport(video_id=v2.id, reporter_user_id=reporter2.id, reason="shock", status="pending")
+        session.add_all([rep1, rep2])
+        await session.commit()
+
+        r1_id, r2_id = rep1.id, rep2.id
+        v1_id, v2_id = v1.id, v2.id
+
+    with patch("app.admin_handlers.async_session", Session), \
+         patch("app.admin_handlers.check_admin", AsyncMock(return_value=True)):
+
+        # 1) Dismiss report 1 (video stays)
+        cb1 = AsyncMock()
+        cb1.from_user.id = 999999
+        cb1.data = f"report_dismiss:{r1_id}"
+        cb1.bot = AsyncMock()
+
+        await report_dismiss(cb1)
+
+        cb1.bot.send_message.assert_called_once_with(
+            777001,
+            f"📢 Админ рассмотрел вашу жалобу на видео #{v1_id} и принятое решение: Оставить видео"
+        )
+
+        # 2) Remove video 2 by report
+        cb2 = AsyncMock()
+        cb2.from_user.id = 999999
+        cb2.data = f"report_remove_video:{r2_id}:{v2_id}"
+        cb2.bot = AsyncMock()
+
+        await report_remove_video(cb2)
+
+        cb2.bot.send_message.assert_called_once_with(
+            777002,
+            f"📢 Админ рассмотрел вашу жалобу на видео #{v2_id} и принятое решение: Удалить видео"
+        )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_promo_otzyv_seed_and_title_management():
+    from app.services import seed_default_promo_messages, add_promo_message, update_promo_message, delete_promo_message, list_promo_messages
+    from app.models import PromoMessage, Base
+    from app.config import DEFAULT_PROMO_MESSAGES
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    # Check "Отзыв" is in DEFAULT_PROMO_MESSAGES
+    otzyv_item = next((d for d in DEFAULT_PROMO_MESSAGES if isinstance(d, dict) and d.get("title") == "Отзыв"), None)
+    assert otzyv_item is not None
+    assert "Нам очень важно ваше мнение" in otzyv_item["text"]
+
+    async with Session() as session:
+        added = await seed_default_promo_messages(session)
+        assert added == len(DEFAULT_PROMO_MESSAGES)
+
+        msgs = await list_promo_messages(session, offset=0, limit=100)
+        seeded_otzyv = next((m for m in msgs if m.title == "Отзыв"), None)
+        assert seeded_otzyv is not None
+        assert "отзыв" in seeded_otzyv.text.lower()
+
+        # Custom promo message with title
+        custom = await add_promo_message(session, "Текст новой промо аккаунта", title="Мой Отзыв")
+        assert custom.title == "Мой Отзыв"
+        assert custom.text == "Текст новой промо аккаунта"
+
+        # Update title & text
+        ok = await update_promo_message(session, custom.id, text="Обновленный текст", title="Новый Заголовок")
+        assert ok is True
+
+        refreshed = (await session.execute(select(PromoMessage).where(PromoMessage.id == custom.id))).scalar_one()
+        assert refreshed.title == "Новый Заголовок"
+        assert refreshed.text == "Обновленный текст"
+
+        # Delete
+        deleted = await delete_promo_message(session, custom.id)
+        assert deleted is True
+
+    await engine.dispose()

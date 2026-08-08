@@ -266,4 +266,12 @@ async def fix_database():
         except Exception:
             await conn.rollback()
 
+        # Ensure title column exists in promo_messages
+        try:
+            await conn.execute(text("ALTER TABLE promo_messages ADD COLUMN title VARCHAR(100)"))
+            await conn.commit()
+            log_info(logger, "Added promo_messages.title")
+        except Exception:
+            await conn.rollback()
+
     log_info(logger, "DB fix complete!")

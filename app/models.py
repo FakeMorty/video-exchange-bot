@@ -551,6 +551,7 @@ class PromoMessage(Base):
     __tablename__ = "promo_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str | None] = mapped_column(String(100), nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(String(20), default="custom")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

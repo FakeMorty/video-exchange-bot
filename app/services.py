@@ -3477,7 +3477,7 @@ PROMO_TEXT_MAX = 4000
 
 
 async def seed_default_promo_messages(session: AsyncSession) -> int:
-    """Одноразовый сид дефолтных шаблонов ротации (16 штук из DEFAULT_PROMO_MESSAGES).
+    """Одноразовый сид дефолтных шаблонов ротации из DEFAULT_PROMO_MESSAGES.
 
     Идемпотентен по маркеру в bot_settings: если админ потом удалит шаблоны,
     повторно они НЕ воскресают. Возвращает количество добавленных.
@@ -3489,8 +3489,14 @@ async def seed_default_promo_messages(session: AsyncSession) -> int:
     )).scalar_one_or_none()
     if marker:
         return 0
-    for tpl in DEFAULT_PROMO_MESSAGES:
-        session.add(PromoMessage(text=tpl, kind="builtin", is_active=True))
+    for item in DEFAULT_PROMO_MESSAGES:
+        if isinstance(item, dict):
+            title = item.get("title")
+            text = item.get("text")
+        else:
+            title = None
+            text = item
+        session.add(PromoMessage(title=title, text=text, kind="builtin", is_active=True))
     session.add(BotSetting(key=PROMO_SEED_MARKER_KEY, value="1"))
     await session.commit()
     return len(DEFAULT_PROMO_MESSAGES)
@@ -3514,19 +3520,22 @@ async def get_promo_message(session: AsyncSession, msg_id: int) -> PromoMessage 
     )).scalar_one_or_none()
 
 
-async def add_promo_message(session: AsyncSession, text: str, kind: str = "custom") -> PromoMessage:
-    msg = PromoMessage(text=text.strip(), kind=kind, is_active=True)
+async def add_promo_message(session: AsyncSession, text: str, title: str | None = None, kind: str = "custom") -> PromoMessage:
+    msg = PromoMessage(title=title.strip() if title else None, text=text.strip(), kind=kind, is_active=True)
     session.add(msg)
     await session.commit()
     await session.refresh(msg)
     return msg
 
 
-async def update_promo_message(session: AsyncSession, msg_id: int, text: str) -> bool:
+async def update_promo_message(session: AsyncSession, msg_id: int, text: str | None = None, title: str | None = None) -> bool:
     msg = await get_promo_message(session, msg_id)
     if not msg:
         return False
-    msg.text = text.strip()
+    if text is not None:
+        msg.text = text.strip()
+    if title is not None:
+        msg.title = title.strip()
     await session.commit()
     return True
 

@@ -139,7 +139,9 @@ class EventCreationState(StatesGroup):
 
 class PromoRotationState(StatesGroup):
     """Редактирование пула авто-ротации промо-рассылок («📋 Авто-рассылки»)."""
+    waiting_add_title = State()
     waiting_add_text = State()
+    waiting_edit_title = State()
     waiting_edit_text = State()
 
 
@@ -484,21 +486,50 @@ async def reject_reason(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     parts = callback.data.split(":")
     video_id, reason_key = int(parts[1]), parts[2]
-    reasons = {"duplicate": "Дубликат", "off_topic": "Не по теме", "forbidden": "Запрещёнка", "other": "Другое"}
+    reasons = {
+        "duplicate": "Дубликат",
+        "off_topic": "Не по теме",
+        "forbidden": "Запрещёнка",
+        "rules_violation": "Не соответствует правилам",
+        "shock_content": "Шок-контент",
+        "other": "Другое",
+    }
     reason_text = reasons.get(reason_key, reason_key)
-    await state.set_state(ModerationRejectState.waiting_comment)
-    await state.update_data(reject_video_id=video_id, reject_reason_text=reason_text)
-    await _safe_edit(
-        callback,
-        f"❌ <b>Отклонение #{video_id}</b>\n\n"
-        f"Базовая причина: <b>{reason_text}</b>\n\n"
-        f"Теперь отправь <b>комментарий для пользователя</b>, где объясни, что именно не так с публикацией.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_get_pending")]
-        ])
-    )
-    await callback.answer()
+    
+    if reason_key == "other":
+        await state.set_state(ModerationRejectState.waiting_comment)
+        await state.update_data(reject_video_id=video_id, reject_reason_text=reason_text)
+        await _safe_edit(
+            callback,
+            f"❌ <b>Отклонение #{video_id}</b>\n\n"
+            f"Базовая причина: <b>{reason_text}</b>\n\n"
+            f"Теперь отправь <b>комментарий для пользователя</b>, где объясни, что именно не так с публикацией.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_get_pending")]
+            ])
+        )
+        await callback.answer()
+    else:
+        await state.clear()
+        async with async_session() as session:
+            video = await reject_video(session, video_id, reason_text)
+            if video:
+                uploader = await get_user_by_id(session, video.uploader_user_id)
+                if uploader:
+                    try:
+                        await callback.bot.send_message(
+                            uploader.telegram_id,
+                            f"❌ Публикация #{video_id} отклонена.\nПричина: {reason_text}",
+                        )
+                    except Exception:
+                        pass
+        await _safe_edit(
+            callback,
+            f"❌ #{video_id} отклонено\nПричина: {reason_text}",
+            reply_markup=admin_after_action_keyboard(),
+        )
+        await callback.answer()
 
 
 @router.message(ModerationRejectState.waiting_comment)
@@ -861,7 +892,8 @@ async def _render_promo_rot_list(callback: CallbackQuery, offset: int = 0):
     for i, m in enumerate(items):
         num = offset + i + 1
         icon = "⚙️" if m.kind == "builtin" else "✍️"
-        lines.append(f"{num}. {icon} <code>{escape(_promo_preview(m.text))}</code>")
+        title_str = escape(m.title) if m.title else "Без названия"
+        lines.append(f"{num}. {icon} <b>{title_str}</b>\n   <code>{escape(_promo_preview(m.text))}</code>")
         kb_rows.append([
             InlineKeyboardButton(text=f"✏️ Редактировать {num}", callback_data=f"admin_promo_rot_edit:{m.id}"),
             InlineKeyboardButton(text=f"🗑 Удалить {num}", callback_data=f"admin_promo_rot_del:{m.id}"),
@@ -895,6 +927,7 @@ async def admin_promo_rot(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
+    await state.clear()
     await _render_promo_rot_list(callback, 0)
 
 
@@ -912,17 +945,39 @@ async def admin_promo_rot_add(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
-    await state.set_state(PromoRotationState.waiting_add_text)
+    await state.set_state(PromoRotationState.waiting_add_title)
     await callback.message.answer(
-        "➕ <b>Новое сообщение ротации</b>\n\n"
-        "Отправь текст (поддерживается HTML-разметка). Оно встанет в общий пул "
-        "и будет приходить пользователям наравне с остальными промо-рассылками:",
+        "➕ <b>Новая постоянная промо-рассылка</b>\n\n"
+        "<b>Шаг 1 из 2:</b> Введи название рассылки (например, <code>Отзыв</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_promo_rot")
         ]]),
     )
     await callback.answer()
+
+
+@router.message(PromoRotationState.waiting_add_title)
+async def promo_rot_add_title_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    title_val = (message.text or "").strip()
+    if not title_val:
+        await message.answer("❌ Название не может быть пустым.")
+        return
+    if len(title_val) > 100:
+        await message.answer("❌ Слишком длинное название (макс. 100 символов).")
+        return
+    await state.update_data(add_promo_title=title_val)
+    await state.set_state(PromoRotationState.waiting_add_text)
+    await message.answer(
+        f"➕ <b>Новая постоянная промо-рассылка («{escape(title_val)}»)</b>\n\n"
+        "<b>Шаг 2 из 2:</b> Отправь текст рассылки (поддерживается HTML-разметка):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_promo_rot")
+        ]]),
+    )
 
 
 @router.message(PromoRotationState.waiting_add_text)
@@ -936,16 +991,19 @@ async def promo_rot_add_process(message: Message, state: FSMContext):
     if len(text_val) > 3500:
         await message.answer("❌ Слишком длинно (макс. 3500 символов).")
         return
+    data = await state.get_data()
+    title_val = data.get("add_promo_title")
     from app.services import add_promo_message
     async with async_session() as session:
-        msg = await add_promo_message(session, text_val, kind="custom")
+        msg = await add_promo_message(session, text_val, title=title_val, kind="custom")
     await state.clear()
+    title_disp = f"«{escape(title_val)}» " if title_val else ""
     await message.answer(
-        f"✅ <b>Добавлено в ротацию (№{msg.id}).</b>\n\n"
+        f"✅ <b>Рассылка {title_disp}добавлена в ротацию (№{msg.id}).</b>\n\n"
         f"----------------------------------\n"
         f"{text_val}\n"
         f"----------------------------------\n\n"
-        f"Теперь оно будет приходить пользователям наравне с остальными промо-рассылками.",
+        f"Теперь она будет регулярно приходить пользователям наравне с остальными промо-рассылками.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="📋 К списку ротации", callback_data="admin_promo_rot")
@@ -962,6 +1020,82 @@ async def admin_promo_rot_edit(callback: CallbackQuery, state: FSMContext):
     from app.services import get_promo_message
     async with async_session() as session:
         msg = await get_promo_message(session, msg_id)
+    if not msg:
+        await callback.answer("Сообщение не найдено (уже удалено?)", show_alert=True)
+        return
+    
+    title_str = escape(msg.title) if msg.title else "<i>Без названия</i>"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить название", callback_data=f"admin_promo_rot_edittitle:{msg.id}")],
+        [InlineKeyboardButton(text="📝 Изменить текст", callback_data=f"admin_promo_rot_edittext:{msg.id}")],
+        [InlineKeyboardButton(text="◀️ К списку ротации", callback_data="admin_promo_rot")],
+    ])
+    await _safe_edit(
+        callback,
+        f"✏️ <b>Редактирование рассылки №{msg.id}</b>\n\n"
+        f"<b>Название:</b> {title_str}\n\n"
+        f"<b>Текст:</b>\n<pre>{escape(msg.text)}</pre>",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_promo_rot_edittitle:"))
+async def admin_promo_rot_edit_title_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    msg_id = int(callback.data.split(":", 1)[1])
+    await state.set_state(PromoRotationState.waiting_edit_title)
+    await state.update_data(promo_edit_id=msg_id)
+    await callback.message.answer(
+        f"✏️ <b>Редактирование названия рассылки №{msg_id}</b>\n\n"
+        f"Отправь новое название (например, <code>Отзыв</code>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_promo_rot")
+        ]]),
+    )
+    await callback.answer()
+
+
+@router.message(PromoRotationState.waiting_edit_title)
+async def promo_rot_edit_title_process(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    title_val = (message.text or "").strip()
+    if not title_val:
+        await message.answer("❌ Название не может быть пустым.")
+        return
+    if len(title_val) > 100:
+        await message.answer("❌ Слишком длинное название (макс. 100 символов).")
+        return
+    data = await state.get_data()
+    msg_id = int(data.get("promo_edit_id") or 0)
+    from app.services import update_promo_message
+    async with async_session() as session:
+        ok = await update_promo_message(session, msg_id, title=title_val)
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Название рассылки №{msg_id} изменено на «{escape(title_val)}».</b>" if ok
+        else "⚠️ Сообщение не найдено — возможно, его уже удалили.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📋 К списку ротации", callback_data="admin_promo_rot")
+        ]]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_promo_rot_edittext:"))
+async def admin_promo_rot_edit_text_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    msg_id = int(callback.data.split(":", 1)[1])
+    from app.services import get_promo_message
+    async with async_session() as session:
+        msg = await get_promo_message(session, msg_id)
         text_val = msg.text if msg else None
     if text_val is None:
         await callback.answer("Сообщение не найдено (уже удалено?)", show_alert=True)
@@ -969,8 +1103,8 @@ async def admin_promo_rot_edit(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PromoRotationState.waiting_edit_text)
     await state.update_data(promo_edit_id=msg_id)
     await callback.message.answer(
-        f"✏️ <b>Редактирование сообщения №{msg_id}</b>\n\n"
-        f"Текущий текст:\n<pre>{escape(text_val)}</pre>\n"
+        f"📝 <b>Редактирование текста рассылки №{msg_id}</b>\n\n"
+        f"Текущий текст:\n<pre>{escape(text_val)}</pre>\n\n"
         f"Отправь новый текст (HTML-разметка поддерживается):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -995,10 +1129,10 @@ async def promo_rot_edit_process(message: Message, state: FSMContext):
     msg_id = int(data.get("promo_edit_id") or 0)
     from app.services import update_promo_message
     async with async_session() as session:
-        ok = await update_promo_message(session, msg_id, text_val)
+        ok = await update_promo_message(session, msg_id, text=text_val)
     await state.clear()
     await message.answer(
-        ("✅ <b>Сообщение обновлено.</b>\n\n----------------------------------\n" + text_val) if ok
+        ("✅ <b>Текст рассылки обновлён.</b>\n\n----------------------------------\n" + text_val) if ok
         else "⚠️ Сообщение не найдено — возможно, его уже удалили.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -1016,21 +1150,21 @@ async def admin_promo_rot_delete_ask(callback: CallbackQuery):
     from app.services import get_promo_message
     async with async_session() as session:
         msg = await get_promo_message(session, msg_id)
-        text_val = msg.text if msg else None
-    if text_val is None:
+    if not msg:
         await callback.answer("Сообщение не найдено (уже удалено?)", show_alert=True)
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"admin_promo_rot_delok:{msg_id}")],
         [InlineKeyboardButton(text="◀️ Назад к списку", callback_data="admin_promo_rot")],
     ])
+    title_disp = f"«{escape(msg.title)}» " if msg.title else ""
     await _safe_edit(
         callback,
-        f"🗑 <b>Удалить сообщение №{msg_id} из ротации?</b>\n\n"
+        f"🗑 <b>Удалить рассылку {title_disp}(№{msg_id}) из ротации?</b>\n\n"
         f"----------------------------------\n"
-        f"<code>{escape(_promo_preview(text_val, 300))}</code>\n"
+        f"<code>{escape(_promo_preview(msg.text, 300))}</code>\n"
         f"----------------------------------\n\n"
-        f"Оно больше не будет приходить пользователям автоматически.",
+        f"Она больше не будет приходить пользователям автоматически.",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -3703,7 +3837,22 @@ async def report_dismiss(callback: CallbackQuery):
     report_id = int(callback.data.split(":")[1])
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
+        rep = (await session.execute(
+            select(VideoReport).where(VideoReport.id == report_id)
+        )).scalar_one_or_none()
+        
         ok = await dismiss_report(session, report_id, admin.id if admin else 0)
+        
+        if ok and rep:
+            reporter = await get_user_by_id(session, rep.reporter_user_id)
+            if reporter:
+                try:
+                    await callback.bot.send_message(
+                        reporter.telegram_id,
+                        f"📢 Админ рассмотрел вашу жалобу на видео #{rep.video_id} и принятое решение: Оставить видео",
+                    )
+                except Exception:
+                    pass
     if ok:
         await callback.answer("Жалоба отклонена ✅")
     else:
@@ -3738,10 +3887,26 @@ async def report_remove_video(callback: CallbackQuery):
                 VideoReport.status == "pending",
             )
         )).scalars().all()
+        
+        reporter_ids = set()
         for r in pending_reports:
             r.status = "reviewed"
             r.reviewed_by = admin.id if admin else 0
+            reporter_ids.add(r.reporter_user_id)
+            
         await session.commit()
+        
+        for r_user_id in reporter_ids:
+            reporter = await get_user_by_id(session, r_user_id)
+            if reporter:
+                try:
+                    await callback.bot.send_message(
+                        reporter.telegram_id,
+                        f"📢 Админ рассмотрел вашу жалобу на видео #{video_id} и принятое решение: Удалить видео",
+                    )
+                except Exception:
+                    pass
+
     await callback.answer(f"Видео #{video_id} удалено, жалобы закрыты 🗑", show_alert=True)
 
 
