@@ -108,7 +108,7 @@ def repair_bonus_spam_step() -> None:
 
     async def _run() -> int:
         from decimal import Decimal
-        from app.db import async_session
+        from app.db import async_session, engine
         from app.models import BalanceLog, BotSetting, User
         from sqlalchemy import select
 
