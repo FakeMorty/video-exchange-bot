@@ -54,7 +54,8 @@ router = Router()
 async def cmd_cancel_admin(message: Message, state: FSMContext):
     await state.clear()
     from app.keyboards import main_menu
-    from app.services import get_user, is_any_admin
+    from app.services import get_user
+    from app.user_handlers import is_any_admin
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         admin_flag = is_any_admin(message.from_user.id, user)

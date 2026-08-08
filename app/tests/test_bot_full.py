@@ -3528,3 +3528,36 @@ async def test_donationalerts_integration():
         assert await has_active_perk(session, u1.id, "vip") is True
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_schedule_mod_notification_multiple_rows_and_cancel_admin():
+    from app.services import schedule_mod_notification
+    from app.models import ModNotification, Base
+    from app.admin_handlers import cmd_cancel_admin
+    from unittest.mock import AsyncMock
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # Create multiple unsent ModNotification rows to test scalar_one fix
+        n1 = ModNotification(kind="video", count=1, is_sent=False)
+        n2 = ModNotification(kind="video", count=2, is_sent=False)
+        session.add_all([n1, n2])
+        await session.commit()
+
+        # Call schedule_mod_notification — should NOT raise MultipleResultsFound
+        await schedule_mod_notification(session, "video")
+
+    # Test cmd_cancel_admin import and execution
+    msg = AsyncMock()
+    msg.from_user.id = 999999
+    state = AsyncMock()
+    await cmd_cancel_admin(msg, state)
+    state.clear.assert_called_once()
+
+    await engine.dispose()

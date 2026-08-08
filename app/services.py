@@ -3317,11 +3317,13 @@ async def schedule_mod_notification(session: AsyncSession, kind: str) -> None:
     """
     from app.models import ModNotification
     existing = (await session.execute(
-        select(ModNotification).where(
+        select(ModNotification)
+        .where(
             ModNotification.kind == kind,
             ModNotification.is_sent == False,
         )
-    )).scalar_one_or_none()
+        .order_by(ModNotification.id.desc())
+    )).scalars().first()
     if existing:
         existing.count += 1
         await session.commit()
