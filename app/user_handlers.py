@@ -906,7 +906,7 @@ async def show_vip(message: Message, state: FSMContext):
                     f"📌 <b>ИНСТРУКЦИЯ ПО ОПЛАТЕ:</b>\n"
                     f"1️⃣ Нажмите кнопку <b>«💳 Купить VIP (DonationAlerts)»</b> ниже.\n"
                     f"2️⃣ Введите сумму <b>{int(VIP_PRICE_RUB)}</b> руб.\n"
-                    f"3️⃣ В поле <b>«Ваше сообщение»</b> напишите:\n"
+                    f"3️⃣ В поле <b>«Имя»</b> (или «Сообщение») напишите:\n"
                     f"<code>{user.telegram_id} vip</code> <i>(нажмите, чтобы скопировать)</i>",
                     parse_mode="HTML",
                     reply_markup=vip_buy_keyboard(price=vip_price, user_id=user.telegram_id)
@@ -1771,7 +1771,7 @@ async def btn_buy(message: Message, state: FSMContext):
             f"📌 <b>ИНСТРУКЦИЯ ПО ОПЛАТЕ:</b>\n"
             f"1️⃣ Нажмите кнопку <b>«💳 Перейти к оплате (DonationAlerts)»</b> ниже.\n"
             f"2️⃣ Укажите нужную сумму.\n"
-            f"3️⃣ В поле <b>«Ваше сообщение»</b> ОБЯЗАТЕЛЬНО скопируйте свой Telegram ID:\n"
+            f"3️⃣ В поле <b>«Имя»</b> (или «Сообщение») на странице вставьте ваш Telegram ID:\n"
             f"<code>{user.telegram_id}</code> <i>(нажмите на ID, чтобы скопировать)</i>\n\n"
             f"После оплаты система моментально зачислит монеты/VIP на ваш аккаунт!"
         )

@@ -1872,11 +1872,13 @@ async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
                             da_id = item.get("id")
                             amount = item.get("amount") or item.get("amount_main") or 0
                             message = item.get("message") or item.get("comment") or ""
+                            username = item.get("username") or item.get("name") or ""
                             
                             if not da_id or not amount:
                                 continue
 
-                            matches = re.findall(r"\b(\d{6,12})\b", str(message))
+                            full_text = f"{message} {username}".strip()
+                            matches = re.findall(r"\b(\d{6,12})\b", full_text)
                             if not matches:
                                 continue
                             target_user_id = int(matches[0])
@@ -1887,7 +1889,7 @@ async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
                                     donation_id=str(da_id),
                                     amount_rub=amount,
                                     telegram_user_id=target_user_id,
-                                    comment=str(message),
+                                    comment=full_text,
                                     bot=bot,
                                 )
                     elif resp.status in (401, 403):
@@ -3621,6 +3623,7 @@ async def donationalerts_webhook_handler(request: web.Request) -> web.Response:
             data.get("sum") or data.get("amount_formatted")
         )
         message = data.get("message") or data.get("comment") or data.get("message_text") or ""
+        username = data.get("username") or data.get("name") or data.get("user") or ""
 
         if not donation_id or amount is None:
             return web.json_response({"ok": False, "error": "missing_required_fields"}, status=400)
@@ -3632,15 +3635,16 @@ async def donationalerts_webhook_handler(request: web.Request) -> web.Response:
         else:
             amount_val = float(amount)
 
-        # Поиск Telegram ID в комментарии (6-12 цифр)
-        matches = re.findall(r"\b(\d{6,12})\b", str(message))
+        # Поиск Telegram ID в полях "Имя" или "Сообщение" (6-12 цифр)
+        full_text = f"{message} {username}".strip()
+        matches = re.findall(r"\b(\d{6,12})\b", full_text)
         target_user_id = None
         if matches:
             target_user_id = int(matches[0])
 
         if not target_user_id:
-            logger.warning(f"DonationAlerts webhook: donation #{donation_id} on {amount_val} RUB has no Telegram user ID in message '{message}'")
-            return web.json_response({"ok": True, "notice": "user_id_not_found_in_message"})
+            logger.warning(f"DonationAlerts webhook: donation #{donation_id} on {amount_val} RUB has no Telegram user ID in text '{full_text}'")
+            return web.json_response({"ok": True, "notice": "user_id_not_found_in_text"})
 
         bot = request.app.get("bot")
         from app.db import async_session
@@ -3652,7 +3656,7 @@ async def donationalerts_webhook_handler(request: web.Request) -> web.Response:
                 donation_id=str(donation_id),
                 amount_rub=amount_val,
                 telegram_user_id=target_user_id,
-                comment=str(message),
+                comment=full_text,
                 bot=bot,
             )
 
