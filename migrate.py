@@ -112,64 +112,60 @@ def repair_bonus_spam_step() -> None:
         from app.models import BalanceLog, BotSetting, User
         from sqlalchemy import select
 
-        repaired = 0
-        async with async_session() as session:
-            flag = (await session.execute(
-                select(BotSetting).where(BotSetting.key == "bonus_spam_repaired_v1")
-            )).scalar_one_or_none()
-            if flag:
-                return -1
+        try:
+            repaired = 0
+            async with async_session() as session:
+                flag = (await session.execute(
+                    select(BotSetting).where(BotSetting.key == "bonus_spam_repaired_v1")
+                )).scalar_one_or_none()
+                if flag:
+                    return -1
 
-            rows = (await session.execute(
-                select(BalanceLog)
-                .where(BalanceLog.source == "daily_return_bonus")
-                .order_by(BalanceLog.user_id, BalanceLog.created_at, BalanceLog.id)
-            )).scalars().all()
+                rows = (await session.execute(
+                    select(BalanceLog)
+                    .where(BalanceLog.source == "daily_return_bonus")
+                    .order_by(BalanceLog.user_id, BalanceLog.created_at, BalanceLog.id)
+                )).scalars().all()
 
-            seen_days: set = set()
-            spam_by_user: dict = {}
-            for r in rows:
-                day_key = (r.user_id, r.created_at.date() if r.created_at else None)
-                amount = r.amount or Decimal("0")
-                if day_key not in seen_days:
-                    seen_days.add(day_key)
-                    continue  # первое начисление за сутки — легитимное
-                spam_by_user[r.user_id] = spam_by_user.get(r.user_id, Decimal("0")) + amount
+                seen_days: set = set()
+                spam_by_user: dict = {}
+                for r in rows:
+                    day_key = (r.user_id, r.created_at.date() if r.created_at else None)
+                    amount = r.amount or Decimal("0")
+                    if day_key not in seen_days:
+                        seen_days.add(day_key)
+                        continue  # первое начисление за сутки — легитимное
+                    spam_by_user[r.user_id] = spam_by_user.get(r.user_id, Decimal("0")) + amount
 
-            for uid, spam_sum in spam_by_user.items():
-                if spam_sum <= 0:
-                    continue
-                user = await session.get(User, uid)
-                if not user:
-                    continue
-                current = user.balance or Decimal("0")
-                if current <= 0:
-                    continue
-                sub = min(spam_sum, current)
-                user.balance = current - sub
-                session.add(BalanceLog(
-                    user_id=uid,
-                    amount=-sub,
-                    balance_before=current,
-                    balance_after=current - sub,
-                    source="bonus_spam_repair",
-                    details=f"removed_spam={spam_sum}",
-                ))
-                repaired += 1
+                for uid, spam_sum in spam_by_user.items():
+                    if spam_sum <= 0:
+                        continue
+                    user = await session.get(User, uid)
+                    if not user:
+                        continue
+                    current = user.balance or Decimal("0")
+                    if current <= 0:
+                        continue
+                    sub = min(spam_sum, current)
+                    user.balance = current - sub
+                    session.add(BalanceLog(
+                        user_id=uid,
+                        amount=-sub,
+                        balance_before=current,
+                        balance_after=current - sub,
+                        source="bonus_spam_repair",
+                        details=f"removed_spam={spam_sum}",
+                    ))
+                    repaired += 1
 
-            session.add(BotSetting(key="bonus_spam_repaired_v1", value="1"))
-            await session.commit()
-        return repaired
+                session.add(BotSetting(key="bonus_spam_repaired_v1", value="1"))
+                await session.commit()
+            return repaired
+        finally:
+            await engine.dispose()
 
     try:
-        from app.db import engine
-        try:
-            n = asyncio.run(_run())
-        finally:
-            try:
-                asyncio.run(engine.dispose())
-            except Exception:
-                pass
+        n = asyncio.run(_run())
         if n > 0:
             print(f"==> Bonus spam repair: removed extra daily bonuses for {n} user(s).")
         elif n == 0:
