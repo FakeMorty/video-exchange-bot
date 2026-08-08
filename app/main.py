@@ -3758,6 +3758,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(PORT or 10000))
     await site.start()
+    print("==> HTTP server listening on port", int(PORT or 10000))
 
     stop_event = asyncio.Event()
     audit_task = None
@@ -3771,6 +3772,7 @@ async def main():
 
     try:
         log_info(logger, "Polling started")
+        print("==> Bot successfully started and LIVE! Listening for Telegram updates...")
 
         mod_notifications_task = asyncio.create_task(_mod_notification_loop(bot))
         auto_broadcast_task = asyncio.create_task(auto_broadcast_worker(bot))
