@@ -3728,6 +3728,8 @@ async def main():
     app['bot'] = bot
     app.on_startup.append(on_startup)
     app.router.add_get("/", handle_health_check)
+    app.router.add_get("/health", handle_health_check)
+    app.router.add_get("/healthz", handle_health_check)
     app.router.add_post("/donationalerts/webhook", donationalerts_webhook_handler)
     app.router.add_get("/donationalerts/webhook", donationalerts_webhook_handler)
     app.router.add_post("/api/da_webhook", donationalerts_webhook_handler)
