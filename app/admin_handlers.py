@@ -149,7 +149,9 @@ class PromoRotationState(StatesGroup):
 # ADMIN PANEL
 # =========================
 @router.message(Command("admin"))
-async def cmd_admin(message: Message):
+async def cmd_admin(message: Message, state: FSMContext | None = None):
+    if state:
+        await state.clear()
     if not await check_admin(message.from_user.id):
         return
     sa = is_super_admin(message.from_user.id)
@@ -161,7 +163,9 @@ async def cmd_admin(message: Message):
 
 
 @router.callback_query(F.data == "admin_center")
-async def admin_center(callback: CallbackQuery):
+async def admin_center(callback: CallbackQuery, state: FSMContext | None = None):
+    if state:
+        await state.clear()
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
@@ -437,7 +441,9 @@ async def admin_video_restore(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "admin_get_pending")
-async def admin_get_pending(callback: CallbackQuery):
+async def admin_get_pending(callback: CallbackQuery, state: FSMContext | None = None):
+    if state:
+        await state.clear()
     if not await check_admin(callback.from_user.id): return
     async with async_session() as session:
         video = await get_next_pending_video(session)
@@ -459,7 +465,9 @@ async def admin_get_pending(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("mod_approve:"))
-async def mod_approve(callback: CallbackQuery):
+async def mod_approve(callback: CallbackQuery, state: FSMContext | None = None):
+    if state:
+        await state.clear()
     if not await check_admin(callback.from_user.id): return
     video_id = int(callback.data.split(":")[1])
     async with async_session() as session:
@@ -474,7 +482,9 @@ async def mod_approve(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("mod_reject:"))
-async def mod_reject(callback: CallbackQuery):
+async def mod_reject(callback: CallbackQuery, state: FSMContext | None = None):
+    if state:
+        await state.clear()
     if not await check_admin(callback.from_user.id): return
     video_id = int(callback.data.split(":")[1])
     await _safe_edit(callback, f"Причина отклонения #{video_id}:", reply_markup=rejection_reason_keyboard(video_id))
@@ -537,6 +547,21 @@ async def reject_reason_comment(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id):
         return
     comment = (message.text or "").strip()
+
+    # Если пользователь нажал кнопку меню или команду вместо ввода комментария
+    NAV_BUTTONS = {
+        "🔧 Админка", "◀️ Админ-центр", "◀ Назад", "🎬 Смотреть", "👤 Профиль",
+        "📤 Загрузить", "👑 VIP", "📊 Уровень", "🏆 Топы", "💬 Поддержка",
+        "🎰 Секслото", "🎟 Промокоды", "🎁 Лутбоксы"
+    }
+    if comment.startswith("/") or comment in NAV_BUTTONS:
+        await state.clear()
+        if comment in ("🔧 Админка", "/admin"):
+            await cmd_admin(message, state)
+        else:
+            await message.answer("❌ Ввод комментария отменён.")
+        return
+
     if len(comment) < 3:
         await message.answer("❌ Комментарий слишком короткий. Напиши понятное объяснение для пользователя.")
         return
