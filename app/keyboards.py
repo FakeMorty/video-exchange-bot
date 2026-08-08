@@ -349,11 +349,11 @@ def buy_coins_keyboard(packs: dict = None, user_id: int | None = None) -> Inline
     if user_id:
         buttons.append([InlineKeyboardButton(text=f"📋 Скопировать мой ID: {user_id}", callback_data=f"copy_id:{user_id}")])
     buttons.append([InlineKeyboardButton(text="🔄 Проверить зачисление", callback_data="da_check_payment")])
-    buttons.append([InlineKeyboardButton(text="⭐ Заплатить через Stars (резерв)", callback_data="show_stars_menu")])
+    buttons.append([InlineKeyboardButton(text="🌐 Другие способы / Telegram Stars (дороже)", callback_data="show_stars_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def vip_buy_keyboard(price: int = 150, user_id: int | None = None) -> InlineKeyboardMarkup:
+def vip_buy_keyboard(price: int = 450, user_id: int | None = None) -> InlineKeyboardMarkup:
     from app.config import DONATION_ALERTS_URL
     buttons = [
         [InlineKeyboardButton(text="💳 Купить VIP за 150 руб. (DonationAlerts)", url=DONATION_ALERTS_URL)],
@@ -361,5 +361,5 @@ def vip_buy_keyboard(price: int = 150, user_id: int | None = None) -> InlineKeyb
     if user_id:
         buttons.append([InlineKeyboardButton(text=f"📋 Скопировать: {user_id} vip", callback_data=f"copy_id:{user_id}_vip")])
     buttons.append([InlineKeyboardButton(text="🔄 Проверить зачисление", callback_data="da_check_payment")])
-    buttons.append([InlineKeyboardButton(text=f"⭐ Купить за Stars (резерв: {price} Stars)", callback_data="buy_vip_stars")])
+    buttons.append([InlineKeyboardButton(text=f"🌐 Резерв: Оформить за {price} Stars", callback_data="buy_vip_stars")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

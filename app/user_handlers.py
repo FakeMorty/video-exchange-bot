@@ -1904,12 +1904,22 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         if not starter_eligible:
             packs = {k: v for k, v in packs.items() if k != "starterpack"}
             
-    buttons = []
+    buttons = [
+        [InlineKeyboardButton(text="🔥 Купить в 3 раза дешевле через DonationAlerts", callback_data="btn_buy_callback")]
+    ]
     for p_id, p_data in packs.items():
         buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
-    buttons.append([InlineKeyboardButton(text="◀️ Оплата через DonationAlerts", callback_data="btn_buy_callback")])
+    buttons.append([InlineKeyboardButton(text="👈 Назад к выгодной оплате", callback_data="btn_buy_callback")])
     
-    await _safe_edit(callback, "⭐️ <b>Пополнение через Telegram Stars (резервный способ):</b>\n\nВыбери пакет:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    text = (
+        "⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n"
+        "⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, "
+        "цена при оплате через Stars <b>в 3 раза выше</b>, чем через DonationAlerts.\n\n"
+        "💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 3 раза дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\n"
+        "Выберите пакет Stars:"
+    )
+    
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
 

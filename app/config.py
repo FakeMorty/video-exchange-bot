@@ -85,19 +85,16 @@ REFERRAL_MILESTONES = {
     10: {"type": "coins", "amount": 100.0, "desc": "100 монет"},
 }
 
-# Курс Stars → монеты
-STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 10.0)
+# Курс Stars → монеты (заградительный: 100 монет = 30 Stars)
+STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 30.0)
 
 # DonationAlerts настройки
 DONATION_ALERTS_URL = _get_str("DONATION_ALERTS_URL", "https://dalink.to/who5037")
 RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 10.0)  # 1 RUB = 10 монет
 VIP_PRICE_RUB = _get_float("VIP_PRICE_RUB", 150.0)        # 150 RUB = 30 дней VIP
 
-# Viewer-friendly пакеты Stars
-# ── Воронка оплаты: старт-пак первого платежа (низкий порог входа) ──
-# Показывается только тем, у кого ещё не было оплаченных платежей.
-# Цена фиксированная, скидки событий/перков на него НЕ действуют.
-STARTER_PACK_STARS = _get_int("STARTER_PACK_STARS", 9)
+# Viewer-friendly пакеты Stars (заградительные цены ~в 3 раза дороже)
+STARTER_PACK_STARS = _get_int("STARTER_PACK_STARS", 27)
 STARTER_PACK_COINS = _get_int("STARTER_PACK_COINS", 500)
 # Через сколько просмотров за день показать «залипшему» юзеру оффер первого платежа
 UPSELL_AFTER_VIEWS = _get_int("UPSELL_AFTER_VIEWS", 8)
@@ -112,9 +109,9 @@ DAILY_VIDEO_UPLOAD_LIMIT = _get_int("DAILY_VIDEO_UPLOAD_LIMIT", 100)
 
 STARS_PACKAGES = {
     "starterpack": {"stars": STARTER_PACK_STARS, "coins": STARTER_PACK_COINS, "title": f"Старт-пак: {STARTER_PACK_COINS} монет"},
-    "pack_50":  {"stars": 50,  "coins": 500,  "title": "500 монет"},
-    "pack_100": {"stars": 100, "coins": 1000, "title": "1 000 монет"},
-    "pack_200": {"stars": 200, "coins": 2200, "title": "2 200 монет"},
+    "pack_50":  {"stars": 150, "coins": 500,  "title": "500 монет"},
+    "pack_100": {"stars": 300, "coins": 1000, "title": "1 000 монет"},
+    "pack_200": {"stars": 600, "coins": 2200, "title": "2 200 монет"},
 }
 
 # Пакеты за реальные деньги (Примерно 1 Star = 2 RUB)
@@ -158,7 +155,7 @@ XP_PER_GAME = _get_int("XP_PER_GAME", 3)
 # ============================
 # VIP
 # ============================
-VIP_PRICE_STARS = _get_int("VIP_PRICE_STARS", 100)
+VIP_PRICE_STARS = _get_int("VIP_PRICE_STARS", 450)
 VIP_DURATION_DAYS = _get_int("VIP_DURATION_DAYS", 30)
 VIP_BONUS_MULTIPLIER = _get_float("VIP_BONUS_MULTIPLIER", 2.0) # Снижено с 3.0 для баланса
 VIP_FREE_PHOTOS = True
@@ -313,7 +310,7 @@ ARCADE_RUN_TTL_MINUTES = _get_int("ARCADE_RUN_TTL_MINUTES", 30)
 # ============================
 ENABLE_LOOTBOXES = _get_bool("ENABLE_LOOTBOXES", True)
 LOOTBOX_COIN_PRICE = _get_float("LOOTBOX_COIN_PRICE", 100.0)
-LOOTBOX_STAR_PRICE = _get_int("LOOTBOX_STAR_PRICE", 15) # Снижено с 30 для привлекательности
+LOOTBOX_STAR_PRICE = _get_int("LOOTBOX_STAR_PRICE", 45)
 
 # ============================
 # АВТО-МОДЕРАЦИЯ

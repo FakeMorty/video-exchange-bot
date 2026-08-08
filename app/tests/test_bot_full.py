@@ -2367,9 +2367,9 @@ async def test_stars_discount_affects_displayed_vip_and_pack_prices():
         vip_price, packs, _ = await get_current_prices(session, user.id)
 
         assert discount == 0.25
-        assert vip_price == 75
-        assert packs["pack_50"]["stars"] == 38
-        assert packs["pack_100"]["stars"] == 75
+        assert vip_price == 338
+        assert packs["pack_50"]["stars"] == 113
+        assert packs["pack_100"]["stars"] == 225
 
     await engine.dispose()
 
@@ -2483,14 +2483,14 @@ async def test_referred_user_gets_bonus_and_inviter_counter_increments():
 # ══════════════════════════════════════════════════════════════
 
 def test_offer_stars_price_rounds_up_instead_of_undercharging():
-    assert _calc_offer_stars_price(Decimal("50")) == 5
-    assert _calc_offer_stars_price(Decimal("55")) == 6
-    assert _calc_offer_stars_price(Decimal("101")) == 11
+    assert _calc_offer_stars_price(Decimal("50")) == 2
+    assert _calc_offer_stars_price(Decimal("55")) == 2
+    assert _calc_offer_stars_price(Decimal("101")) == 4
 
 
 def test_offer_stars_price_applies_user_discount_after_round_up():
-    assert _calc_offer_stars_price(Decimal("55"), 0.25) == 5
-    assert _calc_offer_stars_price(Decimal("101"), 0.25) == 9
+    assert _calc_offer_stars_price(Decimal("55"), 0.25) == 2
+    assert _calc_offer_stars_price(Decimal("101"), 0.25) == 3
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2943,7 +2943,7 @@ async def test_suite_growth_pack():
         assert await is_starter_pack_eligible(s, u), "starter: not eligible fresh"
         _, packs, _ = await get_current_prices(s, uid2)
         sp = packs.get("starterpack")
-        assert sp and sp["stars"] == 9 and sp["coins"] == 500, f"starter price: {sp}"
+        assert sp and sp["stars"] == 27 and sp["coins"] == 500, f"starter price: {sp}"
         pay = await create_payment(s, uid2, "starterpack")
         paym, credited = await apply_successful_payment(s, pay.payload)
         assert paym and float(credited) >= 500, f"starter apply: {credited}"
