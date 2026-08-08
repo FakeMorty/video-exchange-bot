@@ -1835,6 +1835,69 @@ async def auto_broadcast_worker(bot):
             await asyncio.sleep(60)
 
 
+async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
+    """Фоновый воркер автоматической синхронизации донатов DonationAlerts через API.
+
+    Работает параллельно с Webhook: запрашивает новые донаты каждые 20 секунд.
+    Идемпотентен по payload = donationalerts_{donation_id} — двойное начисление невозможно.
+    """
+    import asyncio
+    import aiohttp
+    import re
+    from app.config import DONATION_ALERTS_CLIENT_SECRET
+    from app.db import async_session
+    from app.services import process_donationalerts_donation
+
+    token = (DONATION_ALERTS_CLIENT_SECRET or "").strip()
+    if not token:
+        logger.info("DonationAlerts polling worker: DONATION_ALERTS_CLIENT_SECRET не задан.")
+        return
+
+    logger.info("DonationAlerts polling worker запущен (авто-проверка каждые 20с).")
+    url = "https://www.donationalerts.com/api/v1/alerts/donations"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.sleep(20)
+            if stop_event.is_set():
+                break
+
+            async with aiohttp.ClientSession() as http_session:
+                async with http_session.get(url, headers=headers, timeout=10) as resp:
+                    if resp.status == 200:
+                        json_data = await resp.json()
+                        donations = json_data.get("data", [])
+                        for item in donations:
+                            da_id = item.get("id")
+                            amount = item.get("amount") or item.get("amount_main") or 0
+                            message = item.get("message") or item.get("comment") or ""
+                            
+                            if not da_id or not amount:
+                                continue
+
+                            matches = re.findall(r"\b(\d{6,12})\b", str(message))
+                            if not matches:
+                                continue
+                            target_user_id = int(matches[0])
+
+                            async with async_session() as session:
+                                await process_donationalerts_donation(
+                                    session=session,
+                                    donation_id=str(da_id),
+                                    amount_rub=amount,
+                                    telegram_user_id=target_user_id,
+                                    comment=str(message),
+                                    bot=bot,
+                                )
+                    elif resp.status in (401, 403):
+                        logger.warning("DonationAlerts polling worker: Токен требует обновления.")
+                        await asyncio.sleep(300)
+        except Exception as e:
+            logger.warning(f"DonationAlerts polling worker error: {e}")
+            await asyncio.sleep(30)
+
+
 # =========================
 # WEB APP API HANDLERS
 # =========================
@@ -3700,12 +3763,14 @@ async def main():
     cache_task = None
     mod_notifications_task = None
     auto_broadcast_task = None
+    da_polling_task = None
 
     try:
         log_info(logger, "Polling started")
 
         mod_notifications_task = asyncio.create_task(_mod_notification_loop(bot))
         auto_broadcast_task = asyncio.create_task(auto_broadcast_worker(bot))
+        da_polling_task = asyncio.create_task(donationalerts_polling_worker(bot, stop_event))
 
         if ENABLE_SUBSCRIPTION_AUDIT:
             audit_task = asyncio.create_task(subscription_audit_worker(bot, stop_event))
@@ -3732,6 +3797,7 @@ async def main():
         await _cancel_task(promo_task)
         await _cancel_task(mod_notifications_task)
         await _cancel_task(auto_broadcast_task)
+        await _cancel_task(da_polling_task)
         await runner.cleanup()
         await bot.session.close()
         await engine.dispose()

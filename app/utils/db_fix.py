@@ -274,4 +274,14 @@ async def fix_database():
         except Exception:
             await conn.rollback()
 
+        # Database Performance Index Optimization
+        try:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_payments_payload ON payments (payload)"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_video_reports_video_id ON video_reports (video_id)"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_promo_messages_is_active ON promo_messages (is_active)"))
+            await conn.commit()
+            log_info(logger, "Ensured DB performance indexes exist")
+        except Exception:
+            await conn.rollback()
+
     log_info(logger, "DB fix complete!")
