@@ -3463,3 +3463,68 @@ async def test_promo_otzyv_seed_and_title_management():
         assert deleted is True
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_donationalerts_integration():
+    from app.services import process_donationalerts_donation, has_active_perk
+    from app.models import User, Payment, Base
+    from unittest.mock import AsyncMock
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        u1 = User(telegram_id=888001, balance=Decimal("100.00"), nickname_set=True, display_name="Donor1")
+        session.add(u1)
+        await session.commit()
+
+        # 1. Process donation for coins (100 RUB = 1000 coins)
+        mock_bot = AsyncMock()
+        ok, msg = await process_donationalerts_donation(
+            session=session,
+            donation_id="da_test_100",
+            amount_rub=100,
+            telegram_user_id=888001,
+            comment="12345 888001 привет!",
+            bot=mock_bot
+        )
+        assert ok is True
+        assert "+1 000 монет" in msg
+
+        # Check balance increased to 1100
+        refreshed_u1 = (await session.execute(select(User).where(User.telegram_id == 888001))).scalar_one()
+        assert refreshed_u1.balance == Decimal("1100.00")
+
+        # Check notification sent to user
+        mock_bot.send_message.assert_called()
+
+        # 2. Idempotency test (same donation_id)
+        ok2, msg2 = await process_donationalerts_donation(
+            session=session,
+            donation_id="da_test_100",
+            amount_rub=100,
+            telegram_user_id=888001,
+            comment="888001",
+            bot=mock_bot
+        )
+        assert ok2 is False
+        assert "уже был обработан" in msg2
+
+        # 3. Process VIP donation (150 RUB or comment containing "vip")
+        ok3, msg3 = await process_donationalerts_donation(
+            session=session,
+            donation_id="da_test_vip",
+            amount_rub=150,
+            telegram_user_id=888001,
+            comment="888001 vip",
+            bot=mock_bot
+        )
+        assert ok3 is True
+        assert "VIP" in msg3
+        assert await has_active_perk(session, u1.id, "vip") is True
+
+    await engine.dispose()

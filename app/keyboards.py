@@ -55,6 +55,7 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Очередь модерации", callback_data="admin_queue_info")],
         [InlineKeyboardButton(text="✅ Одобрить всё", callback_data="admin_approve_all")],
         [InlineKeyboardButton(text="📈 Статистика бота", callback_data="admin_extended_stats")],
+        [InlineKeyboardButton(text="💳 Управление DonationAlerts", callback_data="admin_da_menu")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_manage_users")],
         [InlineKeyboardButton(text="⚡ Авто-модерация (доверенные)", callback_data="admin_auto_moderation")],
         [InlineKeyboardButton(text="🤝 Доверенные авторы", callback_data="admin_trusted_uploaders")],
@@ -340,38 +341,25 @@ def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[buttons[:3], buttons[3:]])
 
 
-def buy_coins_keyboard(packs: dict) -> InlineKeyboardMarkup:
-    buttons = []
-    seen = set()
-    sp = packs.get("starterpack")
-    if sp:
-        buttons.append([InlineKeyboardButton(
-            text=f"🎁 Старт-пак: {sp['coins']} монет за {sp['stars']} Stars (только 1 раз)",
-            callback_data="buy:starterpack",
-        )])
-        seen.add("starterpack")
-    priority = ["pack_50", "pack_100", "pack_200"]
-    for p_id in priority:
-        if p_id in packs:
-            p_data = packs[p_id]
-            badge = ""
-            if p_id == "pack_50":
-                badge = "⚡ Быстрый старт — "
-            elif p_id == "pack_100":
-                badge = "🔥 Популярный — "
-            elif p_id == "pack_200":
-                badge = "💎 Выгодно — "
-            buttons.append([InlineKeyboardButton(text=f"{badge}{p_data['coins']} монет / {p_data['stars']} Stars", callback_data=f"buy:{p_id}")])
-            seen.add(p_id)
-    for p_id, p_data in packs.items():
-        if p_id in seen:
-            continue
-        buttons.append([InlineKeyboardButton(text=f"💎 {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
-    buttons.append([InlineKeyboardButton(text="⚡ Своя сумма Stars", callback_data="buy_custom")])
+def buy_coins_keyboard(packs: dict = None, user_id: int | None = None) -> InlineKeyboardMarkup:
+    from app.config import DONATION_ALERTS_URL
+    buttons = [
+        [InlineKeyboardButton(text="💳 Перейти к оплате (DonationAlerts)", url=DONATION_ALERTS_URL)],
+    ]
+    if user_id:
+        buttons.append([InlineKeyboardButton(text=f"📋 Скопировать мой ID: {user_id}", callback_data=f"copy_id:{user_id}")])
+    buttons.append([InlineKeyboardButton(text="🔄 Проверить зачисление", callback_data="da_check_payment")])
+    buttons.append([InlineKeyboardButton(text="⭐ Заплатить через Stars (резерв)", callback_data="show_stars_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def vip_buy_keyboard(price: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"⭐️ Купить за {price} Stars", callback_data="buy_vip")]
-    ])
+def vip_buy_keyboard(price: int = 150, user_id: int | None = None) -> InlineKeyboardMarkup:
+    from app.config import DONATION_ALERTS_URL
+    buttons = [
+        [InlineKeyboardButton(text="💳 Купить VIP за 150 руб. (DonationAlerts)", url=DONATION_ALERTS_URL)],
+    ]
+    if user_id:
+        buttons.append([InlineKeyboardButton(text=f"📋 Скопировать: {user_id} vip", callback_data=f"copy_id:{user_id}_vip")])
+    buttons.append([InlineKeyboardButton(text="🔄 Проверить зачисление", callback_data="da_check_payment")])
+    buttons.append([InlineKeyboardButton(text=f"⭐ Купить за Stars (резерв: {price} Stars)", callback_data="buy_vip_stars")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)

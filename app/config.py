@@ -88,6 +88,11 @@ REFERRAL_MILESTONES = {
 # Курс Stars → монеты
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 10.0)
 
+# DonationAlerts настройки
+DONATION_ALERTS_URL = _get_str("DONATION_ALERTS_URL", "https://dalink.to/who5037")
+RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 10.0)  # 1 RUB = 10 монет
+VIP_PRICE_RUB = _get_float("VIP_PRICE_RUB", 150.0)        # 150 RUB = 30 дней VIP
+
 # Viewer-friendly пакеты Stars
 # ── Воронка оплаты: старт-пак первого платежа (низкий порог входа) ──
 # Показывается только тем, у кого ещё не было оплаченных платежей.

@@ -3533,6 +3533,72 @@ async def api_arcade_top(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+async def donationalerts_webhook_handler(request: web.Request) -> web.Response:
+    """Webhook для приема уведомлений о донатах от DonationAlerts."""
+    try:
+        data = None
+        if request.can_read_body:
+            try:
+                data = await request.json()
+            except Exception:
+                try:
+                    data = dict(await request.post())
+                except Exception:
+                    pass
+        if not data:
+            return web.json_response({"ok": False, "error": "empty_payload"}, status=400)
+
+        donation_id = (
+            data.get("id") or data.get("donation_id") or
+            data.get("id_donation") or data.get("alert_id") or
+            data.get("id_alert")
+        )
+        amount = (
+            data.get("amount") or data.get("amount_main") or
+            data.get("sum") or data.get("amount_formatted")
+        )
+        message = data.get("message") or data.get("comment") or data.get("message_text") or ""
+
+        if not donation_id or amount is None:
+            return web.json_response({"ok": False, "error": "missing_required_fields"}, status=400)
+
+        import re
+        if isinstance(amount, str):
+            match_num = re.search(r"(\d+(?:\.\d+)?)", amount)
+            amount_val = float(match_num.group(1)) if match_num else 0.0
+        else:
+            amount_val = float(amount)
+
+        # Поиск Telegram ID в комментарии (6-12 цифр)
+        matches = re.findall(r"\b(\d{6,12})\b", str(message))
+        target_user_id = None
+        if matches:
+            target_user_id = int(matches[0])
+
+        if not target_user_id:
+            logger.warning(f"DonationAlerts webhook: donation #{donation_id} on {amount_val} RUB has no Telegram user ID in message '{message}'")
+            return web.json_response({"ok": True, "notice": "user_id_not_found_in_message"})
+
+        bot = request.app.get("bot")
+        from app.db import async_session
+        from app.services import process_donationalerts_donation
+
+        async with async_session() as session:
+            ok, res_msg = await process_donationalerts_donation(
+                session=session,
+                donation_id=str(donation_id),
+                amount_rub=amount_val,
+                telegram_user_id=target_user_id,
+                comment=str(message),
+                bot=bot,
+            )
+
+        return web.json_response({"ok": ok, "result": res_msg})
+    except Exception as e:
+        logger.exception("Error processing DonationAlerts webhook")
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is empty")
@@ -3591,6 +3657,9 @@ async def main():
     app['bot'] = bot
     app.on_startup.append(on_startup)
     app.router.add_get("/", handle_health_check)
+    app.router.add_post("/donationalerts/webhook", donationalerts_webhook_handler)
+    app.router.add_get("/donationalerts/webhook", donationalerts_webhook_handler)
+    app.router.add_post("/api/da_webhook", donationalerts_webhook_handler)
     app.router.add_get("/videofeed", videofeed_page_handler)
     app.router.add_get("/api/videofeed/feed", api_videofeed_feed)
     app.router.add_get("/api/video/{id}", api_video_stream)

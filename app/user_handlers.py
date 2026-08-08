@@ -893,16 +893,23 @@ async def show_vip(message: Message, state: FSMContext):
                 if not sale_badge and sale and sale.applies_to in ("all", "vip"):
                     sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
                 
+                from app.config import DONATION_ALERTS_URL, VIP_PRICE_RUB
                 await message.answer(
-                    f"👑 <b>VIP статус</b>\n\n"
-                    f"Стоимость: <b>{vip_price} Stars</b> (обычная: {VIP_PRICE_STARS}){sale_badge}{admin_free_badge}\n"
-                    f"Длительность: {VIP_DURATION_DAYS} дней\n\n"
+                    f"👑 <b>VIP статус (DonationAlerts)</b>\n\n"
+                    f"💰 Стоимость на 30 дней: <b>{int(VIP_PRICE_RUB)} руб.</b>{sale_badge}{admin_free_badge}\n\n"
                     f"Привилегии:\n"
-                    f"• Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
-                    f"• Скидка {vip_discount_percent}% на просмотр\n"
-                    f"• Приоритет и бонусы в экономике",
+                    f"• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
+                    f"• 🎬 Просмотр фото без дневного лимита\n"
+                    f"• ⭐️ Скидка {vip_discount_percent}% на просмотр\n"
+                    f"• 👑 Эксклюзивная плашка VIP в профиле\n\n"
+                    f"----------------------------------\n"
+                    f"📌 <b>ИНСТРУКЦИЯ ПО ОПЛАТЕ:</b>\n"
+                    f"1️⃣ Нажмите кнопку <b>«💳 Купить VIP (DonationAlerts)»</b> ниже.\n"
+                    f"2️⃣ Введите сумму <b>{int(VIP_PRICE_RUB)}</b> руб.\n"
+                    f"3️⃣ В поле <b>«Ваше сообщение»</b> напишите:\n"
+                    f"<code>{user.telegram_id} vip</code> <i>(нажмите, чтобы скопировать)</i>",
                     parse_mode="HTML",
-                    reply_markup=vip_buy_keyboard(vip_price)
+                    reply_markup=vip_buy_keyboard(price=vip_price, user_id=user.telegram_id)
                 )
     except Exception as e:
         import traceback
@@ -1749,56 +1756,30 @@ async def btn_buy(message: Message, state: FSMContext):
             if not await require_nickname(message, user):
                 return
 
-            vip_price, packs, sale = await get_current_prices(session, user.id)
-            events = await get_active_events(session)
+        from app.config import DONATION_ALERTS_URL, RUB_TO_COINS_RATE, VIP_PRICE_RUB
 
-            # Старт-пак первого платежа показываем только тем, кто ещё не платил
-            starter_eligible = await is_starter_pack_eligible(session, user)
-            if not starter_eligible:
-                packs = {k: v for k, v in packs.items() if k != "starterpack"}
-
-            # Admin free badge
-            admin_free_badge = ""
-            if await is_admin_free_eligible(session, message.from_user.id, user):
-                admin_free_badge = "\n🆓 <b>ADMIN FREE — всё бесплатно!</b>"
-
-        # Бейдж активной акции только для покупок монет
-        sale_badge = _best_event_badge(events, "coins") if events else ""
-        if not sale_badge and sale and sale.applies_to in ("all", "coins"):
-            sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
-
-        # Динамический курс
-        bonus_text = ""
-        if DYNAMIC_STAR_DISCOUNT_ENABLED:
-            try:
-                start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
-                now_h = utc_now().hour
-                if start_h <= now_h < end_h:
-                    bonus_text = f"\n🔥 <b>Сейчас действует бонус +{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}% монет!</b>"
-                else:
-                    bonus_text = f"\n💡 Часы бонуса: {start_h}:00–{end_h}:00 UTC (+{int((DYNAMIC_STAR_DISCOUNT_MULTIPLIER - 1) * 100)}%)"
-            except Exception:
-                pass
-        bonus_text += f"\n🎁 Первая покупка дня: +{FIRST_PURCHASE_DAILY_BONUS} монет бонусом."
-
-        starter_line = ""
-        if "starterpack" in packs:
-            sp = packs["starterpack"]
-            starter_line = (
-                f"🎁 <b>Старт-пак для первого платежа: {sp['coins']} монет всего за {sp['stars']} Stars!</b>\n"
-                f"<i>Доступен один раз — потом исчезнет из списка.</i>\n\n"
-            )
+        text = (
+            f"💳 <b>Пополнение баланса и услуг (DonationAlerts)</b>\n\n"
+            f"Оплата принимается моментально с банковских карт, СБП и кошельков через DonationAlerts!\n\n"
+            f"💰 <b>Тарифы и бонусы (1 руб = {int(RUB_TO_COINS_RATE)} монет):</b>\n"
+            f"• <b>10 руб.</b> ➔ <b>100 монет</b> 🪙\n"
+            f"• <b>50 руб.</b> ➔ <b>500 монет</b> 🪙 *(Старт-пак)*\n"
+            f"• <b>100 руб.</b> ➔ <b>1 000 монет</b> 🪙\n"
+            f"• <b>150 руб.</b> ➔ <b>👑 VIP-подписка на 30 дней</b>\n"
+            f"• <b>500 руб.</b> ➔ <b>5 000 монет</b> 🪙\n\n"
+            f"----------------------------------\n"
+            f"📌 <b>ИНСТРУКЦИЯ ПО ОПЛАТЕ:</b>\n"
+            f"1️⃣ Нажмите кнопку <b>«💳 Перейти к оплате (DonationAlerts)»</b> ниже.\n"
+            f"2️⃣ Укажите нужную сумму.\n"
+            f"3️⃣ В поле <b>«Ваше сообщение»</b> ОБЯЗАТЕЛЬНО скопируйте свой Telegram ID:\n"
+            f"<code>{user.telegram_id}</code> <i>(нажмите на ID, чтобы скопировать)</i>\n\n"
+            f"После оплаты система моментально зачислит монеты/VIP на ваш аккаунт!"
+        )
 
         await message.answer(
-            f"💳 <b>Пополнение баланса</b>{sale_badge}{admin_free_badge}{bonus_text}\n\n"
-            f"{starter_line}"
-            f"Собрали 3 понятных пакета под тех, кто хочет быстро вернуться к просмотру:\n"
-            f"• <b>500 монет</b> — быстрый старт\n"
-            f"• <b>1 000 монет</b> — популярный пакет\n"
-            f"• <b>2 200 монет</b> — самый выгодный\n\n"
-            f"Выбери пакет:",
+            text,
             parse_mode="HTML",
-            reply_markup=buy_coins_keyboard(packs)
+            reply_markup=buy_coins_keyboard(user_id=user.telegram_id)
         )
     except Exception as e:
         import traceback
@@ -1876,11 +1857,70 @@ async def cb_buy_pack(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "buy_custom")
-async def cb_buy_custom(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(CustomBuyState.waiting_stars)
-    await callback.message.answer("💫 Введи количество Stars (мин. 1):")
+@router.callback_query(F.data.startswith("copy_id:"))
+async def cb_copy_id(callback: CallbackQuery):
+    val = callback.data.split(":", 1)[1]
+    await callback.message.answer(
+        f"📋 <b>Ваш код для поля «Ваше сообщение» в DonationAlerts:</b>\n\n<code>{val}</code>\n\n<i>Нажмите на текст выше, чтобы скопировать его в один клик!</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer("ID скопирован в сообщение!", show_alert=False)
+
+
+@router.callback_query(F.data == "da_check_payment")
+async def cb_da_check_payment(callback: CallbackQuery):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        
+        payments = (await session.execute(
+            select(Payment)
+            .where(Payment.user_id == user.id, Payment.payload.startswith("donationalerts_"))
+            .order_by(Payment.created_at.desc())
+            .limit(1)
+        )).scalars().all()
+        
+        if payments:
+            p = payments[0]
+            await callback.answer(f"✅ Последний платёж от {p.created_at.strftime('%d.%m %H:%M')} успешно зачислен!", show_alert=True)
+        else:
+            await callback.answer(
+                f"ℹ️ Платёж пока не поступил.\n\nУбедитесь, что при отправке доната на DonationAlerts вы указали ваш ID ({user.telegram_id}) в поле «Ваше сообщение»!",
+                show_alert=True
+            )
+
+
+@router.callback_query(F.data == "show_stars_menu")
+async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        vip_price, packs, sale = await get_current_prices(session, user.id)
+        starter_eligible = await is_starter_pack_eligible(session, user)
+        if not starter_eligible:
+            packs = {k: v for k, v in packs.items() if k != "starterpack"}
+            
+    buttons = []
+    for p_id, p_data in packs.items():
+        buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Оплата через DonationAlerts", callback_data="btn_buy_callback")])
+    
+    await _safe_edit(callback, "⭐️ <b>Пополнение через Telegram Stars (резервный способ):</b>\n\nВыбери пакет:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
+
+
+@router.callback_query(F.data == "btn_buy_callback")
+async def cb_btn_buy_callback(callback: CallbackQuery, state: FSMContext):
+    await btn_buy(callback.message, state)
+
+
+@router.callback_query(F.data == "buy_vip_stars")
+async def cb_buy_vip_stars(callback: CallbackQuery):
+    await buy_vip(callback)
 
 
 @router.message(CustomBuyState.waiting_stars)

@@ -145,6 +145,12 @@ class PromoRotationState(StatesGroup):
     waiting_edit_text = State()
 
 
+class DAManualState(StatesGroup):
+    """Ручное зачисление платежа DonationAlerts."""
+    waiting_user = State()
+    waiting_amount = State()
+
+
 # =========================
 # ADMIN PANEL
 # =========================
@@ -3094,6 +3100,135 @@ async def settings_admin_free(callback: CallbackQuery):
     ])
     await _safe_edit(callback, f"🆓 <b>ADMIN FREE</b>\n\n{status}", parse_mode="HTML", reply_markup=kb)
     await callback.answer()
+
+
+# ---------- DONATIONALERTS ----------
+@router.callback_query(F.data == "admin_da_menu")
+async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None):
+    if state:
+        await state.clear()
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    from app.config import DONATION_ALERTS_URL, RUB_TO_COINS_RATE, VIP_PRICE_RUB
+
+    text = (
+        f"💳 <b>Управление DonationAlerts</b>\n\n"
+        f"🔗 <b>Ссылка для донатов:</b> <code>{DONATION_ALERTS_URL}</code>\n\n"
+        f"🌐 <b>Webhook URL для DonationAlerts:</b>\n"
+        f"<code>https://<ваш-домен>/donationalerts/webhook</code>\n\n"
+        f"📊 <b>Текущие настройки:</b>\n"
+        f"• 1 RUB ➔ <b>{int(RUB_TO_COINS_RATE)} монет</b>\n"
+        f"• VIP-подписка ➔ <b>{int(VIP_PRICE_RUB)} RUB / 30 дней</b>\n\n"
+        f"Здесь вы можете вручную зачислить донат пользователю, если он забыл указать свой ID при оплате."
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Начислить донат вручную", callback_data="admin_da_manual_start")],
+        [InlineKeyboardButton(text="◀️ Назад в панель", callback_data="admin_center")],
+    ])
+
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_da_manual_start")
+async def admin_da_manual_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.set_state(DAManualState.waiting_user)
+    await callback.message.answer(
+        "💳 <b>Ручное зачисление платежа DonationAlerts</b>\n\n"
+        "<b>Шаг 1 из 2:</b> Введите Telegram ID пользователя (например, <code>123456789</code>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_da_menu")
+        ]])
+    )
+    await callback.answer()
+
+
+@router.message(DAManualState.waiting_user)
+async def admin_da_manual_user(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("❌ Telegram ID должен состоять только из цифр. Попробуйте еще раз:")
+        return
+
+    tid = int(raw)
+    async with async_session() as session:
+        user = await get_user(session, tid)
+        if not user:
+            await message.answer(f"❌ Пользователь с Telegram ID <code>{tid}</code> не найден в базе данных. Проверьте ID:")
+            return
+        disp_name = get_display_name(user)
+
+    await state.update_data(da_manual_user_id=tid)
+    await state.set_state(DAManualState.waiting_amount)
+    await message.answer(
+        f"👤 Пользователь найден: <b>{escape(disp_name)}</b> (ID: <code>{tid}</code>)\n\n"
+        f"<b>Шаг 2 из 2:</b> Введите сумму доната в рублях (например, <code>100</code> или <code>150</code> для VIP, или напишите <code>vip</code>):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_da_menu")
+        ]])
+    )
+
+
+@router.message(DAManualState.waiting_amount)
+async def admin_da_manual_amount(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    raw = (message.text or "").strip().lower()
+    data = await state.get_data()
+    tid = int(data.get("da_manual_user_id") or 0)
+
+    if not tid:
+        await state.clear()
+        await message.answer("❌ Сессия сброшена.")
+        return
+
+    if raw == "vip":
+        amount_rub = 150
+        comment = "vip"
+    else:
+        try:
+            amount_rub = float(raw)
+            comment = f"manual_by_admin_{message.from_user.id}"
+        except ValueError:
+            await message.answer("❌ Введите числовое значение суммы в рублях (или `vip`):")
+            return
+
+    import uuid
+    manual_da_id = f"manual_{uuid.uuid4().hex[:8]}"
+
+    async with async_session() as session:
+        from app.services import process_donationalerts_donation
+        ok, res_msg = await process_donationalerts_donation(
+            session=session,
+            donation_id=manual_da_id,
+            amount_rub=amount_rub,
+            telegram_user_id=tid,
+            comment=comment,
+            bot=message.bot
+        )
+
+    await state.clear()
+    if ok:
+        await message.answer(
+            f"✅ <b>Донат успешно проведен!</b>\n\n"
+            f"Пользователь: ID <code>{tid}</code>\n"
+            f"Сумма: <b>{amount_rub} руб.</b>\n"
+            f"Результат: <b>{res_msg}</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💳 В меню DonationAlerts", callback_data="admin_da_menu")
+            ]])
+        )
+    else:
+        await message.answer(f"❌ Ошибка проведения доната: {res_msg}")
 
 
 # ---------- ПОКАЗАТЬ ВСЕ НАСТРОЙКИ ----------

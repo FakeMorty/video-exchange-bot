@@ -4024,3 +4024,98 @@ async def log_balance_change(
         details=details,
     )
     session.add(log)
+
+
+async def process_donationalerts_donation(
+    session: AsyncSession,
+    donation_id: str | int,
+    amount_rub: Decimal | float | int,
+    telegram_user_id: int,
+    comment: str | None = None,
+    bot = None,
+) -> tuple[bool, str]:
+    """Обработка доната от DonationAlerts.
+
+    Идемпотентен по payload = f"donationalerts_{donation_id}".
+    Возвращает (успех, сообщение).
+    """
+    amount_rub = Decimal(str(amount_rub))
+    if amount_rub <= 0:
+        return False, "Некорректная сумма доната"
+
+    payload_key = f"donationalerts_{donation_id}"
+
+    # 1. Проверяем, не обрабатывался ли уже этот донат
+    existing_payment = (await session.execute(
+        select(Payment).where(Payment.payload == payload_key)
+    )).scalar_one_or_none()
+    if existing_payment:
+        return False, "Донат уже был обработан ранее"
+
+    # 2. Ищем пользователя
+    user = await get_user(session, telegram_user_id)
+    if not user:
+        return False, f"Пользователь с Telegram ID {telegram_user_id} не найден"
+
+    # 3. Определяем, что выдаём
+    comment_lower = (comment or "").lower()
+    from app.config import VIP_PRICE_RUB, RUB_TO_COINS_RATE, ADMINS
+    
+    is_vip = "vip" in comment_lower or (abs(amount_rub - Decimal(str(VIP_PRICE_RUB))) < Decimal("0.01"))
+
+    coins_reward = Decimal("0")
+    if is_vip:
+        perk = await activate_perk(session, user.id, "vip", duration_days=30)
+        reward_desc = "👑 VIP-подписка на 30 дней"
+        await log_user_action(session, user.id, "vip_purchased_da", f"amount_rub={amount_rub}, da_id={donation_id}")
+    else:
+        coins_reward = Decimal(str(amount_rub * Decimal(str(RUB_TO_COINS_RATE))))
+        await change_balance_atomic(
+            session, user.id, coins_reward, "donationalerts_deposit",
+            details=f"rub={amount_rub}, da_id={donation_id}"
+        )
+        reward_desc = f"+{coins_reward:,.0f} монет 🪙".replace(',', ' ')
+        await log_user_action(session, user.id, "coins_purchased_da", f"amount_rub={amount_rub}, coins={coins_reward}, da_id={donation_id}")
+
+    payment = Payment(
+        user_id=user.id,
+        payload=payload_key,
+        stars_amount=0,
+        coins_amount=coins_reward,
+        status="completed"
+    )
+    session.add(payment)
+    await session.commit()
+
+    if bot:
+        try:
+            from html import escape
+            msg_text = (
+                f"🎉 <b>Спасибо за подношение / поддержку!</b>\n\n"
+                f"Получен платёж через DonationAlerts на сумму: <b>{amount_rub} руб.</b>\n"
+                f"Вам зачислено: <b>{reward_desc}</b>\n\n"
+                f"Приятного пользования ботом! 💙"
+            )
+            await bot.send_message(user.telegram_id, msg_text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"Failed to send DA notification to user {telegram_user_id}: {e}")
+
+        try:
+            from html import escape
+            disp_name = get_display_name(user)
+            admin_msg = (
+                f"💳 <b>Новый платёж DonationAlerts!</b>\n\n"
+                f"👤 Пользователь: {disp_name} (ID: <code>{user.telegram_id}</code>)\n"
+                f"💰 Сумма: <b>{amount_rub} руб.</b>\n"
+                f"💬 Сообщение: <i>{escape(comment or '—')}</i>\n"
+                f"🎁 Начислено: <b>{reward_desc}</b>"
+            )
+            for admin_id in ADMINS:
+                try:
+                    await bot.send_message(admin_id, admin_msg, parse_mode="HTML")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Failed to notify admins of DA payment: {e}")
+
+    return True, f"Успешно начислено: {reward_desc}"
