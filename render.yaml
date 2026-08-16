@@ -1,0 +1,65 @@
+# render.yaml — Render Blueprint config для video-exchange-bot.
+#
+# Зачем: бот поднимает HTTP-сервер (Mini App'ы: Кейсы, Аркада, Секслото-live,
+# видеолента + webhook DonationAlerts) И параллельно long-polling Telegram.
+# Поэтому нужен именно Web Service (публичный порт), а не Background Worker.
+#
+# Этот файл пинит ветку, команды сборки/запуска и health-check, чтобы повторный
+# деплой не «откатывался» к старому билду и не терял фичи.
+#
+# Как применить:
+#   - Render → New → Blueprint → выбрать этот репозиторий, ИЛИ
+#   - положить файл в корень и сделать Manual Deploy (Clear build cache & deploy).
+# После деплоя проверь «🤖 Версия бота» в боте: должно быть v3.11.0-cleanup-megatest.
+
+services:
+  - type: web
+    name: video-exchange-bot
+    runtime: python
+    branch: master
+    plan: starter          # Web Service обязателен; free тоже работает, но засыпает
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start_render.sh
+    healthCheckPath: /
+    envVars:
+      # Секреты — Render возьмёт из текущих настроек сервиса (sync: false).
+      # Если разворачиваешь с нуля — задай их в дашборде Render.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: PORT
+        sync: false        # Render подставляет сам для web-сервиса
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMINS
+        sync: false
+      - key: WEBHOOK_BASE
+        sync: false
+      - key: WEBHOOK_PATH
+        value: /webhook
+      - key: DONATION_ALERTS_URL
+        sync: false
+      - key: DONATION_ALERTS_CLIENT_SECRET
+        sync: false
+      - key: RUB_TO_COINS_RATE
+        value: "10.0"
+      - key: VIP_PRICE_RUB
+        value: "150.0"
+      - key: ENABLE_AI_ASSISTANT
+        sync: false
+      - key: AI_ASSISTANT_API_KEY
+        sync: false
+      - key: AI_ASSISTANT_BASE_URL
+        sync: false
+      - key: AI_ASSISTANT_MODEL
+        sync: false
+      - key: ENABLE_ARCADE
+        sync: false
+      - key: ENABLE_LOTTERY
+        sync: false
+      - key: ENABLE_AUTO_MODERATION
+        sync: false
+      # Остальные переменные (KATYA_*, ARCADE_*, LOG_CHAT_ID, PROVIDER_TOKEN, …)
+      # — см. .env.example. В Blueprint-режиме их нужно добавить в дашборд
+      # или дописать сюда с sync: false.
