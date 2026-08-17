@@ -3278,20 +3278,16 @@ async def block_user(session: AsyncSession, user_id: int, blocked_user_id: int) 
     """Блокирует автора для пользователя. Возвращает True если заблокирован впервые."""
     from app.models import BlockedUser
     from sqlalchemy.exc import IntegrityError
-
     if user_id == blocked_user_id:
         return False
-
     existing = (await session.execute(
         select(BlockedUser).where(
             BlockedUser.user_id == user_id,
             BlockedUser.blocked_user_id == blocked_user_id
         )
     )).scalar_one_or_none()
-
     if existing:
         return False
-
     try:
         session.add(BlockedUser(user_id=user_id, blocked_user_id=blocked_user_id))
         await session.commit()
@@ -3299,6 +3295,58 @@ async def block_user(session: AsyncSession, user_id: int, blocked_user_id: int) 
     except IntegrityError:
         await session.rollback()
         return False
+
+
+async def get_blocked_authors(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    limit: int = 8,
+    offset: int = 0,
+) -> list:
+    """Возвращает авторов, которых пользователь скрыл из своей ленты."""
+    from app.models import BlockedUser, User
+
+    limit = max(1, min(limit, 50))
+    offset = max(0, offset)
+    result = await session.execute(
+        select(User)
+        .join(BlockedUser, BlockedUser.blocked_user_id == User.id)
+        .where(BlockedUser.user_id == user_id)
+        .order_by(BlockedUser.created_at.desc(), BlockedUser.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def count_blocked_authors(session: AsyncSession, user_id: int) -> int:
+    """Возвращает число авторов, скрытых пользователем из своей ленты."""
+    from app.models import BlockedUser
+
+    result = await session.execute(
+        select(func.count(BlockedUser.id)).where(BlockedUser.user_id == user_id)
+    )
+    return int(result.scalar_one())
+
+
+async def unblock_user(session: AsyncSession, user_id: int, blocked_user_id: int) -> bool:
+    """Снимает персональную блокировку автора. Возвращает True при удалении записи."""
+    from app.models import BlockedUser
+
+    block = (await session.execute(
+        select(BlockedUser).where(
+            BlockedUser.user_id == user_id,
+            BlockedUser.blocked_user_id == blocked_user_id,
+        )
+    )).scalar_one_or_none()
+    if not block:
+        return False
+
+    await session.delete(block)
+    await session.commit()
+    return True
+
 
 
 # ============================

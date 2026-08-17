@@ -104,7 +104,8 @@ from app.services import (
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
-    block_user, is_starter_pack_eligible, count_views_today, maybe_send_zalip_upsell,
+    block_user, get_blocked_authors, count_blocked_authors, unblock_user,
+    is_starter_pack_eligible, count_views_today, maybe_send_zalip_upsell,
     check_daily_video_upload_possible,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
@@ -791,6 +792,10 @@ async def show_profile(message: Message, state: FSMContext):
             [InlineKeyboardButton(
                 text="🛍 Донатный магазин",
                 callback_data="donation_shop"
+            )],
+            [InlineKeyboardButton(
+                text="🚫 Заблокированные авторы",
+                callback_data="blocked_authors:0"
             )]
         ])
         # Стилизованный ник (card-режим для профиля)
@@ -810,6 +815,117 @@ async def show_profile(message: Message, state: FSMContext):
         )
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
         await log_user_action(session, user.id, "view_profile")
+
+
+_BLOCKED_AUTHORS_PAGE_SIZE = 8
+
+
+async def _show_blocked_authors(callback: CallbackQuery, page: int) -> None:
+    """Показывает пользователю только его персональный список скрытых авторов."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            return
+
+        total = await count_blocked_authors(session, user.id)
+        max_page = max(0, (total - 1) // _BLOCKED_AUTHORS_PAGE_SIZE)
+        page = max(0, min(page, max_page))
+        authors = await get_blocked_authors(
+            session,
+            user.id,
+            limit=_BLOCKED_AUTHORS_PAGE_SIZE,
+            offset=page * _BLOCKED_AUTHORS_PAGE_SIZE,
+        )
+
+    buttons = []
+    for author in authors:
+        author_name = " ".join(get_display_name(author).split())[:42] or f"ID {author.telegram_id}"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"✅ Разблокировать: {author_name}",
+                callback_data=f"unblock_author:{author.id}:{page}",
+            )
+        ])
+
+    if not authors:
+        text = (
+            "🚫 <b>Заблокированные авторы</b>\n\n"
+            "Ты ещё никого не заблокировал. Здесь появятся авторы, "
+            "скрытые тобой из ленты."
+        )
+    else:
+        first = page * _BLOCKED_AUTHORS_PAGE_SIZE + 1
+        last = first + len(authors) - 1
+        text = (
+            "🚫 <b>Заблокированные авторы</b>\n\n"
+            "Нажми «Разблокировать», чтобы снова видеть контент автора в ленте.\n\n"
+            f"Показано: <b>{first}–{last}</b> из <b>{total}</b>."
+        )
+
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(text="◀️", callback_data=f"blocked_authors:{page - 1}"))
+    if page < max_page:
+        navigation.append(InlineKeyboardButton(text="▶️", callback_data=f"blocked_authors:{page + 1}"))
+    if navigation:
+        buttons.append(navigation)
+    buttons.append([InlineKeyboardButton(text="✖️ Закрыть", callback_data="blocked_authors_close")])
+
+    try:
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+    except TelegramBadRequest:
+        await callback.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+
+@router.callback_query(F.data.startswith("blocked_authors:"))
+async def cb_blocked_authors(callback: CallbackQuery):
+    try:
+        page = max(0, int(callback.data.rsplit(":", 1)[1]))
+    except (TypeError, ValueError):
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+
+    await _show_blocked_authors(callback, page)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("unblock_author:"))
+async def cb_unblock_author(callback: CallbackQuery):
+    try:
+        _, author_id_raw, page_raw = callback.data.split(":", 2)
+        author_id = int(author_id_raw)
+        page = max(0, int(page_raw))
+    except (AttributeError, TypeError, ValueError):
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+        success = await unblock_user(session, user.id, author_id)
+
+    if success:
+        await callback.answer("Автор разблокирован.", show_alert=True)
+    else:
+        await callback.answer("Этот автор уже разблокирован.", show_alert=True)
+    await _show_blocked_authors(callback, page)
+
+
+@router.callback_query(F.data == "blocked_authors_close")
+async def cb_blocked_authors_close(callback: CallbackQuery):
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
 
 
 # =========================

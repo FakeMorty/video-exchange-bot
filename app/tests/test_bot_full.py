@@ -3561,3 +3561,40 @@ async def test_schedule_mod_notification_multiple_rows_and_cancel_admin():
     state.clear.assert_called_once()
 
     await engine.dispose()
+
+
+# ══════════════════════════════════════════════════════════════
+#  персональные блокировки авторов
+# ══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_user_can_list_and_unblock_own_authors(db_session):
+    from app.services import (
+        block_user,
+        count_blocked_authors,
+        get_blocked_authors,
+        unblock_user,
+    )
+
+    viewer = User(telegram_id=910001, display_name="Viewer", balance=Decimal("0"))
+    author_one = User(telegram_id=910002, display_name="Author one", balance=Decimal("0"))
+    author_two = User(telegram_id=910003, display_name="Author two", balance=Decimal("0"))
+    another_viewer = User(telegram_id=910004, display_name="Another viewer", balance=Decimal("0"))
+    db_session.add_all([viewer, author_one, author_two, another_viewer])
+    await db_session.commit()
+
+    assert await block_user(db_session, viewer.id, author_one.id) is True
+    assert await block_user(db_session, viewer.id, author_two.id) is True
+    assert await block_user(db_session, another_viewer.id, author_one.id) is True
+
+    authors = await get_blocked_authors(db_session, viewer.id)
+    assert {author.id for author in authors} == {author_one.id, author_two.id}
+    assert await count_blocked_authors(db_session, viewer.id) == 2
+
+    assert await unblock_user(db_session, viewer.id, author_one.id) is True
+    assert await unblock_user(db_session, viewer.id, author_one.id) is False
+    assert await count_blocked_authors(db_session, viewer.id) == 1
+
+    remaining = await get_blocked_authors(db_session, viewer.id)
+    assert [author.id for author in remaining] == [author_two.id]
+    assert await count_blocked_authors(db_session, another_viewer.id) == 1
