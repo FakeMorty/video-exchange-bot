@@ -104,7 +104,8 @@ from app.services import (
     get_current_prices, get_active_events,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
-    block_user, get_blocked_authors, count_blocked_authors, unblock_user,
+    BLOCK_AUTHOR_REASONS, block_user, get_blocked_author_entries,
+    count_blocked_authors, unblock_user, unblock_all_authors,
     is_starter_pack_eligible, count_views_today, maybe_send_zalip_upsell,
     check_daily_video_upload_possible,
 )
@@ -382,6 +383,11 @@ class LotteryBuyState(StatesGroup):
 
 class StylesCaseState(StatesGroup):
     configuring = State()
+
+
+class BlockedAuthorsState(StatesGroup):
+    browsing = State()
+    waiting_search = State()
 
 
 # =========================
@@ -773,6 +779,7 @@ async def show_profile(message: Message, state: FSMContext):
             return
 
         refs = await count_referrals(session, user.id)
+        blocked_count = await count_blocked_authors(session, user.id)
         vip_str = ""
         if is_vip(user):
             vip_str = f"\n👑 VIP до: {user.vip_until.strftime('%d.%m.%Y')}"
@@ -794,7 +801,7 @@ async def show_profile(message: Message, state: FSMContext):
                 callback_data="donation_shop"
             )],
             [InlineKeyboardButton(
-                text="🚫 Заблокированные авторы",
+                text=f"🚫 Заблокированные авторы ({blocked_count})",
                 callback_data="blocked_authors:0"
             )]
         ])
@@ -820,47 +827,67 @@ async def show_profile(message: Message, state: FSMContext):
 _BLOCKED_AUTHORS_PAGE_SIZE = 8
 
 
-async def _show_blocked_authors(callback: CallbackQuery, page: int) -> None:
+async def _show_blocked_authors(
+    callback: CallbackQuery,
+    state: FSMContext,
+    page: int,
+) -> None:
     """Показывает пользователю только его персональный список скрытых авторов."""
+    data = await state.get_data()
+    search = " ".join((data.get("blocked_authors_search") or "").split())[:32]
+
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         if not user:
             return
 
-        total = await count_blocked_authors(session, user.id)
+        total = await count_blocked_authors(session, user.id, search=search)
         max_page = max(0, (total - 1) // _BLOCKED_AUTHORS_PAGE_SIZE)
         page = max(0, min(page, max_page))
-        authors = await get_blocked_authors(
+        entries = await get_blocked_author_entries(
             session,
             user.id,
             limit=_BLOCKED_AUTHORS_PAGE_SIZE,
             offset=page * _BLOCKED_AUTHORS_PAGE_SIZE,
+            search=search,
         )
 
     buttons = []
-    for author in authors:
+    for author, reason in entries:
         author_name = " ".join(get_display_name(author).split())[:42] or f"ID {author.telegram_id}"
+        reason_label = BLOCK_AUTHOR_REASONS.get(reason or "other", "Другое")
         buttons.append([
             InlineKeyboardButton(
-                text=f"✅ Разблокировать: {author_name}",
+                text=f"✅ {author_name} · {reason_label}",
                 callback_data=f"unblock_author:{author.id}:{page}",
             )
         ])
 
-    if not authors:
+    search_note = f"\n🔎 Поиск: <code>{escape(search)}</code>" if search else ""
+    if not entries:
         text = (
             "🚫 <b>Заблокированные авторы</b>\n\n"
-            "Ты ещё никого не заблокировал. Здесь появятся авторы, "
-            "скрытые тобой из ленты."
+            + (
+                "По этому запросу авторов не найдено."
+                if search else
+                "Ты ещё никого не заблокировал. Здесь появятся авторы, скрытые тобой из ленты."
+            )
         )
     else:
         first = page * _BLOCKED_AUTHORS_PAGE_SIZE + 1
-        last = first + len(authors) - 1
+        last = first + len(entries) - 1
         text = (
             "🚫 <b>Заблокированные авторы</b>\n\n"
-            "Нажми «Разблокировать», чтобы снова видеть контент автора в ленте.\n\n"
+            "Нажми на автора, чтобы снова видеть его контент в ленте.\n\n"
             f"Показано: <b>{first}–{last}</b> из <b>{total}</b>."
         )
+    text += search_note
+
+    buttons.append([InlineKeyboardButton(text="🔎 Найти автора", callback_data="blocked_authors_search")])
+    if entries:
+        buttons.append([InlineKeyboardButton(text="🧹 Разблокировать всех", callback_data="unblock_all_authors_confirm")])
+    if search:
+        buttons.append([InlineKeyboardButton(text="✖️ Сбросить поиск", callback_data="blocked_authors_search_clear")])
 
     navigation = []
     if page > 0:
@@ -877,26 +904,66 @@ async def _show_blocked_authors(callback: CallbackQuery, page: int) -> None:
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         )
-    except TelegramBadRequest:
-        await callback.message.edit_reply_markup(
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc).lower():
+            raise
 
 
 @router.callback_query(F.data.startswith("blocked_authors:"))
-async def cb_blocked_authors(callback: CallbackQuery):
+async def cb_blocked_authors(callback: CallbackQuery, state: FSMContext):
     try:
         page = max(0, int(callback.data.rsplit(":", 1)[1]))
     except (TypeError, ValueError):
         await callback.answer("Некорректный запрос.", show_alert=True)
         return
 
-    await _show_blocked_authors(callback, page)
+    await state.set_state(BlockedAuthorsState.browsing)
+    await _show_blocked_authors(callback, state, page)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "blocked_authors_search")
+async def cb_blocked_authors_search(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BlockedAuthorsState.waiting_search)
+    await callback.message.edit_text(
+        "🔎 <b>Поиск заблокированного автора</b>\n\n"
+        "Отправь ник или имя автора. Поиск выполняется только в твоём списке блокировок.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="blocked_authors:0")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(BlockedAuthorsState.waiting_search)
+async def process_blocked_authors_search(message: Message, state: FSMContext):
+    search = " ".join((message.text or "").split())[:32]
+    if not search:
+        await message.answer("Введите ник или имя автора, либо воспользуйся отменой.")
+        return
+
+    await state.update_data(blocked_authors_search=search)
+    await state.set_state(BlockedAuthorsState.browsing)
+    await message.answer(
+        f"🔎 Поиск по списку блокировок: <code>{escape(search)}</code>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Показать результаты", callback_data="blocked_authors:0")]
+        ]),
+    )
+
+
+@router.callback_query(F.data == "blocked_authors_search_clear")
+async def cb_blocked_authors_search_clear(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(blocked_authors_search="")
+    await state.set_state(BlockedAuthorsState.browsing)
+    await _show_blocked_authors(callback, state, 0)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("unblock_author:"))
-async def cb_unblock_author(callback: CallbackQuery):
+async def cb_unblock_author(callback: CallbackQuery, state: FSMContext):
     try:
         _, author_id_raw, page_raw = callback.data.split(":", 2)
         author_id = int(author_id_raw)
@@ -912,15 +979,44 @@ async def cb_unblock_author(callback: CallbackQuery):
             return
         success = await unblock_user(session, user.id, author_id)
 
-    if success:
-        await callback.answer("Автор разблокирован.", show_alert=True)
-    else:
-        await callback.answer("Этот автор уже разблокирован.", show_alert=True)
-    await _show_blocked_authors(callback, page)
+    await callback.answer(
+        "Автор разблокирован." if success else "Этот автор уже разблокирован.",
+        show_alert=True,
+    )
+    await _show_blocked_authors(callback, state, page)
+
+
+@router.callback_query(F.data == "unblock_all_authors_confirm")
+async def cb_unblock_all_authors_confirm(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "🧹 <b>Разблокировать всех авторов?</b>\n\n"
+        "Все авторы из твоего списка снова появятся в ленте. Это действие нельзя отменить автоматически.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, разблокировать всех", callback_data="unblock_all_authors")],
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="blocked_authors:0")],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "unblock_all_authors")
+async def cb_unblock_all_authors(callback: CallbackQuery, state: FSMContext):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+        removed = await unblock_all_authors(session, user.id)
+
+    await state.clear()
+    await callback.answer(f"Разблокировано авторов: {removed}.", show_alert=True)
+    await _show_blocked_authors(callback, state, 0)
 
 
 @router.callback_query(F.data == "blocked_authors_close")
-async def cb_blocked_authors_close(callback: CallbackQuery):
+async def cb_blocked_authors_close(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     try:
         await callback.message.delete()
     except TelegramBadRequest:
@@ -4390,29 +4486,123 @@ async def report_cancel(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("block_author:"))
 async def cb_block_author(callback: CallbackQuery):
-    video_id = int(callback.data.split(":")[1])
+    try:
+        video_id = int(callback.data.split(":", 1)[1])
+    except (AttributeError, TypeError, ValueError):
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         video = await get_video_by_id(session, video_id)
         if not user or not video:
-            await callback.answer("Ошибка.")
+            await callback.answer("Контент больше недоступен.", show_alert=True)
             return
-        
         if video.uploader_user_id == user.id:
             await callback.answer("Нельзя заблокировать самого себя.", show_alert=True)
             return
+        author = await get_user_by_id(session, video.uploader_user_id)
+        author_name = escape(get_display_name(author)) if author else "этого автора"
 
-        success = await block_user(session, user.id, video.uploader_user_id)
-        if success:
-            await callback.answer("Автор заблокирован. Ты больше не увидишь его контент.", show_alert=True)
-            # Можно предложить переключиться на следующее видео
-            await callback.message.answer(
-                "✅ Автор заблокирован. Ты больше не увидишь его видео и фото.\n"
-                "Нажми «Следующее», чтобы продолжить просмотр других авторов.",
-                reply_markup=video_error_keyboard() if video.content_type == "video" else photo_error_keyboard()
-            )
-        else:
-            await callback.answer("Этот автор уже заблокирован для вас.", show_alert=True)
+    await callback.message.answer(
+        f"🚫 <b>Скрыть {author_name} из ленты?</b>\n\n"
+        "Выбери причину — она нужна только для твоего управления списком блокировок.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚫 Спам", callback_data=f"confirm_block_author:{video_id}:spam")],
+            [InlineKeyboardButton(text="🙈 Неинтересно", callback_data=f"confirm_block_author:{video_id}:not_interesting")],
+            [InlineKeyboardButton(text="❓ Другое", callback_data=f"confirm_block_author:{video_id}:other")],
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="block_author_cancel")],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_block_author:"))
+async def cb_confirm_block_author(callback: CallbackQuery):
+    try:
+        _, video_id_raw, reason = callback.data.split(":", 2)
+        video_id = int(video_id_raw)
+    except (AttributeError, TypeError, ValueError):
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+    if reason not in BLOCK_AUTHOR_REASONS:
+        await callback.answer("Некорректная причина.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        video = await get_video_by_id(session, video_id)
+        if not user or not video:
+            await callback.answer("Контент больше недоступен.", show_alert=True)
+            return
+        if video.uploader_user_id == user.id:
+            await callback.answer("Нельзя заблокировать самого себя.", show_alert=True)
+            return
+        success = await block_user(
+            session,
+            user.id,
+            video.uploader_user_id,
+            reason=reason,
+        )
+
+    if not success:
+        await callback.answer("Этот автор уже заблокирован для вас.", show_alert=True)
+        return
+
+    next_keyboard = video_error_keyboard() if video.content_type == "video" else photo_error_keyboard()
+    next_keyboard.inline_keyboard.insert(0, [
+        InlineKeyboardButton(
+            text="↩️ Отменить блокировку",
+            callback_data=f"undo_block_author:{video.uploader_user_id}",
+        )
+    ])
+    await callback.message.edit_text(
+        "✅ Автор заблокирован. Ты больше не увидишь его видео и фото.\n\n"
+        "Если это произошло случайно, нажми «Отменить блокировку».",
+        reply_markup=next_keyboard,
+    )
+    await callback.answer("Автор заблокирован.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("undo_block_author:"))
+async def cb_undo_block_author(callback: CallbackQuery):
+    try:
+        author_id = int(callback.data.split(":", 1)[1])
+    except (AttributeError, TypeError, ValueError):
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
+        success = await unblock_user(session, user.id, author_id)
+
+    if success:
+        rows = [
+            [button for button in row if not (button.callback_data or "").startswith("undo_block_author:")]
+            for row in (callback.message.reply_markup.inline_keyboard if callback.message.reply_markup else [])
+        ]
+        rows = [row for row in rows if row]
+        await callback.message.edit_text(
+            "↩️ Блокировка отменена. Контент автора снова будет появляться в ленте.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+        )
+    await callback.answer(
+        "Блокировка отменена." if success else "Автор уже разблокирован.",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data == "block_author_cancel")
+async def cb_block_author_cancel(callback: CallbackQuery):
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    await callback.answer("Блокировка отменена.")
 
 
 # ====================================================

@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
-from sqlalchemy import select, func, desc, update, or_, Text
+from sqlalchemy import select, func, desc, update, delete, or_, Text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
@@ -3274,27 +3274,92 @@ async def dismiss_report(session: AsyncSession, report_id: int, admin_id: int) -
     return True
 
 
-async def block_user(session: AsyncSession, user_id: int, blocked_user_id: int) -> bool:
+BLOCK_AUTHOR_REASONS = {
+    "spam": "Спам",
+    "not_interesting": "Неинтересно",
+    "other": "Другое",
+}
+
+
+def _blocked_authors_statement(user_id: int, search: str | None = None):
+    """Строит ограниченный текущим пользователем запрос для его списка блокировок."""
+    from app.models import BlockedUser, User
+
+    statement = (
+        select(User, BlockedUser.reason)
+        .join(BlockedUser, BlockedUser.blocked_user_id == User.id)
+        .where(BlockedUser.user_id == user_id)
+    )
+    query = " ".join((search or "").split())[:32]
+    if query:
+        pattern = f"%{query}%"
+        statement = statement.where(or_(
+            User.display_name.ilike(pattern),
+            User.username.ilike(pattern),
+            User.first_name.ilike(pattern),
+        ))
+    return statement
+
+
+async def block_user(
+    session: AsyncSession,
+    user_id: int,
+    blocked_user_id: int,
+    *,
+    reason: str = "other",
+) -> bool:
     """Блокирует автора для пользователя. Возвращает True если заблокирован впервые."""
     from app.models import BlockedUser
     from sqlalchemy.exc import IntegrityError
+
     if user_id == blocked_user_id:
         return False
+    if reason not in BLOCK_AUTHOR_REASONS:
+        return False
+
     existing = (await session.execute(
         select(BlockedUser).where(
             BlockedUser.user_id == user_id,
-            BlockedUser.blocked_user_id == blocked_user_id
+            BlockedUser.blocked_user_id == blocked_user_id,
         )
     )).scalar_one_or_none()
     if existing:
         return False
+
     try:
-        session.add(BlockedUser(user_id=user_id, blocked_user_id=blocked_user_id))
+        session.add(BlockedUser(
+            user_id=user_id,
+            blocked_user_id=blocked_user_id,
+            reason=reason,
+        ))
         await session.commit()
         return True
     except IntegrityError:
         await session.rollback()
         return False
+
+
+async def get_blocked_author_entries(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    limit: int = 8,
+    offset: int = 0,
+    search: str | None = None,
+) -> list[tuple]:
+    """Возвращает скрытых авторов и выбранные пользователем причины блокировки."""
+    limit = max(1, min(limit, 50))
+    offset = max(0, offset)
+    from app.models import BlockedUser
+
+    statement = (
+        _blocked_authors_statement(user_id, search)
+        .order_by(BlockedUser.created_at.desc(), BlockedUser.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(statement)
+    return list(result.all())
 
 
 async def get_blocked_authors(
@@ -3303,30 +3368,28 @@ async def get_blocked_authors(
     *,
     limit: int = 8,
     offset: int = 0,
+    search: str | None = None,
 ) -> list:
     """Возвращает авторов, которых пользователь скрыл из своей ленты."""
-    from app.models import BlockedUser, User
-
-    limit = max(1, min(limit, 50))
-    offset = max(0, offset)
-    result = await session.execute(
-        select(User)
-        .join(BlockedUser, BlockedUser.blocked_user_id == User.id)
-        .where(BlockedUser.user_id == user_id)
-        .order_by(BlockedUser.created_at.desc(), BlockedUser.id.desc())
-        .offset(offset)
-        .limit(limit)
+    entries = await get_blocked_author_entries(
+        session,
+        user_id,
+        limit=limit,
+        offset=offset,
+        search=search,
     )
-    return list(result.scalars().all())
+    return [author for author, _reason in entries]
 
 
-async def count_blocked_authors(session: AsyncSession, user_id: int) -> int:
+async def count_blocked_authors(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    search: str | None = None,
+) -> int:
     """Возвращает число авторов, скрытых пользователем из своей ленты."""
-    from app.models import BlockedUser
-
-    result = await session.execute(
-        select(func.count(BlockedUser.id)).where(BlockedUser.user_id == user_id)
-    )
+    statement = _blocked_authors_statement(user_id, search).with_only_columns(func.count())
+    result = await session.execute(statement)
     return int(result.scalar_one())
 
 
@@ -3346,6 +3409,17 @@ async def unblock_user(session: AsyncSession, user_id: int, blocked_user_id: int
     await session.delete(block)
     await session.commit()
     return True
+
+
+async def unblock_all_authors(session: AsyncSession, user_id: int) -> int:
+    """Снимает все персональные блокировки текущего пользователя."""
+    from app.models import BlockedUser
+
+    result = await session.execute(
+        delete(BlockedUser).where(BlockedUser.user_id == user_id)
+    )
+    await session.commit()
+    return int(result.rowcount or 0)
 
 
 

@@ -81,6 +81,14 @@ async def fix_database():
         except Exception:
             await conn.rollback()
 
+        # 2c. Причина персональной блокировки автора
+        try:
+            await conn.execute(text("ALTER TABLE blocked_users ADD COLUMN reason VARCHAR(32)"))
+            await conn.commit()
+            log_info(logger, "Added blocked_users.reason")
+        except Exception:
+            await conn.rollback()
+
         # 3. Active Sales Table
         if is_sqlite:
             await conn.execute(text("""

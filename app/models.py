@@ -98,6 +98,7 @@ class BlockedUser(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     blocked_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(foreign_keys=[user_id], back_populates="blocked_users")

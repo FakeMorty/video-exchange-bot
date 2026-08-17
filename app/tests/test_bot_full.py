@@ -3598,3 +3598,36 @@ async def test_user_can_list_and_unblock_own_authors(db_session):
     remaining = await get_blocked_authors(db_session, viewer.id)
     assert [author.id for author in remaining] == [author_two.id]
     assert await count_blocked_authors(db_session, another_viewer.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_blocked_authors_support_reasons_search_and_bulk_unblock(db_session):
+    from app.services import (
+        count_blocked_authors,
+        get_blocked_author_entries,
+        unblock_all_authors,
+        block_user,
+    )
+
+    viewer = User(telegram_id=920001, display_name="Viewer", balance=Decimal("0"))
+    spam_author = User(telegram_id=920002, display_name="Spam creator", balance=Decimal("0"))
+    quiet_author = User(telegram_id=920003, display_name="Quiet creator", balance=Decimal("0"))
+    another_viewer = User(telegram_id=920004, display_name="Another viewer", balance=Decimal("0"))
+    db_session.add_all([viewer, spam_author, quiet_author, another_viewer])
+    await db_session.commit()
+
+    assert await block_user(db_session, viewer.id, spam_author.id, reason="spam") is True
+    assert await block_user(db_session, viewer.id, quiet_author.id, reason="not_interesting") is True
+    assert await block_user(db_session, another_viewer.id, spam_author.id, reason="other") is True
+    assert await block_user(db_session, viewer.id, another_viewer.id, reason="invalid") is False
+
+    entries = await get_blocked_author_entries(db_session, viewer.id, search="spam")
+    assert len(entries) == 1
+    assert entries[0][0].id == spam_author.id
+    assert entries[0][1] == "spam"
+    assert await count_blocked_authors(db_session, viewer.id, search="creator") == 2
+    assert await count_blocked_authors(db_session, viewer.id, search="quiet") == 1
+
+    assert await unblock_all_authors(db_session, viewer.id) == 2
+    assert await count_blocked_authors(db_session, viewer.id) == 0
+    assert await count_blocked_authors(db_session, another_viewer.id) == 1
