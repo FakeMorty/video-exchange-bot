@@ -27,7 +27,7 @@
 
 <p align="center">
   <b>Telegram-бот на aiogram 3</b> для обмена видео и фото, с социальной экономикой,  
-  модерацией, виртуальной подругой Катей, Секслото, лутбоксами и монетизацией через Telegram Stars.
+  модерацией, Секслото, лутбоксами и монетизацией через единый магазин.
 </p>
 
 <br/>
@@ -41,11 +41,8 @@
 ### 🎬 Обмен контентом
 Пользователи загружают фото и видео — бот показывает их другим в автоматической очереди. Оценки, комментарии, реакции.
 
-### 💋 Виртуальная подруга Катя
-ИИ-компаньон на **DeepSeek V4 Flash** через OpenModel. Ролевой диалог с историей, анти-спамом, дневным лимитом. 5 монет за сообщение, админы — бесплатно.
-
 ### 💰 Социальная экономика
-Виртуальные монеты, VIP через Telegram Stars, **донатный магазин** со 100 стилями никнейма (5 категорий), бустерами XP, эксклюзивными реакциями, промокодами и лутбоксами.
+Виртуальные монеты, VIP, 100 стилей никнейма (5 категорий), бустеры XP, эксклюзивные реакции, промокоды и лутбоксы — всё через единый **Магазин**.
 
 ### 🎯 Секслото и Mini App
 Регулярные розыгрыши с WebApp-трансляцией, live-интерфейсом, покупкой билетов внутри Mini App и напоминаниями о розыгрыше.
@@ -81,7 +78,6 @@ HTML5 Mini App в стиле Galaga: ставка, волны пришельце
   <img src="https://img.shields.io/badge/Alembic-Migrations-5b21b6?style=flat-square" />
   <img src="https://img.shields.io/badge/aiohttp-Webhooks_&_WebApp-4c1d95?style=flat-square&logo=aiohttp" />
   <img src="https://img.shields.io/badge/Docker_&_Compose-Deployment-3b0764?style=flat-square&logo=docker" />
-  <img src="https://img.shields.io/badge/DeepSeek_V4-Katya_AI-2e1065?style=flat-square" />
   <img src="https://img.shields.io/badge/Python_3.13-Native_Async-1a0533?style=flat-square&logo=python" />
 </p>
 
@@ -101,7 +97,7 @@ cd video-exchange-bot
 
 # 2. Настройте окружение
 cp .env.example .env
-# Отредактируйте .env — укажите токен бота, данные БД, API-ключ OpenModel
+# Отредактируйте .env — укажите токен бота и данные БД
 
 # 3. Установите зависимости
 pip install -r requirements.txt
@@ -140,11 +136,6 @@ docker compose up -d --build
 | `PROVIDER_TOKEN` | ✅ | Токен провайдера Telegram Stars |
 | `BOT_USERNAME` | ❌ | Username бота (без @) |
 | `LOG_CHAT_ID` | ❌ | ID чата для логов |
-| `AI_ASSISTANT_API_KEY` | ❌ | API-ключ OpenModel (для Кати) |
-| `AI_ASSISTANT_BASE_URL` | ❌ | URL API (по умолч. `https://api.openmodel.ai`) |
-| `AI_ASSISTANT_MODEL` | ❌ | Модель (по умолч. `deepseek-v4-flash`) |
-| `AI_ASSISTANT_PRICE` | ❌ | Цена сообщения в монетах (по умолч. `5`) |
-| `ENABLE_AI_ASSISTANT` | ❌ | Включить Катю (по умолч. `true`) |
 
 Полный список переменных — в `app/config.py`.
 
@@ -161,10 +152,8 @@ video-exchange-bot/
 │   ├── user_handlers.py       # Обработчики пользователя (смотреть, загрузить, профиль…)
 │   ├── admin_handlers.py      # Панель администратора (модерация, статистика, жалобы…)
 │   ├── user_offer_handlers.py # Офферы пользователей
-│   ├── donation_shop.py       # Донатный магазин (стили ника, перки, лутбоксы)
-│   ├── ai_assistant.py        # Виртуальная подруга Катя (DeepSeek V4 Flash)
+│   ├── donation_shop.py       # Витрина стилей и привилегий за монеты
 │   ├── nick_styles.py         # 100 стилей никнейма в 5 категориях
-│   ├── sticker_prompts.py     # Промпты для стикерпака Кати (28 стикеров)
 │   ├── keyboards.py           # Клавиатуры (inline и reply)
 │   ├── middlewares.py         # Middleware бота
 │   ├── logger.py              # Логирование
@@ -201,16 +190,6 @@ video-exchange-bot/
 
 Стиль привязан к перку `custom_nick` в донатном магазине. Сменить стиль — купить заново.
 
-## 💋 Катя — виртуальная подруга
-
-Катя — 18-летняя гимнастка, заканчивает 11 класс. Устала от ЕГЭ и рада отвлечься. Работает на DeepSeek V4 Flash через OpenModel API.
-
-- **Стоимость**: 5 монет за сообщение (с возвратом при ошибке API)
-- **Анти-спам**: кулдаун 5 сек, дневной лимит 50 сообщений
-- **История**: 10 пар сообщений в контексте
-- **Админы**: общаются бесплатно
-- **Безопасность**: автоматическая фильтрация утечек API-ключей
-
 ## 🤝 Как помочь проекту
 
 1. ⭐ **Поставьте звезду** — это мотивирует!
@@ -232,7 +211,7 @@ video-exchange-bot/
 
 <p align="center">
   <b>A Telegram bot built with aiogram 3</b> for video & photo exchange, featuring social economy,  
-  moderation, virtual girlfriend Katya, Sexlotto, lootboxes, and monetization via Telegram Stars.
+  moderation, Sexlotto, lootboxes, and monetization via a unified store.
 </p>
 
 <br/>
@@ -246,11 +225,8 @@ video-exchange-bot/
 ### 🎬 Content Exchange
 Users upload photos/videos — the bot displays them to others in an automatic queue. Ratings, comments, reactions.
 
-### 💋 Virtual Girlfriend Katya
-AI companion powered by **DeepSeek V4 Flash** via OpenModel. Roleplay dialogue with history, anti-spam, and daily limits. 5 coins per message, admins chat free.
-
 ### 💰 Social Economy
-Virtual coins, VIP via Telegram Stars, **donation shop** with 100 nickname styles (5 categories), XP boosters, exclusive reactions, promo codes, and lootboxes.
+Virtual coins, VIP, 100 nickname styles (5 categories), XP boosters, exclusive reactions, promo codes, and lootboxes — all through a unified **Store**.
 
 ### 🎯 Sexlotto & Mini App
 Regular draws with a WebApp live viewer, in-app ticket purchases, and 1-hour draw reminders.
@@ -283,7 +259,6 @@ Full support: VIP, promo codes, paid user offers, lootboxes — all via Telegram
   <img src="https://img.shields.io/badge/Alembic-Migrations-5b21b6?style=flat-square" />
   <img src="https://img.shields.io/badge/aiohttp-Webhooks_&_WebApp-4c1d95?style=flat-square&logo=aiohttp" />
   <img src="https://img.shields.io/badge/Docker_&_Compose-Deployment-3b0764?style=flat-square&logo=docker" />
-  <img src="https://img.shields.io/badge/DeepSeek_V4-Katya_AI-2e1065?style=flat-square" />
   <img src="https://img.shields.io/badge/Python_3.13-Native_Async-1a0533?style=flat-square&logo=python" />
 </p>
 
@@ -303,7 +278,7 @@ cd video-exchange-bot
 
 # 2. Configure environment
 cp .env.example .env
-# Edit .env with your bot token, DB credentials, and OpenModel API key
+# Edit .env with your bot token and database credentials
 
 # 3. Install dependencies
 pip install -r requirements.txt
@@ -333,11 +308,6 @@ docker compose up -d --build
 | `PROVIDER_TOKEN` | ✅ | Telegram Stars provider token |
 | `BOT_USERNAME` | ❌ | Bot username (without @) |
 | `LOG_CHAT_ID` | ❌ | Chat ID for logs |
-| `AI_ASSISTANT_API_KEY` | ❌ | OpenModel API key (for Katya) |
-| `AI_ASSISTANT_BASE_URL` | ❌ | API URL (default `https://api.openmodel.ai`) |
-| `AI_ASSISTANT_MODEL` | ❌ | Model (default `deepseek-v4-flash`) |
-| `AI_ASSISTANT_PRICE` | ❌ | Message price in coins (default `5`) |
-| `ENABLE_AI_ASSISTANT` | ❌ | Enable Katya (default `true`) |
 
 Full list of variables — in `app/config.py`.
 
@@ -354,10 +324,8 @@ video-exchange-bot/
 │   ├── user_handlers.py       # User handlers (watch, upload, profile…)
 │   ├── admin_handlers.py      # Admin panel (moderation, stats, reports…)
 │   ├── user_offer_handlers.py # User offers
-│   ├── donation_shop.py       # Donation shop (nick styles, perks, lootboxes)
-│   ├── ai_assistant.py        # Virtual girlfriend Katya (DeepSeek V4 Flash)
+│   ├── donation_shop.py       # Nick styles and perks store
 │   ├── nick_styles.py         # 100 nickname styles in 5 categories
-│   ├── sticker_prompts.py     # Katya sticker pack prompts (28 stickers)
 │   ├── keyboards.py           # Keyboards (inline and reply)
 │   ├── middlewares.py         # Bot middleware
 │   ├── logger.py              # Logging
@@ -393,16 +361,6 @@ Styles are split into 5 categories, 20 each:
 | Cosmic | ✦ | Star `★ Nick ★`, Supernova `✴ Nick ✴`, Nebula `≋ Nick ≋` |
 
 Style is tied to the `custom_nick` perk in the donation shop. To change style — purchase again.
-
-## 💋 Katya — Virtual Girlfriend
-
-Katya is an 18-year-old gymnast finishing 11th grade. Tired from exams and happy to chat. Powered by DeepSeek V4 Flash via OpenModel API.
-
-- **Price**: 5 coins per message (refunded on API error)
-- **Anti-spam**: 5-sec cooldown, 50 messages/day limit
-- **History**: 10 message pairs in context
-- **Admins**: chat for free
-- **Security**: automatic API key leak filtering
 
 ## 🤝 Contributing
 

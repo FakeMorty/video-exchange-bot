@@ -36,7 +36,6 @@ from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
 from app.user_offer_handlers import router as user_offer_router
 from app.donation_shop import router as donation_router
-from app.ai_assistant import router as ai_router
 from app.arcade_handlers import router as arcade_router
 from app.logger import setup_logging, get_logger, log_info, log_error
 from app.services import (
@@ -2125,13 +2124,6 @@ async def on_startup(app):
         
     await _notify_admins_started(bot)
 
-    # Загрузка стикеров Кати
-    try:
-        from app.ai_assistant import load_sticker_set
-        await load_sticker_set(bot)
-    except Exception as e:
-        log_error(logger, f"Katya sticker load error: {e}")
-
     log_info(logger, "Service initialized")
 
 
@@ -3687,7 +3679,6 @@ async def main():
     dp.include_router(arcade_router)
     dp.include_router(user_offer_router)
     dp.include_router(donation_router)
-    dp.include_router(ai_router)
 
     # global error handler
     from aiogram.types import ErrorEvent

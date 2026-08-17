@@ -60,7 +60,7 @@ from app.config import (
     ENABLE_LOTTERY,
     WEBHOOK_BASE,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
-    AI_ASSISTANT_PRICE, LOTTERY_DRAW_HOUR_MSK, LOTTERY_SECONDS_PER_BALL,
+    LOTTERY_DRAW_HOUR_MSK, LOTTERY_SECONDS_PER_BALL,
 )
 from app.db import async_session
 from app.models import (
@@ -70,7 +70,7 @@ from app.models import (
     utc_now,
 )
 from app.services import (
-    get_or_create_user, get_user, get_user_by_id, get_video_by_id, get_setting, save_video, save_photo,
+    get_or_create_user, get_user, get_user_by_id, get_video_by_id, reject_video, get_setting, save_video, save_photo,
     get_xp_multiplier, get_coin_multiplier, get_stars_discount,
     get_random_video_for_user, get_random_photo_for_user,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
@@ -123,7 +123,7 @@ from app.keyboards import (
     BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
-    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_RULES, BTN_FAQ, BTN_AI,
+    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_RULES, BTN_FAQ,
 )
 from app.user_offer_handlers import user_offers_menu
 from app.logger import get_logger
@@ -254,13 +254,6 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             return
 
         await send_welcome_banner(message, session, user)
-
-
-@router.message(Command("katya"))
-async def cmd_katya(message: Message, state: FSMContext):
-    """Открывает Катю командой, даже если ReplyKeyboard в клиенте не обновилась."""
-    from app.ai_assistant import btn_katya
-    await btn_katya(message, state)
 
 
 _upload_notifications = defaultdict(lambda: {"count": 0, "task": None})
@@ -797,8 +790,8 @@ async def show_profile(message: Message, state: FSMContext):
                 callback_data="set_nickname_start"
             )],
             [InlineKeyboardButton(
-                text="🛍 Донатный магазин",
-                callback_data="donation_shop"
+                text="🛍 Магазин",
+                callback_data="store_menu"
             )],
             [InlineKeyboardButton(
                 text=f"🚫 Заблокированные авторы ({blocked_count})",
@@ -1329,7 +1322,10 @@ async def watch_video_content(callback: CallbackQuery):
                             f"💰 Списано: {cost} монет"
                         ),
                         parse_mode="HTML",
-                        reply_markup=video_rating_keyboard(video.id)
+                        reply_markup=video_rating_keyboard(
+                            video.id,
+                            is_admin=is_any_admin(callback.from_user.id, user),
+                        )
                     )
                 except Exception as e:
                     last_send_error = str(e)
@@ -1527,7 +1523,10 @@ async def watch_photo_content(callback: CallbackQuery):
                             f"👤 Автор: <b>{uploader_name}</b>"
                         ),
                         parse_mode="HTML",
-                        reply_markup=photo_actions_keyboard(photo.id)
+                        reply_markup=photo_actions_keyboard(
+                            photo.id,
+                            is_admin=is_any_admin(callback.from_user.id, user),
+                        )
                     )
                 except Exception as e:
                     last_send_error = str(e)
@@ -1581,6 +1580,78 @@ async def watch_photo_content(callback: CallbackQuery):
 @router.callback_query(F.data == "watch_next_photo")
 async def watch_next_photo(callback: CallbackQuery):
     await watch_photo_content(callback)
+
+
+@router.callback_query(F.data.startswith("admin_remove_from_feed:"))
+async def admin_remove_from_feed_prompt(callback: CallbackQuery):
+    """Запрашивает подтверждение снятия уже показанного контента из ленты."""
+    try:
+        video_id = int(callback.data.rsplit(":", 1)[1])
+    except (AttributeError, TypeError, ValueError):
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        admin = await get_user(session, callback.from_user.id)
+        video = await get_video_by_id(session, video_id)
+        if not admin or not is_any_admin(callback.from_user.id, admin):
+            await callback.answer("Доступно только администрации.", show_alert=True)
+            return
+        if not video or video.status != "approved":
+            await callback.answer("Контент уже снят с ленты или недоступен.", show_alert=True)
+            return
+
+    await callback.message.answer(
+        f"🗑 <b>Снять контент #{video_id} из ленты?</b>\n\n"
+        "Он перестанет показываться новым зрителям, а автор получит уведомление без указания администратора.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Да, снять из ленты", callback_data=f"admin_confirm_remove_from_feed:{video_id}")],
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="admin_cancel_remove_from_feed")],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_confirm_remove_from_feed:"))
+async def admin_remove_from_feed_confirm(callback: CallbackQuery):
+    try:
+        video_id = int(callback.data.rsplit(":", 1)[1])
+    except (AttributeError, TypeError, ValueError):
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        admin = await get_user(session, callback.from_user.id)
+        if not admin or not is_any_admin(callback.from_user.id, admin):
+            await callback.answer("Доступно только администрации.", show_alert=True)
+            return
+        video = await reject_video(session, video_id, "removed_from_feed_by_admin")
+        if not video:
+            await callback.answer("Контент уже снят с ленты или недоступен.", show_alert=True)
+            return
+        author = await get_user_by_id(session, video.uploader_user_id)
+
+    if author:
+        try:
+            await callback.bot.send_message(
+                author.telegram_id,
+                f"📢 Ваш контент #{video_id} снят администрацией с общей ленты.\n\n"
+                "Он больше не будет показываться новым зрителям. Если вы считаете, что это ошибка, обратитесь в раздел «Жалобы и предложения».",
+            )
+        except Exception:
+            pass
+
+    await callback.message.edit_text(
+        f"✅ Контент #{video_id} снят из ленты. Автор уведомлён.",
+    )
+    await callback.answer("Контент снят из ленты.", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_cancel_remove_from_feed")
+async def admin_remove_from_feed_cancel(callback: CallbackQuery):
+    await callback.message.edit_text("❌ Снятие контента из ленты отменено.")
+    await callback.answer()
 
 
 # =========================
@@ -1937,14 +2008,15 @@ async def btn_referrals(message: Message, state: FSMContext):
     milestone_text = _build_referral_milestone_text(refs)
     await message.answer(
         f"👥 <b>Рефералы</b>\n\n"
-        f"Приглашай друзей и получай монеты.\n"
-        f"• за каждого активного друга: <b>+{_fmt_coins(REFERRAL_REWARD_INVITER)}</b> монет\n"
-        f"• новый пользователь тоже получает стартовый бонус: <b>+{_fmt_coins(REFERRAL_REWARD_NEW_USER)}</b> монет\n"
-        f"• ссылку можно отправить в 1 тап любому знакомому\n\n"
+        f"Приглашай друзей и получай увеличенные бонусы.\n"
+        f"• друг получает на старте: <b>+{_fmt_coins(REFERRAL_REWARD_NEW_USER)}</b> монет\n"
+        f"• ты получаешь за активного друга: <b>+{_fmt_coins(REFERRAL_REWARD_INVITER)}</b> монет\n"
+        f"• активный друг — это 3 просмотра видео или фото\n"
+        f"• за 1, 3, 5 и 10 активных друзей открываются дополнительные этапы\n\n"
         f"Статусы реферала:\n"
         f"• перешёл по ссылке\n"
         f"• зарегистрировался\n"
-        f"• стал активным\n"
+        f"• посмотрел контент и стал активным\n"
         f"• награда начислена\n\n"
         f"Твоя ссылка:\n<code>{ref_link}</code>\n\n"
         f"Приглашено: <b>{refs}</b>\n"
@@ -1957,8 +2029,93 @@ async def btn_referrals(message: Message, state: FSMContext):
 # =========================
 # BUY COINS
 # =========================
+async def _show_store(target: Message, user: User) -> None:
+    """Единая витрина: пополнение, VIP и покупка привилегий за монеты."""
+    vip_status = (
+        f"активен до {user.vip_until.strftime('%d.%m.%Y')}"
+        if is_vip(user) else
+        "не активен"
+    )
+    text = (
+        "🛍 <b>Магазин</b>\n\n"
+        f"💰 Баланс: <b>{_fmt_coins(user.balance)}</b> монет\n"
+        f"👑 VIP: <b>{vip_status}</b>\n\n"
+        "Выберите нужный раздел: пополнение монет, VIP или оформление профиля."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐ Пополнить монеты", callback_data="show_stars_menu")],
+        [InlineKeyboardButton(text="👑 VIP на 30 дней", callback_data="store_vip")],
+        [InlineKeyboardButton(text="💎 Стили и привилегии", callback_data="donation_shop")],
+        [InlineKeyboardButton(text="💳 Карта / СБП", callback_data="btn_buy_callback")],
+    ])
+    await target.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+
 @router.message(F.text == BTN_BUY)
-async def btn_buy(message: Message, state: FSMContext):
+async def btn_store(message: Message, state: FSMContext):
+    await state.clear()
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user or not await require_nickname(message, user):
+            return
+        await _show_store(message, user)
+
+
+@router.callback_query(F.data == "store_menu")
+async def cb_store_menu(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        await _show_store(callback.message, user)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "store_vip")
+async def cb_store_vip(callback: CallbackQuery):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        vip_price, _, _ = await get_current_prices(session, user.id)
+        discount = VIP_WATCH_DISCOUNT
+        db_discount = await get_setting(session, "vip_watch_discount", "")
+        if db_discount:
+            try:
+                discount = float(db_discount)
+            except (TypeError, ValueError):
+                pass
+        discount_percent = max(0, min(100, round((1 - discount) * 100)))
+        if is_vip(user):
+            text = (
+                f"👑 <b>VIP активен до {user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
+                f"• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n"
+                "• Фото без дневного лимита\n"
+                f"• Скидка {discount_percent}% на просмотр"
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🛍 В магазин", callback_data="store_menu")],
+            ])
+        else:
+            text = (
+                "👑 <b>VIP на 30 дней</b>\n\n"
+                f"Стоимость: <b>{vip_price} Stars</b>\n\n"
+                f"• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n"
+                "• Фото без дневного лимита\n"
+                f"• Скидка {discount_percent}% на просмотр"
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"👑 Оформить за {vip_price} Stars", callback_data="buy_vip")],
+                [InlineKeyboardButton(text="🛍 В магазин", callback_data="store_menu")],
+            ])
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
+
+
+async def _show_legacy_donationalerts(message: Message, state: FSMContext):
     await state.clear()
     try:
         async with async_session() as session:
@@ -2137,7 +2294,7 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "btn_buy_callback")
 async def cb_btn_buy_callback(callback: CallbackQuery, state: FSMContext):
-    await btn_buy(callback.message, state)
+    await _show_legacy_donationalerts(callback.message, state)
 
 
 @router.callback_query(F.data == "buy_vip_stars")
@@ -2941,10 +3098,8 @@ async def styles_case_open(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await lootbox_menu(callback)
 async def cb_btn_buy(callback: CallbackQuery, state: FSMContext):
-    # Reuse btn_buy logic
-    from aiogram.types import Message as TGMessage
-    # create a fake message proxy – easier: call internal logic directly
-    await btn_buy(callback.message, state)  # type: ignore
+    # Точки входа из рекламы и low-balance сценариев ведут в единый магазин.
+    await btn_store(callback.message, state)  # type: ignore
     await callback.answer()
 
 # =========================
@@ -4539,6 +4694,7 @@ async def cb_confirm_block_author(callback: CallbackQuery):
         if video.uploader_user_id == user.id:
             await callback.answer("Нельзя заблокировать самого себя.", show_alert=True)
             return
+        author = await get_user_by_id(session, video.uploader_user_id)
         success = await block_user(
             session,
             user.id,
@@ -4549,6 +4705,18 @@ async def cb_confirm_block_author(callback: CallbackQuery):
     if not success:
         await callback.answer("Этот автор уже заблокирован для вас.", show_alert=True)
         return
+
+    # Показываем факт скрытия автору, но не раскрываем личность блокировавшего.
+    # Так уведомление не превращается в инструмент давления или травли.
+    if author:
+        try:
+            await callback.bot.send_message(
+                author.telegram_id,
+                "ℹ️ Один из пользователей скрыл ваш профиль из личной ленты.\n\n"
+                "Это не влияет на доступ к боту или ваши публикации и не раскрывает, кто принял такое решение.",
+            )
+        except Exception:
+            pass
 
     next_keyboard = video_error_keyboard() if video.content_type == "video" else photo_error_keyboard()
     next_keyboard.inline_keyboard.insert(0, [
@@ -4620,11 +4788,11 @@ async def btn_faq(message: Message, state: FSMContext):
         "<b>2. Как смотреть контент других авторов?</b>\n"
         "Нажми кнопку 🎬 Смотреть и выбери интересующий формат.\n\n"
         "<b>3. Что дает подписка VIP?</b>\n"
-        "Множитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. Размер скидки указан в разделе VIP.\n\n"
+        "Множитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. VIP оформляется в разделе 🛍 Магазин.\n\n"
         "<b>4. Что такое Секслото?</b>\n"
         "Это ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n"
-        "<b>5. Как общаться с ИИ?</b>\n"
-        f"Нажми кнопку 💋 ИИ-общение. Одно сообщение стоит {AI_ASSISTANT_PRICE} монет.\n\n"
+        "<b>5. Где пополнить баланс, оформить VIP или выбрать стиль?</b>\n"
+        "Всё находится в разделе 🛍 Магазин: монеты, VIP и стили профиля собраны в одном месте.\n\n"
         "<b>6. Как работают промокоды?</b>\n"
         "Ты можешь создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n"
         "<b>7. Как работает реферальная система?</b>\n"

@@ -46,20 +46,12 @@ services:
         value: "10.0"
       - key: VIP_PRICE_RUB
         value: "150.0"
-      - key: ENABLE_AI_ASSISTANT
-        sync: false
-      - key: AI_ASSISTANT_API_KEY
-        sync: false
-      - key: AI_ASSISTANT_BASE_URL
-        sync: false
-      - key: AI_ASSISTANT_MODEL
-        sync: false
       - key: ENABLE_ARCADE
         sync: false
       - key: ENABLE_LOTTERY
         sync: false
       - key: ENABLE_AUTO_MODERATION
         sync: false
-      # Остальные переменные (KATYA_*, ARCADE_*, LOG_CHAT_ID, PROVIDER_TOKEN, …)
+      # Остальные переменные (ARCADE_*, LOG_CHAT_ID, PROVIDER_TOKEN, …)
       # — см. .env.example. В Blueprint-режиме их нужно добавить в дашборд
       # или дописать сюда с sync: false.

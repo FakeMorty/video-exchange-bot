@@ -1542,9 +1542,10 @@ async def _apply_referral_milestones(session: AsyncSession, inviter: "User", act
 
 
 async def process_referral_reward(session: AsyncSession, referrer_id: int):
-    """Начисляем награду, если реферал посмотрел 5 видео.
+    """Начисляем награду за реферала после трёх просмотров видео или фото.
 
-    Считаются именно просмотры видео, а не фото и не любые записи VideoView.
+    Такой порог подтверждает реальную вовлечённость, но не заставляет нового
+    пользователя смотреть только видео и сохраняет защиту от пустых регистраций.
     """
     refs = (await session.execute(
         select(User).where(User.referred_by_user_id == referrer_id)
@@ -1556,10 +1557,10 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
             .join(Video, Video.id == VideoView.video_id)
             .where(
                 VideoView.user_id == ref.id,
-                Video.content_type == "video",
+                Video.content_type.in_(("video", "photo")),
             )
         )).scalar_one()
-        if views >= 5:
+        if views >= 3:
             active_referrals_total += 1
             inviter = await get_user_by_id(session, referrer_id)
             if inviter:

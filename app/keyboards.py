@@ -10,7 +10,7 @@ from aiogram.types import (
 BTN_WATCH      = "🎬 Смотреть"
 BTN_UPLOAD     = "📤 Загрузить"
 BTN_PROFILE    = "👤 Профиль"
-BTN_BUY        = "💳 Купить монеты"
+BTN_BUY        = "🛍 Магазин"
 BTN_OFFERS     = "📢 Офферы"
 BTN_REFERRALS  = "👥 Рефералы"
 BTN_ADMIN      = "🔧 Админка"
@@ -23,7 +23,6 @@ BTN_FEEDBACK   = "💬 Жалобы и предложения"
 BTN_LOTTERY    = "🎰 Секслото"
 BTN_LOOTBOXES  = "🎁 Лутбоксы"
 BTN_ARCADE     = "🚀 Космическая аркада"
-BTN_AI         = "💋 ИИ-Общение"
 BTN_RULES      = "📜 Правила"
 BTN_FAQ        = "ℹ️ FAQ / Помощь"
 
@@ -33,13 +32,11 @@ BTN_FAQ        = "ℹ️ FAQ / Помощь"
 # =========================
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     kb = [
-        [KeyboardButton(text=BTN_WATCH), KeyboardButton(text=BTN_AI)],
-        [KeyboardButton(text=BTN_UPLOAD), KeyboardButton(text=BTN_PROFILE)],
-        [KeyboardButton(text=BTN_BUY), KeyboardButton(text=BTN_PROMO)],
+        [KeyboardButton(text=BTN_WATCH), KeyboardButton(text=BTN_UPLOAD)],
+        [KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_BUY)],
         [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
         [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_TOPS)],
-        [KeyboardButton(text=BTN_FEEDBACK)],
-        [KeyboardButton(text=BTN_VIP), KeyboardButton(text=BTN_LEVEL)],
+        [KeyboardButton(text=BTN_PROMO), KeyboardButton(text=BTN_FEEDBACK)],
         [KeyboardButton(text=BTN_RULES), KeyboardButton(text=BTN_FAQ)],
     ]
     if is_admin:
@@ -132,8 +129,8 @@ def watch_choice_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     ])
 
 
-def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def video_rating_keyboard(video_id: int, *, is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
         [
             InlineKeyboardButton(text="1", callback_data=f"rate:{video_id}:1"),
             InlineKeyboardButton(text="2", callback_data=f"rate:{video_id}:2"),
@@ -147,19 +144,25 @@ def video_rating_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🚨 Жалоба", callback_data=f"report_video:{video_id}"),
         ],
         [InlineKeyboardButton(text="🚫 Заблокировать автора", callback_data=f"block_author:{video_id}")],
-        [InlineKeyboardButton(text="📝 Следующее", callback_data="watch_next")],
-    ])
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton(text="🗑 Удалить из ленты", callback_data=f"admin_remove_from_feed:{video_id}")])
+    rows.append([InlineKeyboardButton(text="📝 Следующее", callback_data="watch_next")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def photo_actions_keyboard(photo_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def photo_actions_keyboard(photo_id: int, *, is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
         [InlineKeyboardButton(text="😀 Реакции", callback_data=f"reactions:{photo_id}")],
         [
             InlineKeyboardButton(text="🚨 Жалоба", callback_data=f"report_video:{photo_id}"),
             InlineKeyboardButton(text="🚫 Блок автора", callback_data=f"block_author:{photo_id}"),
         ],
-        [InlineKeyboardButton(text="📝 Следующее фото", callback_data="watch_next_photo")],
-    ])
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton(text="🗑 Удалить из ленты", callback_data=f"admin_remove_from_feed:{photo_id}")])
+    rows.append([InlineKeyboardButton(text="📝 Следующее фото", callback_data="watch_next_photo")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # =========================

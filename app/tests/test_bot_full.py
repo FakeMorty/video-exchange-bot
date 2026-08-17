@@ -24,7 +24,7 @@ from app.services import (
 )
 from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from app.models import Base, User, KatyaChat
+from app.models import Base, User
 import time
 from app.models import Base, User
 from app.models import Base, User, Payment
@@ -205,137 +205,6 @@ async def test_admin_cannot_create_negative_balance_or_zero_change(db_session):
     await db_session.refresh(target)
     assert target.balance == Decimal("10")
     assert (await db_session.execute(select(BalanceLog))).scalars().all() == []
-
-
-# ══════════════════════════════════════════════════════════════
-#  был файл: app/tests/test_ai_assistant_custom_chat.py
-# ══════════════════════════════════════════════════════════════
-
-class DummyState_ai_assistant_custom_chat:
-    def __init__(self, data=None):
-        self.data = data or {}
-        self.state = None
-
-    async def get_data(self):
-        return dict(self.data)
-
-    async def update_data(self, **kwargs):
-        self.data.update(kwargs)
-
-    async def set_state(self, value):
-        self.state = value
-
-
-class DummyMessage_ai_assistant_custom_chat:
-    def __init__(self, text, user_id):
-        self.text = text
-        self.from_user = SimpleNamespace(id=user_id)
-        self.answers = []
-
-    async def answer(self, text, **kwargs):
-        self.answers.append((text, kwargs))
-
-
-@pytest.mark.asyncio
-async def test_custom_named_chat_keeps_selected_character(monkeypatch):
-    import app.ai_assistant as ai_assistant
-
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    monkeypatch.setattr(ai_assistant, "async_session", Session)
-
-    async with Session() as session:
-        user = User(telegram_id=8001, balance=Decimal("100.00"), nickname_set=True)
-        session.add(user)
-        await session.commit()
-
-    state = DummyState_ai_assistant_custom_chat({"waiting_chat_name": True, "selected_char": "sofa"})
-    message = DummyMessage_ai_assistant_custom_chat("Мой кастомный чат", 8001)
-
-    await ai_assistant.katya_menu_message(message, state)
-
-    async with Session() as session:
-        created_chat = (await session.execute(select(KatyaChat))).scalar_one()
-        assert created_chat.character == "sofa"
-        assert created_chat.title == "Мой кастомный чат"
-
-    assert state.data["selected_char"] == "sofa"
-    assert any("Чат «Мой кастомный чат»" in text for text, _ in message.answers)
-
-    await engine.dispose()
-
-
-# ══════════════════════════════════════════════════════════════
-#  был файл: app/tests/test_ai_daily_limit_refund.py
-# ══════════════════════════════════════════════════════════════
-
-class DummyState_ai_daily_limit_refund:
-    def __init__(self):
-        self.data = {}
-
-    async def get_data(self):
-        return dict(self.data)
-
-
-class DummyBot:
-    async def send_chat_action(self, *args, **kwargs):
-        return None
-
-
-class DummyMessage_ai_daily_limit_refund:
-    def __init__(self, user_id, text):
-        self.from_user = SimpleNamespace(id=user_id)
-        self.text = text
-        self.bot = DummyBot()
-        self.answers = []
-
-    async def answer(self, text, **kwargs):
-        self.answers.append((text, kwargs))
-
-
-@pytest.mark.asyncio
-async def test_ai_api_failure_refunds_balance_and_releases_daily_limit(monkeypatch):
-    import app.ai_assistant as ai
-
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    monkeypatch.setattr(ai, "async_session", Session)
-    monkeypatch.setattr(ai, "call_katya", lambda *args, **kwargs: __import__('asyncio').sleep(0, result=None))
-    monkeypatch.setattr(ai, "_append_history", lambda *args, **kwargs: __import__('asyncio').sleep(0))
-    monkeypatch.setattr(ai, "_get_history", lambda *args, **kwargs: __import__('asyncio').sleep(0, result=[]))
-
-    user_id = 9201
-    ai._user_daily_count[user_id] = ai.AI_ASSISTANT_DAILY_LIMIT - 1
-    ai._user_daily_reset[user_id] = time.monotonic()
-    ai._user_last_ts.pop(user_id, None)
-
-    async with Session() as session:
-        user = User(telegram_id=user_id, balance=Decimal("100.00"), nickname_set=True, display_name="Tester")
-        session.add(user)
-        await session.commit()
-
-    message = DummyMessage_ai_daily_limit_refund(user_id, "Привет")
-    state = DummyState_ai_daily_limit_refund()
-
-    await ai.katya_chat_message(message, state)
-
-    async with Session() as session:
-        db_user = (await session.execute(select(User).where(User.telegram_id == user_id))).scalar_one()
-        assert db_user.balance == Decimal("100.00")
-
-    assert ai._user_daily_count[user_id] == ai.AI_ASSISTANT_DAILY_LIMIT - 1
-    assert message.answers
-    assert "связь барахлит" in message.answers[-1][0]
-
-    await engine.dispose()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1517,7 +1386,6 @@ async def test_on_startup_only_runs_initialization_steps_for_sqlite():
         patch.object(main, "init_db", AsyncMock()) as init_db,
         patch("app.utils.db_fix.fix_database", AsyncMock()) as fix_database,
         patch.object(main, "_notify_admins_started", AsyncMock()) as notify_admins,
-        patch("app.ai_assistant.load_sticker_set", AsyncMock()) as load_sticker_set,
         patch.object(main.web, "AppRunner") as app_runner_cls,
         patch.object(main.asyncio, "create_task") as create_task,
     ):
@@ -1526,7 +1394,6 @@ async def test_on_startup_only_runs_initialization_steps_for_sqlite():
     init_db.assert_awaited_once()
     fix_database.assert_awaited_once()
     notify_admins.assert_awaited_once_with(app["bot"])
-    load_sticker_set.assert_awaited_once_with(app["bot"])
     app_runner_cls.assert_not_called()
     create_task.assert_not_called()
 
@@ -1542,7 +1409,6 @@ async def test_on_startup_uses_alembic_for_postgres_without_init_db():
         patch.object(main, "init_db", AsyncMock()) as init_db,
         patch("app.utils.db_fix.fix_database", AsyncMock()) as fix_database,
         patch.object(main, "_notify_admins_started", AsyncMock()) as notify_admins,
-        patch("app.ai_assistant.load_sticker_set", AsyncMock()) as load_sticker_set,
         patch.object(main.asyncio, "to_thread", AsyncMock()) as to_thread,
     ):
         await main.on_startup(app)
@@ -1551,7 +1417,6 @@ async def test_on_startup_uses_alembic_for_postgres_without_init_db():
     to_thread.assert_awaited_once()
     fix_database.assert_awaited_once()
     notify_admins.assert_awaited_once_with(app["bot"])
-    load_sticker_set.assert_awaited_once_with(app["bot"])
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1933,7 +1798,7 @@ async def test_rental_rejection_refunds_once_and_approval_publishes_ad():
 # ══════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
-async def test_referral_reward_requires_video_views_not_photo_views():
+async def test_referral_reward_accepts_three_video_or_photo_views():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     Session = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -1947,7 +1812,7 @@ async def test_referral_reward_requires_video_views_not_photo_views():
         await session.flush()
         referred.referred_by_user_id = inviter.id
 
-        for idx in range(5):
+        for idx in range(2):
             photo = Video(
                 uploader_user_id=inviter.id,
                 content_type="photo",
@@ -1962,10 +1827,11 @@ async def test_referral_reward_requires_video_views_not_photo_views():
 
         await process_referral_reward(session, inviter.id)
         await session.refresh(inviter)
+        # Двух просмотров недостаточно для защиты от пустых регистраций.
         assert inviter.balance == Decimal("0.00")
 
         videos = []
-        for idx in range(5):
+        for idx in range(1):
             video = Video(
                 uploader_user_id=inviter.id,
                 content_type="video",
@@ -2470,7 +2336,7 @@ async def test_referred_user_gets_bonus_and_inviter_counter_increments():
         )
 
         assert created is True
-        assert referred.balance == Decimal("160.00")
+        assert referred.balance == Decimal("170.00")
 
         await session.refresh(inviter)
         assert inviter.referrals_count == 1
@@ -3631,3 +3497,41 @@ async def test_blocked_authors_support_reasons_search_and_bulk_unblock(db_sessio
     assert await unblock_all_authors(db_session, viewer.id) == 2
     assert await count_blocked_authors(db_session, viewer.id) == 0
     assert await count_blocked_authors(db_session, another_viewer.id) == 1
+
+
+# ══════════════════════════════════════════════════════════════
+#  Релиз: единый магазин и админ-действия в ленте
+# ══════════════════════════════════════════════════════════════
+
+def test_main_menu_uses_single_store_and_hides_retired_ai_entry():
+    from app.keyboards import BTN_BUY, main_menu
+
+    labels = [button.text for row in main_menu().keyboard for button in row]
+    assert BTN_BUY == "🛍 Магазин"
+    assert "🛍 Магазин" in labels
+    assert "💋 ИИ-Общение" not in labels
+    assert "👑 VIP" not in labels
+
+
+def test_content_actions_show_remove_button_only_to_admins():
+    from app.keyboards import photo_actions_keyboard, video_rating_keyboard
+
+    viewer_callbacks = [
+        button.callback_data
+        for row in video_rating_keyboard(42).inline_keyboard
+        for button in row
+    ]
+    admin_video_callbacks = [
+        button.callback_data
+        for row in video_rating_keyboard(42, is_admin=True).inline_keyboard
+        for button in row
+    ]
+    admin_photo_callbacks = [
+        button.callback_data
+        for row in photo_actions_keyboard(43, is_admin=True).inline_keyboard
+        for button in row
+    ]
+
+    assert "admin_remove_from_feed:42" not in viewer_callbacks
+    assert "admin_remove_from_feed:42" in admin_video_callbacks
+    assert "admin_remove_from_feed:43" in admin_photo_callbacks

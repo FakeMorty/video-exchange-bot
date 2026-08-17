@@ -75,14 +75,15 @@ CONTENT_QUALITY_MIN_AVG_RATING = _get_float("CONTENT_QUALITY_MIN_AVG_RATING", 4.
 CONTENT_QUALITY_MIN_RATINGS = _get_int("CONTENT_QUALITY_MIN_RATINGS", 5)
 CONTENT_QUALITY_BONUS = _get_float("CONTENT_QUALITY_BONUS", 10.0)
 
-# Рефералы
-REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 20.0)
-REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 10.0)
+# Рефералы: награда выдаётся после подтверждённой активности друга,
+# а не только за регистрацию — это делает систему щедрее и устойчивее к накрутке.
+REFERRAL_REWARD_INVITER = _get_float("REFERRAL_REWARD_INVITER", 35.0)
+REFERRAL_REWARD_NEW_USER = _get_float("REFERRAL_REWARD_NEW_USER", 20.0)
 REFERRAL_MILESTONES = {
-    1: {"type": "coins", "amount": 20.0, "desc": "20 монет"},
-    3: {"type": "coins", "amount": 30.0, "desc": "30 монет"},
-    5: {"type": "coins", "amount": 50.0, "desc": "50 монет"},
-    10: {"type": "coins", "amount": 100.0, "desc": "100 монет"},
+    1: {"type": "coins", "amount": 25.0, "desc": "25 монет"},
+    3: {"type": "coins", "amount": 60.0, "desc": "60 монет"},
+    5: {"type": "coins", "amount": 120.0, "desc": "120 монет"},
+    10: {"type": "coins", "amount": 300.0, "desc": "300 монет"},
 }
 
 # Курс Stars → монеты (заградительный: 100 монет = 30 Stars)
@@ -321,28 +322,6 @@ ENABLE_AUTO_MODERATION = _get_bool("ENABLE_AUTO_MODERATION", True)
 ENABLE_ADMIN_FREE = _get_bool("ENABLE_ADMIN_FREE", False)
 
 # ============================
-# AI-АССИСТЕНТ (DeepSeek V4 Flash via OpenModel)
-# ============================
-ENABLE_AI_ASSISTANT = _get_bool("ENABLE_AI_ASSISTANT", True)
-AI_ASSISTANT_API_KEY = _get_str("AI_ASSISTANT_API_KEY", "")
-AI_ASSISTANT_BASE_URL = _get_str("AI_ASSISTANT_BASE_URL", "https://api.openmodel.ai")
-AI_ASSISTANT_MODEL = _get_str("AI_ASSISTANT_MODEL", "deepseek-v4-flash")
-AI_ASSISTANT_MAX_TOKENS = _get_int("AI_ASSISTANT_MAX_TOKENS", 2048)
-AI_ASSISTANT_COOLDOWN_SEC = _get_int("AI_ASSISTANT_COOLDOWN_SEC", 5)
-AI_ASSISTANT_HISTORY_LIMIT = _get_int("AI_ASSISTANT_HISTORY_LIMIT", 10)  # пар сообщений
-AI_ASSISTANT_DAILY_LIMIT = _get_int("AI_ASSISTANT_DAILY_LIMIT", 50)
-AI_ASSISTANT_PRICE = _get_int("AI_ASSISTANT_PRICE", 5)
-
-# Стикерпак Кати, Софы и Сани
-KATYA_STICKER_PACK = _get_str("KATYA_STICKER_PACK", "katya_by_Wseksbot")
-SOFA_STICKER_PACK = _get_str("SOFA_STICKER_PACK", "sofa_by_Wseksbot")
-SANYA_STICKER_PACK = _get_str("SANYA_STICKER_PACK", "sanya_by_Wseksbot")
-
-# Лимиты чатов с Катей
-KATYA_MAX_CHATS = _get_int("KATYA_MAX_CHATS", 5)
-KATYA_MAX_CHATS_VIP = _get_int("KATYA_MAX_CHATS_VIP", 10)
-
-# ============================
 # ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА (СЕКРЕТНОЕ СЛОВО)
 # ============================
 # День недели (0 - Понедельник, 1 - Вторник ... 6 - Воскресенье)
@@ -364,16 +343,12 @@ DEFAULT_PROMO_MESSAGES = [
         "text": '🎰 <b>Секслото — розыгрыш монет</b>\n\nНовый раунд уже открыт! Купи билет за монеты и следи за розыгрышем в прямом эфире. Размер призового фонда зависит от количества купленных билетов. 🎡\n\n👉 Зайди в меню <b>🎰 Секслото</b>'
     },
     {
-        "title": "ИИ-Общение",
-        "text": '💋 <b>Виртуальные подруги заждались тебя...</b>\n\nСаня, Катя и Софа скучают и хотят поболтать. Они подготовили новые пикантные темы для беседы и сочные стикеры! 😏🤸‍♀️\n\n👉 Нажми кнопку <b>💋 ИИ-Общение</b> в главном меню!'
-    },
-    {
         "title": "Промокоды",
         "text": '🎟 <b>Создавай свои промокоды за Stars!</b>\n\nХочешь порадовать подписчиков своего канала или друзей? Создай свой уникальный промокод на любую сумму монет и подари его им! 🎁\n\n👉 Перейди в меню <b>🎟 Промокоды ➔ 🎟 Создать промокод</b>'
     },
     {
         "title": "VIP-подписка",
-        "text": '👑 <b>Получи статус VIP-пользователя!</b>\n\nVIP даёт множитель начисления монет ×2, скидку на просмотр видео, просмотр фото без дневного лимита и дополнительные бонусы в экономике. ⭐\n\n👉 Перейди в меню <b>👑 VIP</b>!'
+        "text": '👑 <b>Получи статус VIP-пользователя!</b>\n\nVIP даёт множитель начисления монет ×2, скидку на просмотр видео, просмотр фото без дневного лимита и дополнительные бонусы в экономике. ⭐\n\n👉 Открой <b>🛍 Магазин</b> в главном меню!'
     },
     {
         "title": "Новый контент",
@@ -421,7 +396,7 @@ DEFAULT_PROMO_MESSAGES = [
     },
     {
         "title": "Пополнение баланса",
-        "text": '💳 <b>Пополнение баланса</b>\n\nНужно больше монет для промокодов или общения? Выбери пакет и оплатите его через Telegram Stars. ⚡\n\n👉 Нажми кнопку <b>💳 Купить монеты</b>!'
+        "text": '🛍 <b>Магазин</b>\n\nПополняй баланс, оформляй VIP и выбирай стили профиля в одном разделе. ⚡\n\n👉 Нажми кнопку <b>🛍 Магазин</b>!'
     },
     {
         "title": "Отзыв",
