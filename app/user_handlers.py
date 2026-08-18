@@ -66,7 +66,7 @@ from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
     DailyQuestProgress, GameHistory, Offer, Payment, Promocode,
-    LootboxOpen, LotteryTicket, UserActionLog,
+    LootboxOpen, LotteryTicket, UserActionLog, DonationAlertOrder,
     utc_now,
 )
 from app.services import (
@@ -108,12 +108,13 @@ from app.services import (
     count_blocked_authors, unblock_user, unblock_all_authors,
     is_starter_pack_eligible, count_views_today, maybe_send_zalip_upsell,
     check_daily_video_upload_possible,
+    create_donationalerts_order,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
     main_menu,
     video_rating_keyboard, photo_actions_keyboard,
-    watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard,
+    watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard, donationalerts_order_keyboard,
     offers_list_keyboard, games_menu_keyboard,
     tops_menu_keyboard,
     reaction_menu_keyboard,
@@ -1098,23 +1099,22 @@ async def show_vip(message: Message, state: FSMContext):
                 if not sale_badge and sale and sale.applies_to in ("all", "vip"):
                     sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
                 
-                from app.config import DONATION_ALERTS_URL, VIP_PRICE_RUB
+                from app.config import VIP_PRICE_RUB
                 await message.answer(
-                    f"👑 <b>VIP статус (DonationAlerts)</b>\n\n"
+                    f"👑 <b>VIP статус через DonationAlerts</b>\n\n"
                     f"💰 Стоимость на 30 дней: <b>{int(VIP_PRICE_RUB)} руб.</b>{sale_badge}{admin_free_badge}\n\n"
                     f"Привилегии:\n"
                     f"• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
                     f"• 🎬 Просмотр фото без дневного лимита\n"
                     f"• ⭐️ Скидка {vip_discount_percent}% на просмотр\n"
                     f"• 👑 Эксклюзивная плашка VIP в профиле\n\n"
-                    f"----------------------------------\n"
-                    f"📌 <b>ИНСТРУКЦИЯ ПО ОПЛАТЕ:</b>\n"
-                    f"1️⃣ Нажмите кнопку <b>«💳 Купить VIP (DonationAlerts)»</b> ниже.\n"
-                    f"2️⃣ Введите сумму <b>{int(VIP_PRICE_RUB)}</b> руб.\n"
-                    f"3️⃣ В поле <b>«Имя»</b> (или «Сообщение») напишите:\n"
-                    f"<code>{user.telegram_id} vip</code> <i>(нажмите, чтобы скопировать)</i>",
+                    "Нажмите кнопку ниже: бот создаст одноразовый код, который нужно вставить "
+                    "в поле «Сообщение» DonationAlerts вместе с точной суммой.",
                     parse_mode="HTML",
-                    reply_markup=vip_buy_keyboard(price=vip_price, user_id=user.telegram_id)
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👑 Получить код VIP за 150 ₽", callback_data="da_order:vip_150")],
+                        [InlineKeyboardButton(text=f"⭐️ Резерв: VIP за {vip_price} Stars", callback_data="buy_vip")],
+                    ])
                 )
     except Exception as e:
         import traceback
@@ -2115,7 +2115,17 @@ async def cb_store_vip(callback: CallbackQuery):
     await callback.answer()
 
 
+DA_ORDER_PACKAGES = {
+    "coins_10": {"amount": Decimal("10"), "coins": Decimal("100"), "title": "100 монет"},
+    "coins_50": {"amount": Decimal("50"), "coins": Decimal("500"), "title": "500 монет"},
+    "coins_100": {"amount": Decimal("100"), "coins": Decimal("1000"), "title": "1 000 монет"},
+    "vip_150": {"amount": Decimal("150"), "coins": Decimal("0"), "reward_type": "vip", "title": "VIP на 30 дней"},
+    "coins_500": {"amount": Decimal("500"), "coins": Decimal("5000"), "title": "5 000 монет"},
+}
+
+
 async def _show_legacy_donationalerts(message: Message, state: FSMContext):
+    """Показывает выбор пакета и создаёт код только после явного выбора."""
     await state.clear()
     try:
         async with async_session() as session:
@@ -2125,36 +2135,72 @@ async def _show_legacy_donationalerts(message: Message, state: FSMContext):
             if not await require_nickname(message, user):
                 return
 
-        from app.config import DONATION_ALERTS_URL, RUB_TO_COINS_RATE, VIP_PRICE_RUB
-
         text = (
-            f"💳 <b>Пополнение баланса и услуг (DonationAlerts)</b>\n\n"
-            f"Оплата принимается моментально с банковских карт, СБП и кошельков через DonationAlerts!\n\n"
-            f"💰 <b>Тарифы и бонусы (1 руб = {int(RUB_TO_COINS_RATE)} монет):</b>\n"
-            f"• <b>10 руб.</b> ➔ <b>100 монет</b> 🪙\n"
-            f"• <b>50 руб.</b> ➔ <b>500 монет</b> 🪙 *(Старт-пак)*\n"
-            f"• <b>100 руб.</b> ➔ <b>1 000 монет</b> 🪙\n"
-            f"• <b>150 руб.</b> ➔ <b>👑 VIP-подписка на 30 дней</b>\n"
-            f"• <b>500 руб.</b> ➔ <b>5 000 монет</b> 🪙\n\n"
-            f"----------------------------------\n"
-            f"📌 <b>ИНСТРУКЦИЯ ПО ОПЛАТЕ:</b>\n"
-            f"1️⃣ Нажмите кнопку <b>«💳 Перейти к оплате (DonationAlerts)»</b> ниже.\n"
-            f"2️⃣ Укажите нужную сумму.\n"
-            f"3️⃣ В поле <b>«Имя»</b> (или «Сообщение») на странице вставьте ваш Telegram ID:\n"
-            f"<code>{user.telegram_id}</code> <i>(нажмите на ID, чтобы скопировать)</i>\n\n"
-            f"После оплаты система моментально зачислит монеты/VIP на ваш аккаунт!"
+            "💳 <b>Пополнение через DonationAlerts</b>\n\n"
+            "Выберите фиксированный пакет. После выбора бот создаст одноразовый "
+            "код заказа: вставьте <b>только этот код</b> в поле «Сообщение» на странице оплаты. "
+            "Так платёж автоматически и безопасно привяжется к вашему аккаунту.\n\n"
+            "⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="10 ₽ — 100 монет", callback_data="da_order:coins_10")],
+            [InlineKeyboardButton(text="50 ₽ — 500 монет", callback_data="da_order:coins_50")],
+            [InlineKeyboardButton(text="100 ₽ — 1 000 монет", callback_data="da_order:coins_100")],
+            [InlineKeyboardButton(text="150 ₽ — VIP на 30 дней", callback_data="da_order:vip_150")],
+            [InlineKeyboardButton(text="500 ₽ — 5 000 монет", callback_data="da_order:coins_500")],
+            [InlineKeyboardButton(text="🌐 Telegram Stars (резерв)", callback_data="show_stars_menu")],
+        ])
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    except Exception as e:
+        logger.exception("Error while showing DonationAlerts packages")
+        await message.answer(f"⚠️ Ошибка при получении пакетов пополнения:\n<code>{escape(str(e))}</code>")
+
+
+@router.callback_query(F.data.startswith("da_order:"))
+async def cb_create_donationalerts_order(callback: CallbackQuery):
+    package_key = callback.data.split(":", 1)[1]
+    package = DA_ORDER_PACKAGES.get(package_key)
+    if not package:
+        await callback.answer("Пакет не найден.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        order = await create_donationalerts_order(
+            session,
+            user_id=user.id,
+            amount_rub=package["amount"],
+            reward_type=package.get("reward_type", "coins"),
+            coins_amount=package["coins"],
         )
 
-        await message.answer(
-            text,
-            parse_mode="HTML",
-            reply_markup=buy_coins_keyboard(user_id=user.telegram_id)
-        )
-    except Exception as e:
-        import traceback
-        err_detail = traceback.format_exc()
-        logger.error(f"Error in btn_buy: {err_detail}")
-        await message.answer(f"⚠️ Ошибка при получении пакетов пополнения:\n<code>{escape(str(e))}</code>")
+    expires_at = order.expires_at.strftime("%H:%M")
+    await callback.message.answer(
+        f"✅ <b>Заказ создан: {package['title']}</b>\n\n"
+        f"Сумма: <b>{package['amount']:.0f} ₽</b>\n"
+        f"Код заказа: <code>{order.order_code}</code>\n\n"
+        "1️⃣ Нажмите «Перейти к оплате».\n"
+        "2️⃣ Укажите точную сумму заказа.\n"
+        "3️⃣ Вставьте код в поле «Сообщение» DonationAlerts.\n\n"
+        f"Код действует до <b>{expires_at}</b>. После подтверждённой оплаты награда зачислится автоматически.",
+        parse_mode="HTML",
+        reply_markup=donationalerts_order_keyboard(order.order_code),
+    )
+    await callback.answer("Код заказа создан!")
+
+
+@router.callback_query(F.data.startswith("da_copy_order:"))
+async def cb_copy_donationalerts_order(callback: CallbackQuery):
+    code = callback.data.split(":", 1)[1]
+    await callback.message.answer(
+        f"📋 <b>Ваш код заказа DonationAlerts:</b>\n\n<code>{code}</code>\n\n"
+        "Скопируйте его и вставьте в поле «Сообщение» на странице оплаты.",
+        parse_mode="HTML",
+    )
+    await callback.answer("Код отправлен отдельным сообщением.")
 
 
 @router.callback_query(F.data.startswith("buy:"))
@@ -2243,22 +2289,43 @@ async def cb_da_check_payment(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
-        
-        payments = (await session.execute(
+
+        order = (await session.execute(
+            select(DonationAlertOrder)
+            .where(DonationAlertOrder.user_id == user.id)
+            .order_by(DonationAlertOrder.created_at.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+        if order:
+            if order.status == "completed":
+                await callback.answer("✅ Заказ оплачен и награда уже зачислена!", show_alert=True)
+                return
+            if order.status == "pending" and order.expires_at >= utc_now():
+                await callback.answer(
+                    f"⏳ Заказ {order.order_code} ждёт подтверждения DonationAlerts. "
+                    "Проверьте точную сумму и код в поле «Сообщение».",
+                    show_alert=True,
+                )
+                return
+            if order.status == "pending":
+                order.status = "expired"
+                await session.commit()
+            await callback.answer("⌛ Срок последнего заказа истёк. Создайте новый пакет в магазине.", show_alert=True)
+            return
+
+        payment = (await session.execute(
             select(Payment)
             .where(Payment.user_id == user.id, Payment.payload.startswith("donationalerts_"))
             .order_by(Payment.created_at.desc())
             .limit(1)
-        )).scalars().all()
-        
-        if payments:
-            p = payments[0]
-            await callback.answer(f"✅ Последний платёж от {p.created_at.strftime('%d.%m %H:%M')} успешно зачислен!", show_alert=True)
-        else:
+        )).scalar_one_or_none()
+        if payment:
             await callback.answer(
-                f"ℹ️ Платёж пока не поступил.\n\nУбедитесь, что при отправке доната на DonationAlerts вы указали ваш ID ({user.telegram_id}) в поле «Ваше сообщение»!",
-                show_alert=True
+                f"✅ Последний платёж от {payment.created_at.strftime('%d.%m %H:%M')} успешно зачислен!",
+                show_alert=True,
             )
+        else:
+            await callback.answer("ℹ️ У вас пока нет созданного заказа DonationAlerts.", show_alert=True)
 
 
 @router.callback_query(F.data == "show_stars_menu")

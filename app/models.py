@@ -276,6 +276,47 @@ class Payment(Base):
     user: Mapped["User"] = relationship(back_populates="payments")
 
 
+class DonationAlertOrder(Base):
+    """Ожидающий платёж DonationAlerts, привязанный к одному пользователю и пакету."""
+
+    __tablename__ = "donationalerts_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    order_code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    expected_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    reward_type: Mapped[str] = mapped_column(String(20), nullable=False, default="coins")
+    coins_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    donation_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    matched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship()
+
+
+class DonationAlertException(Base):
+    """Неоднозначный донат, который нельзя выдавать автоматически."""
+
+    __tablename__ = "donationalerts_exceptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    donation_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="RUB")
+    donor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    suggested_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    suggested_user: Mapped["User | None"] = relationship(foreign_keys=[suggested_user_id])
+
+
 class Offer(Base):
     __tablename__ = "offers"
 

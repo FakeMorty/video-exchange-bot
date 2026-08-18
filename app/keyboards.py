@@ -356,6 +356,17 @@ def buy_coins_keyboard(packs: dict = None, user_id: int | None = None) -> Inline
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def donationalerts_order_keyboard(order_code: str) -> InlineKeyboardMarkup:
+    """Клавиатура после создания одноразового заказа DonationAlerts."""
+    from app.config import DONATION_ALERTS_URL
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Перейти к оплате (DonationAlerts)", url=DONATION_ALERTS_URL)],
+        [InlineKeyboardButton(text=f"📋 Скопировать код: {order_code}", callback_data=f"da_copy_order:{order_code}")],
+        [InlineKeyboardButton(text="🔄 Проверить зачисление", callback_data="da_check_payment")],
+        [InlineKeyboardButton(text="🛍 Выбрать другой пакет", callback_data="btn_buy_callback")],
+    ])
+
+
 def vip_buy_keyboard(price: int = 450, user_id: int | None = None) -> InlineKeyboardMarkup:
     from app.config import DONATION_ALERTS_URL
     buttons = [

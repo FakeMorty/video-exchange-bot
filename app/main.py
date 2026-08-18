@@ -1839,68 +1839,95 @@ async def auto_broadcast_worker(bot):
 
 
 async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
-    """Фоновый воркер автоматической синхронизации донатов DonationAlerts через API.
+    """Автоматическая синхронизация DonationAlerts.
 
-    Работает параллельно с Webhook: запрашивает новые донаты каждые 20 секунд.
-    Идемпотентен по payload = donationalerts_{donation_id} — двойное начисление невозможно.
+    Основной источник — private real-time канал Centrifugo. REST опрос раз в
+    минуту служит защитной сеткой для пропущенных событий и перезапусков.
+    Начисление возможно только при совпадении одноразового кода заказа и суммы.
     """
-    import asyncio
     import aiohttp
-    import re
-    from app.config import DONATION_ALERTS_CLIENT_SECRET
+    from app.config import (
+        ADMINS,
+        DONATION_ALERTS_ACCESS_TOKEN,
+        DONATION_ALERTS_CLIENT_ID,
+        DONATION_ALERTS_CLIENT_SECRET,
+        DONATION_ALERTS_REFRESH_TOKEN,
+        DONATION_ALERTS_SYNC_INTERVAL_SECONDS,
+    )
     from app.db import async_session
-    from app.services import process_donationalerts_donation
+    from app.donationalerts_client import DonationAlertsClient, reconnecting_realtime_events
+    from app.services import process_donationalerts_event
 
-    token = (DONATION_ALERTS_CLIENT_SECRET or "").strip()
-    if not token:
-        logger.info("DonationAlerts polling worker: DONATION_ALERTS_CLIENT_SECRET не задан.")
+    client = DonationAlertsClient(
+        client_id=DONATION_ALERTS_CLIENT_ID,
+        client_secret=DONATION_ALERTS_CLIENT_SECRET,
+        refresh_token=DONATION_ALERTS_REFRESH_TOKEN,
+        access_token=DONATION_ALERTS_ACCESS_TOKEN,
+    )
+    if not client.configured:
+        logger.info("DonationAlerts automation disabled: OAuth credentials are not configured.")
         return
 
-    logger.info("DonationAlerts polling worker запущен (авто-проверка каждые 20с).")
-    url = "https://www.donationalerts.com/api/v1/alerts/donations"
-    headers = {"Authorization": f"Bearer {token}"}
+    async def handle_event(event) -> None:
+        async with async_session() as session:
+            completed, result, exception = await process_donationalerts_event(
+                session,
+                donation_id=event.donation_id,
+                amount_rub=event.amount,
+                currency=event.currency,
+                message=event.message,
+                donor_name=event.username,
+                bot=bot,
+            )
+        if exception:
+            admin_text = (
+                "⚠️ <b>DonationAlerts: нужна сверка</b>\n\n"
+                f"Донат: <code>{exception.donation_id}</code>\n"
+                f"Сумма: <b>{exception.amount} {exception.currency}</b>\n"
+                f"Причина: <code>{exception.reason}</code>\n"
+                f"Сообщение: <code>{(exception.message or '—')[:180]}</code>"
+            )
+            for admin_id in ADMINS:
+                try:
+                    await bot.send_message(admin_id, admin_text, parse_mode="HTML")
+                except Exception:
+                    pass
+        elif completed:
+            logger.info("DonationAlerts payment %s completed: %s", event.donation_id, result)
 
-    while not stop_event.is_set():
-        try:
-            await asyncio.sleep(20)
-            if stop_event.is_set():
+    async def realtime_loop() -> None:
+        async for event in reconnecting_realtime_events(client, stop_event):
+            await handle_event(event)
+
+    realtime_task = asyncio.create_task(realtime_loop())
+    logger.info(
+        "DonationAlerts automation started: real-time events + REST reconciliation every %ss.",
+        DONATION_ALERTS_SYNC_INTERVAL_SECONDS,
+    )
+    try:
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=DONATION_ALERTS_SYNC_INTERVAL_SECONDS)
                 break
+            except asyncio.TimeoutError:
+                pass
 
-            async with aiohttp.ClientSession() as http_session:
-                async with http_session.get(url, headers=headers, timeout=10) as resp:
-                    if resp.status == 200:
-                        json_data = await resp.json()
-                        donations = json_data.get("data", [])
-                        for item in donations:
-                            da_id = item.get("id")
-                            amount = item.get("amount") or item.get("amount_main") or 0
-                            message = item.get("message") or item.get("comment") or ""
-                            username = item.get("username") or item.get("name") or ""
-                            
-                            if not da_id or not amount:
-                                continue
-
-                            full_text = f"{message} {username}".strip()
-                            matches = re.findall(r"\b(\d{6,12})\b", full_text)
-                            if not matches:
-                                continue
-                            target_user_id = int(matches[0])
-
-                            async with async_session() as session:
-                                await process_donationalerts_donation(
-                                    session=session,
-                                    donation_id=str(da_id),
-                                    amount_rub=amount,
-                                    telegram_user_id=target_user_id,
-                                    comment=full_text,
-                                    bot=bot,
-                                )
-                    elif resp.status in (401, 403):
-                        logger.warning("DonationAlerts polling worker: Токен требует обновления.")
-                        await asyncio.sleep(300)
-        except Exception as e:
-            logger.warning(f"DonationAlerts polling worker error: {e}")
-            await asyncio.sleep(30)
+            try:
+                async with aiohttp.ClientSession() as http_session:
+                    access_token = await client.get_access_token(http_session)
+                    donations = await client.list_donations(http_session, access_token)
+                for event in donations:
+                    await handle_event(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("DonationAlerts REST reconciliation failed: %s", exc)
+    finally:
+        realtime_task.cancel()
+        try:
+            await realtime_task
+        except asyncio.CancelledError:
+            pass
 
 
 # =========================
@@ -3595,71 +3622,18 @@ async def api_arcade_top(request: web.Request) -> web.Response:
 
 
 async def donationalerts_webhook_handler(request: web.Request) -> web.Response:
-    """Webhook для приема уведомлений о донатах от DonationAlerts."""
-    try:
-        data = None
-        if request.can_read_body:
-            try:
-                data = await request.json()
-            except Exception:
-                try:
-                    data = dict(await request.post())
-                except Exception:
-                    pass
-        if not data:
-            return web.json_response({"ok": False, "error": "empty_payload"}, status=400)
+    """Совместимый ответ для старого URL без обработки непроверенного JSON.
 
-        donation_id = (
-            data.get("id") or data.get("donation_id") or
-            data.get("id_donation") or data.get("alert_id") or
-            data.get("id_alert")
-        )
-        amount = (
-            data.get("amount") or data.get("amount_main") or
-            data.get("sum") or data.get("amount_formatted")
-        )
-        message = data.get("message") or data.get("comment") or data.get("message_text") or ""
-        username = data.get("username") or data.get("name") or data.get("user") or ""
-
-        if not donation_id or amount is None:
-            return web.json_response({"ok": False, "error": "missing_required_fields"}, status=400)
-
-        import re
-        if isinstance(amount, str):
-            match_num = re.search(r"(\d+(?:\.\d+)?)", amount)
-            amount_val = float(match_num.group(1)) if match_num else 0.0
-        else:
-            amount_val = float(amount)
-
-        # Поиск Telegram ID в полях "Имя" или "Сообщение" (6-12 цифр)
-        full_text = f"{message} {username}".strip()
-        matches = re.findall(r"\b(\d{6,12})\b", full_text)
-        target_user_id = None
-        if matches:
-            target_user_id = int(matches[0])
-
-        if not target_user_id:
-            logger.warning(f"DonationAlerts webhook: donation #{donation_id} on {amount_val} RUB has no Telegram user ID in text '{full_text}'")
-            return web.json_response({"ok": True, "notice": "user_id_not_found_in_text"})
-
-        bot = request.app.get("bot")
-        from app.db import async_session
-        from app.services import process_donationalerts_donation
-
-        async with async_session() as session:
-            ok, res_msg = await process_donationalerts_donation(
-                session=session,
-                donation_id=str(donation_id),
-                amount_rub=amount_val,
-                telegram_user_id=target_user_id,
-                comment=full_text,
-                bot=bot,
-            )
-
-        return web.json_response({"ok": ok, "result": res_msg})
-    except Exception as e:
-        logger.exception("Error processing DonationAlerts webhook")
-        return web.json_response({"ok": False, "error": str(e)}, status=500)
+    Официальный API DonationAlerts подтверждает REST/OAuth и private-каналы
+    Centrifugo. Старый публичный endpoint не верифицировал источник события,
+    поэтому больше никогда не начисляет монеты или VIP.
+    """
+    logger.warning("Ignored legacy DonationAlerts webhook request from %s", request.remote)
+    return web.json_response({
+        "ok": False,
+        "error": "legacy_webhook_disabled",
+        "message": "Use DonationAlerts OAuth synchronization instead.",
+    }, status=410)
 
 
 async def main():

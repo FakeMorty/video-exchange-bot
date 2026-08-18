@@ -3535,3 +3535,96 @@ def test_content_actions_show_remove_button_only_to_admins():
     assert "admin_remove_from_feed:42" not in viewer_callbacks
     assert "admin_remove_from_feed:42" in admin_video_callbacks
     assert "admin_remove_from_feed:43" in admin_photo_callbacks
+
+
+@pytest.mark.asyncio
+async def test_donationalerts_order_matching_and_exception_queue():
+    from unittest.mock import AsyncMock
+    from app.models import Base, User, DonationAlertOrder, DonationAlertException
+    from app.services import create_donationalerts_order, process_donationalerts_event
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        user = User(telegram_id=991001, balance=Decimal("0"), nickname_set=True, display_name="OrderUser")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        order = await create_donationalerts_order(
+            session,
+            user_id=user.id,
+            amount_rub=100,
+            coins_amount=1000,
+        )
+        assert order.order_code.startswith("DA-")
+        assert order.status == "pending"
+
+        bot = AsyncMock()
+        completed, _, exception = await process_donationalerts_event(
+            session,
+            donation_id="order_match_1",
+            amount_rub=100,
+            currency="RUB",
+            message=f"оплата {order.order_code}",
+            donor_name="tester",
+            bot=bot,
+        )
+        assert completed is True
+        assert exception is None
+
+        stored_order = await session.get(DonationAlertOrder, order.id)
+        assert stored_order.status == "completed"
+        refreshed_user = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        assert refreshed_user.balance == Decimal("1000.00")
+
+        mismatch_order = await create_donationalerts_order(
+            session,
+            user_id=user.id,
+            amount_rub=50,
+            coins_amount=500,
+        )
+        completed_mismatch, _, mismatch_exception = await process_donationalerts_event(
+            session,
+            donation_id="order_mismatch_1",
+            amount_rub=51,
+            currency="RUB",
+            message=mismatch_order.order_code,
+            donor_name="tester",
+            bot=bot,
+        )
+        assert completed_mismatch is False
+        assert mismatch_exception is not None
+        assert mismatch_exception.reason == "amount_mismatch"
+
+        completed_missing, _, missing_exception = await process_donationalerts_event(
+            session,
+            donation_id="order_missing_1",
+            amount_rub=50,
+            currency="RUB",
+            message="без кода",
+            donor_name="tester",
+            bot=bot,
+        )
+        assert completed_missing is False
+        assert missing_exception is not None
+        assert missing_exception.reason == "order_code_missing"
+        queued = (await session.execute(select(DonationAlertException))).scalars().all()
+        assert len(queued) == 2
+
+    await engine.dispose()
+
+
+def test_donationalerts_event_parser_accepts_nested_centrifugo_payload():
+    from app.donationalerts_client import parse_donation_event
+
+    event = parse_donation_event({
+        "params": {"data": {"id": 77, "amount": 100, "currency": "RUB", "message": "DA-ABC"}}
+    })
+    assert event is not None
+    assert event.donation_id == "77"
+    assert event.amount == 100
+    assert event.message == "DA-ABC"

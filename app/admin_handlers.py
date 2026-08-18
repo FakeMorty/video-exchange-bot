@@ -22,6 +22,7 @@ from app.models import (
     Base,
     User, Video, TrustedUploader, Event, ActiveSale,
     VideoReport, ModNotification, Offer, OfferRental,
+    DonationAlertException,
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
@@ -3107,20 +3108,34 @@ async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None
         await callback.answer()
         return
 
-    from app.config import DONATION_ALERTS_URL, RUB_TO_COINS_RATE, VIP_PRICE_RUB
+    from app.config import (
+        DONATION_ALERTS_URL, RUB_TO_COINS_RATE, VIP_PRICE_RUB,
+        DONATION_ALERTS_ACCESS_TOKEN, DONATION_ALERTS_CLIENT_ID,
+        DONATION_ALERTS_REFRESH_TOKEN,
+    )
+    async with async_session() as session:
+        pending_exceptions = (await session.execute(
+            select(func.count(DonationAlertException.id)).where(DonationAlertException.status == "pending")
+        )).scalar() or 0
 
+    oauth_ready = bool(DONATION_ALERTS_ACCESS_TOKEN or (
+        DONATION_ALERTS_CLIENT_ID and DONATION_ALERTS_REFRESH_TOKEN
+    ))
+    automation_status = "🟢 OAuth-синхронизация включена" if oauth_ready else "🟡 Нужны OAuth-реквизиты"
     text = (
         f"💳 <b>Управление DonationAlerts</b>\n\n"
-        f"🔗 <b>Ссылка для донатов:</b> <code>{DONATION_ALERTS_URL}</code>\n\n"
-        f"🌐 <b>Webhook URL для DonationAlerts:</b>\n"
-        f"<code>https://<ваш-домен>/donationalerts/webhook</code>\n\n"
+        f"🔗 <b>Ссылка для оплаты:</b> <code>{DONATION_ALERTS_URL}</code>\n"
+        f"🤖 <b>Автоматизация:</b> {automation_status}\n"
+        f"⚠️ <b>Очередь сверки:</b> {pending_exceptions}\n\n"
         f"📊 <b>Текущие настройки:</b>\n"
         f"• 1 RUB ➔ <b>{int(RUB_TO_COINS_RATE)} монет</b>\n"
         f"• VIP-подписка ➔ <b>{int(VIP_PRICE_RUB)} RUB / 30 дней</b>\n\n"
-        f"Здесь вы можете вручную зачислить донат пользователю, если он забыл указать свой ID при оплате."
+        "Автоматически зачисляются только платежи с действующим одноразовым кодом "
+        "заказа и точной суммой. Всё остальное попадает в очередь сверки."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"⚠️ Очередь сверки ({pending_exceptions})", callback_data="admin_da_exceptions")],
         [InlineKeyboardButton(text="➕ Начислить донат вручную", callback_data="admin_da_manual_start")],
         [InlineKeyboardButton(text="◀️ Назад в панель", callback_data="admin_center")],
     ])
@@ -4486,3 +4501,82 @@ async def process_offer_max_rentals(message: Message, state: FSMContext):
 
 
 # Remove the process_offer_penalty_unsubscribe function completely
+
+
+# ---------- DONATIONALERTS: ОЧЕРЕДЬ ИСКЛЮЧЕНИЙ ----------
+@router.callback_query(F.data == "admin_da_exceptions")
+async def admin_da_exceptions(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        exception = (await session.execute(
+            select(DonationAlertException)
+            .where(DonationAlertException.status == "pending")
+            .order_by(DonationAlertException.created_at.asc())
+            .limit(1)
+        )).scalar_one_or_none()
+        pending_count = (await session.execute(
+            select(func.count(DonationAlertException.id))
+            .where(DonationAlertException.status == "pending")
+        )).scalar() or 0
+
+    if not exception:
+        await _safe_edit(
+            callback,
+            "✅ <b>Очередь сверки DonationAlerts пуста.</b>\n\n"
+            "Все новые платежи либо автоматически сопоставлены с заказом, либо ещё не поступили.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ DonationAlerts", callback_data="admin_da_menu")
+            ]]),
+        )
+        await callback.answer()
+        return
+
+    suggested = f"Пользователь БД: <code>{exception.suggested_user_id}</code>\n" if exception.suggested_user_id else "Пользователь: не определён\n"
+    text = (
+        f"⚠️ <b>Сверка DonationAlerts ({pending_count})</b>\n\n"
+        f"Донат: <code>{exception.donation_id}</code>\n"
+        f"Сумма: <b>{exception.amount} {escape(exception.currency)}</b>\n"
+        f"Причина: <code>{escape(exception.reason)}</code>\n"
+        f"{suggested}"
+        f"Отправитель: <code>{escape(exception.donor_name or '—')}</code>\n"
+        f"Сообщение: <code>{escape((exception.message or '—')[:500])}</code>\n\n"
+        "Проверьте платёж в DonationAlerts. Ручное начисление используйте только после сверки; "
+        "оно не происходит по этой карточке автоматически."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Ручное зачисление после сверки", callback_data="admin_da_manual_start")],
+        [InlineKeyboardButton(text="✅ Закрыть без начисления", callback_data=f"admin_da_exception_close:{exception.id}")],
+        [InlineKeyboardButton(text="🔄 Следующее / обновить", callback_data="admin_da_exceptions")],
+        [InlineKeyboardButton(text="◀️ DonationAlerts", callback_data="admin_da_menu")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_da_exception_close:"))
+async def admin_da_exception_close(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    try:
+        exception_id = int(callback.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        await callback.answer("Некорректная запись.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        exception = await session.get(DonationAlertException, exception_id)
+        if not exception or exception.status != "pending":
+            await callback.answer("Запись уже закрыта или не найдена.", show_alert=True)
+            return
+        exception.status = "closed"
+        exception.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        exception.resolved_by_telegram_id = callback.from_user.id
+        await session.commit()
+
+    await callback.answer("Запись закрыта без начисления.")
+    await admin_da_exceptions(callback)

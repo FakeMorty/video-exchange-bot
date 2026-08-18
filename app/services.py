@@ -26,6 +26,7 @@ from app.models import (
     LotteryRound, LotteryTicket,
     LootboxOpen,
     TrustedUploader, UserPerk,
+    DonationAlertOrder, DonationAlertException,
 )
 
 logger = get_logger(__name__)
@@ -4149,6 +4150,211 @@ async def log_balance_change(
         details=details,
     )
     session.add(log)
+
+
+def _donationalerts_amount(value: Decimal | float | int | str) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"))
+
+
+async def create_donationalerts_order(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    amount_rub: Decimal | float | int,
+    reward_type: str = "coins",
+    coins_amount: Decimal | float | int = 0,
+) -> DonationAlertOrder:
+    """Создаёт короткоживущий код заказа для поля сообщения DonationAlerts."""
+    from app.config import DONATION_ALERTS_ORDER_TTL_MINUTES
+
+    expected_amount = _donationalerts_amount(amount_rub)
+    if expected_amount <= 0 or reward_type not in {"coins", "vip"}:
+        raise ValueError("Invalid DonationAlerts order parameters")
+
+    now = utc_now()
+    await session.execute(
+        update(DonationAlertOrder)
+        .where(
+            DonationAlertOrder.user_id == user_id,
+            DonationAlertOrder.status == "pending",
+            DonationAlertOrder.expires_at < now,
+        )
+        .values(status="expired")
+    )
+
+    for _ in range(5):
+        code = f"DA-{uuid.uuid4().hex[:10].upper()}"
+        existing = (await session.execute(
+            select(DonationAlertOrder.id).where(DonationAlertOrder.order_code == code)
+        )).scalar_one_or_none()
+        if not existing:
+            order = DonationAlertOrder(
+                user_id=user_id,
+                order_code=code,
+                expected_amount=expected_amount,
+                reward_type=reward_type,
+                coins_amount=_donationalerts_amount(coins_amount),
+                expires_at=now + timedelta(minutes=DONATION_ALERTS_ORDER_TTL_MINUTES),
+            )
+            session.add(order)
+            await session.commit()
+            await session.refresh(order)
+            return order
+    raise RuntimeError("Could not allocate a unique DonationAlerts order code")
+
+
+async def record_donationalerts_exception(
+    session: AsyncSession,
+    *,
+    donation_id: str | int,
+    amount_rub: Decimal | float | int,
+    currency: str = "RUB",
+    message: str = "",
+    donor_name: str = "",
+    reason: str,
+    suggested_user_id: int | None = None,
+) -> DonationAlertException:
+    """Сохраняет донат, который запрещено начислять без ручной сверки."""
+    donation_key = str(donation_id)
+    existing = (await session.execute(
+        select(DonationAlertException).where(DonationAlertException.donation_id == donation_key)
+    )).scalar_one_or_none()
+    if existing:
+        return existing
+
+    exception = DonationAlertException(
+        donation_id=donation_key,
+        amount=_donationalerts_amount(amount_rub),
+        currency=(currency or "RUB").upper()[:8],
+        message=(message or "")[:2000],
+        donor_name=(donor_name or "")[:255],
+        reason=reason[:80],
+        suggested_user_id=suggested_user_id,
+    )
+    session.add(exception)
+    await session.commit()
+    await session.refresh(exception)
+    return exception
+
+
+async def process_donationalerts_event(
+    session: AsyncSession,
+    *,
+    donation_id: str | int,
+    amount_rub: Decimal | float | int,
+    currency: str = "RUB",
+    message: str = "",
+    donor_name: str = "",
+    bot=None,
+) -> tuple[bool, str, DonationAlertException | None]:
+    """Сверяет подтверждённый донат с одноразовым кодом до начисления.
+
+    Возвращает `(completed, message, exception)`. При любой неоднозначности
+    награда не выдаётся автоматически, а создаётся запись для администратора.
+    """
+    donation_key = str(donation_id)
+    payload_key = f"donationalerts_{donation_key}"
+    already_paid = (await session.execute(
+        select(Payment.id).where(Payment.payload == payload_key)
+    )).scalar_one_or_none()
+    if already_paid:
+        return False, "Донат уже был обработан ранее", None
+
+    amount = _donationalerts_amount(amount_rub)
+    normalized_currency = (currency or "RUB").upper()
+    if normalized_currency != "RUB":
+        exception = await record_donationalerts_exception(
+            session, donation_id=donation_key, amount_rub=amount,
+            currency=normalized_currency, message=message, donor_name=donor_name,
+            reason="unsupported_currency",
+        )
+        return False, "Валюта требует ручной сверки", exception
+
+    code_match = re.search(r"\bDA-[A-Z0-9]{10}\b", (message or "").upper())
+    if not code_match:
+        exception = await record_donationalerts_exception(
+            session, donation_id=donation_key, amount_rub=amount,
+            currency=normalized_currency, message=message, donor_name=donor_name,
+            reason="order_code_missing",
+        )
+        return False, "Код заказа не найден; донат передан на ручную сверку", exception
+
+    order_code = code_match.group(0)
+    order = (await session.execute(
+        select(DonationAlertOrder).where(DonationAlertOrder.order_code == order_code)
+    )).scalar_one_or_none()
+    if not order:
+        exception = await record_donationalerts_exception(
+            session, donation_id=donation_key, amount_rub=amount,
+            currency=normalized_currency, message=message, donor_name=donor_name,
+            reason="order_not_found",
+        )
+        return False, "Заказ не найден; донат передан на ручную сверку", exception
+
+    now = utc_now()
+    if order.status != "pending" or order.expires_at < now:
+        if order.status == "pending":
+            order.status = "expired"
+            await session.commit()
+        exception = await record_donationalerts_exception(
+            session, donation_id=donation_key, amount_rub=amount,
+            currency=normalized_currency, message=message, donor_name=donor_name,
+            reason="order_expired_or_closed", suggested_user_id=order.user_id,
+        )
+        return False, "Срок заказа истёк; донат передан на ручную сверку", exception
+
+    if amount != _donationalerts_amount(order.expected_amount):
+        exception = await record_donationalerts_exception(
+            session, donation_id=donation_key, amount_rub=amount,
+            currency=normalized_currency, message=message, donor_name=donor_name,
+            reason="amount_mismatch", suggested_user_id=order.user_id,
+        )
+        return False, "Сумма не совпала с заказом; донат передан на ручную сверку", exception
+
+    order_user = await session.get(User, order.user_id)
+    if not order_user:
+        exception = await record_donationalerts_exception(
+            session, donation_id=donation_key, amount_rub=amount,
+            currency=normalized_currency, message=message, donor_name=donor_name,
+            reason="order_user_missing", suggested_user_id=order.user_id,
+        )
+        return False, "Пользователь заказа не найден; донат передан на ручную сверку", exception
+
+    comment = f"{message} vip" if order.reward_type == "vip" else message
+    completed, result = await process_donationalerts_donation(
+        session,
+        donation_id=donation_key,
+        amount_rub=amount,
+        telegram_user_id=order_user.telegram_id,
+        comment=comment,
+        bot=bot,
+    )
+    if not completed:
+        # Real-time канал и резервная REST-сверка могут увидеть один и тот же
+        # платёж почти одновременно. Уникальный Payment уже защитил баланс;
+        # просто фиксируем завершение заказа без ложной очереди исключений.
+        processed_payment = (await session.execute(
+            select(Payment.id).where(Payment.payload == payload_key)
+        )).scalar_one_or_none()
+        if processed_payment:
+            order.status = "completed"
+            order.donation_id = donation_key
+            order.matched_at = now
+            await session.commit()
+            return False, "Донат уже был обработан ранее", None
+
+        exception = await record_donationalerts_exception(
+            session, donation_id=donation_key, amount_rub=amount,
+            currency=normalized_currency, message=message, donor_name=donor_name,
+            reason="crediting_failed", suggested_user_id=order.user_id,
+        )
+        return False, result, exception
+
+    order.status = "completed"
+    order.donation_id = donation_key
+    order.matched_at = now
+    await session.commit()
+    return True, result, None
 
 
 async def process_donationalerts_donation(

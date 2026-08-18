@@ -89,8 +89,17 @@ REFERRAL_MILESTONES = {
 # Курс Stars → монеты (заградительный: 100 монет = 30 Stars)
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 30.0)
 
-# DonationAlerts настройки
+# DonationAlerts: OAuth-клиент и безопасная автоматическая сверка.
+# CLIENT_SECRET никогда не используется как Bearer token. Для полной автоматики
+# нужны CLIENT_ID + CLIENT_SECRET + REFRESH_TOKEN; ACCESS_TOKEN остаётся
+# ограниченным резервом для уже выданного OAuth access token.
 DONATION_ALERTS_URL = _get_str("DONATION_ALERTS_URL", "https://dalink.to/who5037")
+DONATION_ALERTS_CLIENT_ID = _get_str("DONATION_ALERTS_CLIENT_ID", "")
+DONATION_ALERTS_CLIENT_SECRET = _get_str("DONATION_ALERTS_CLIENT_SECRET", "")
+DONATION_ALERTS_REFRESH_TOKEN = _get_str("DONATION_ALERTS_REFRESH_TOKEN", "")
+DONATION_ALERTS_ACCESS_TOKEN = _get_str("DONATION_ALERTS_ACCESS_TOKEN", "")
+DONATION_ALERTS_SYNC_INTERVAL_SECONDS = max(60, _get_int("DONATION_ALERTS_SYNC_INTERVAL_SECONDS", 60))
+DONATION_ALERTS_ORDER_TTL_MINUTES = max(10, _get_int("DONATION_ALERTS_ORDER_TTL_MINUTES", 120))
 RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 10.0)  # 1 RUB = 10 монет
 VIP_PRICE_RUB = _get_float("VIP_PRICE_RUB", 150.0)        # 150 RUB = 30 дней VIP
 
