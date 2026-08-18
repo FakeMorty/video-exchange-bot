@@ -105,6 +105,29 @@ class DonationAlertsClient:
             self.client_id and self.client_secret and self.refresh_token
         ))
 
+    async def exchange_authorization_code(
+        self,
+        http: aiohttp.ClientSession,
+        *,
+        code: str,
+        redirect_uri: str,
+    ) -> dict[str, Any]:
+        """Обменивает авторизационный код на OAuth-токены владельца."""
+        if not self.client_id or not self.client_secret:
+            raise RuntimeError("DonationAlerts client credentials are not configured")
+        payload = {
+            "grant_type": "authorization_code",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "redirect_uri": redirect_uri,
+            "code": code,
+        }
+        async with http.post(OAUTH_TOKEN_URL, data=payload, timeout=self.timeout) as response:
+            data = await response.json(content_type=None)
+            if response.status != 200 or not data.get("refresh_token"):
+                raise RuntimeError(f"DonationAlerts OAuth code exchange failed: HTTP {response.status}")
+            return data
+
     async def get_access_token(self, http: aiohttp.ClientSession) -> str:
         """Возвращает bearer token; refresh token всегда имеет приоритет."""
         if self.client_id and self.client_secret and self.refresh_token:

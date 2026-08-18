@@ -15,12 +15,12 @@
 ## Настройка OAuth
 
 1. Войдите в DonationAlerts и создайте OAuth-приложение в разделе [`/application/clients`](https://www.donationalerts.com/application/clients).
-2. Для redirect URI укажите технический HTTPS URL, который вы контролируете. Для текущего Render-сервиса используйте `https://video-exchange-bot.onrender.com/donationalerts/oauth/callback` после добавления его в настройках приложения.
-3. Запросите только необходимые scope: `oauth-user-show`, `oauth-donation-index`, `oauth-donation-subscribe`.
-4. Выполните OAuth consent владельца DonationAlerts и получите `refresh_token`. Не публикуйте его в чате, репозитории или скриншотах.
-5. В Render → **Environment** добавьте значения `DONATION_ALERTS_CLIENT_ID`, `DONATION_ALERTS_CLIENT_SECRET` и `DONATION_ALERTS_REFRESH_TOKEN`. Задайте `DONATION_ALERTS_URL` с вашей публичной страницей DonationAlerts.
+2. Для redirect URI укажите `https://video-exchange-bot.onrender.com/donationalerts/oauth/callback` или соответствующий URL вашего публичного сервиса. Это значение должно совпасть с `DONATION_ALERTS_OAUTH_REDIRECT_URI` в Render.
+3. В Render → **Environment** добавьте `DONATION_ALERTS_CLIENT_ID`, `DONATION_ALERTS_CLIENT_SECRET`, `DONATION_ALERTS_OAUTH_REDIRECT_URI`, случайный `DONATION_ALERTS_OAUTH_STATE` и `DONATION_ALERTS_URL`. Не добавляйте эти значения в Git.
+4. Сделайте короткий деплой, затем откройте `https://video-exchange-bot.onrender.com/donationalerts/oauth/start`. Войдите в DonationAlerts и подтвердите только необходимые scope: `oauth-user-show`, `oauth-donation-index`, `oauth-donation-subscribe`.
+5. После callback сервис один раз покажет `refresh_token`. Скопируйте его в Render → **Environment** как `DONATION_ALERTS_REFRESH_TOKEN`, закройте страницу и перезапустите сервис. Не публикуйте токен в чате, репозитории или скриншотах.
 6. Оставьте `DONATION_ALERTS_ACCESS_TOKEN` пустым, если используется refresh token. Эта переменная предусмотрена только как ограниченный резерв для уже выданного OAuth access token.
-7. Перезапустите сервис и проверьте в «Админка → Управление DonationAlerts» статус `OAuth-синхронизация включена`.
+7. После второго запуска проверьте в «Админка → Управление DonationAlerts» статус `OAuth-синхронизация включена`.
 
 > Не используйте старый публичный URL webhook для начисления. Он сохранён только как совместимый ответ `410`, потому что открытый JSON без криптографической проверки нельзя считать доказательством оплаты.
 

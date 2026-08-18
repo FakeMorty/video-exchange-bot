@@ -48,6 +48,10 @@ services:
         sync: false
       - key: DONATION_ALERTS_ACCESS_TOKEN
         sync: false
+      - key: DONATION_ALERTS_OAUTH_REDIRECT_URI
+        sync: false
+      - key: DONATION_ALERTS_OAUTH_STATE
+        sync: false
       - key: DONATION_ALERTS_SYNC_INTERVAL_SECONDS
         value: "60"
       - key: DONATION_ALERTS_ORDER_TTL_MINUTES
