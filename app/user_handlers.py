@@ -2361,6 +2361,9 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "btn_buy_callback")
 async def cb_btn_buy_callback(callback: CallbackQuery, state: FSMContext):
+    # Снимаем индикатор загрузки Telegram сразу: показ пакетов может занять
+    # время из-за обращения к БД, но пользователь не должен видеть зависшую кнопку.
+    await callback.answer()
     await _show_legacy_donationalerts(callback.message, state)
 
 
