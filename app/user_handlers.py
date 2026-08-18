@@ -2125,35 +2125,28 @@ DA_ORDER_PACKAGES = {
 
 
 async def _show_legacy_donationalerts(message: Message, state: FSMContext):
-    """Показывает выбор пакета и создаёт код только после явного выбора."""
-    await state.clear()
-    try:
-        async with async_session() as session:
-            user = await get_user(session, message.from_user.id)
-            if not user:
-                return
-            if not await require_nickname(message, user):
-                return
+    """Показывает выбор пакета без лишнего обращения к БД.
 
-        text = (
-            "💳 <b>Пополнение через DonationAlerts</b>\n\n"
-            "Выберите фиксированный пакет. После выбора бот создаст одноразовый "
-            "код заказа: вставьте <b>только этот код</b> в поле «Сообщение» на странице оплаты. "
-            "Так платёж автоматически и безопасно привяжется к вашему аккаунту.\n\n"
-            "⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом."
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="10 ₽ — 100 монет", callback_data="da_order:coins_10")],
-            [InlineKeyboardButton(text="50 ₽ — 500 монет", callback_data="da_order:coins_50")],
-            [InlineKeyboardButton(text="100 ₽ — 1 000 монет", callback_data="da_order:coins_100")],
-            [InlineKeyboardButton(text="150 ₽ — VIP на 30 дней", callback_data="da_order:vip_150")],
-            [InlineKeyboardButton(text="500 ₽ — 5 000 монет", callback_data="da_order:coins_500")],
-            [InlineKeyboardButton(text="🌐 Telegram Stars (резерв)", callback_data="show_stars_menu")],
-        ])
-        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
-    except Exception as e:
-        logger.exception("Error while showing DonationAlerts packages")
-        await message.answer(f"⚠️ Ошибка при получении пакетов пополнения:\n<code>{escape(str(e))}</code>")
+    Проверка пользователя и создание защищённого одноразового заказа происходят
+    после выбора пакета. Благодаря этому витрина всегда открывается мгновенно.
+    """
+    await state.clear()
+    text = (
+        "💳 <b>Пополнение через DonationAlerts</b>\n\n"
+        "Выберите фиксированный пакет. После выбора бот создаст одноразовый "
+        "код заказа: вставьте <b>только этот код</b> в поле «Сообщение» на странице оплаты. "
+        "Так платёж автоматически и безопасно привяжется к вашему аккаунту.\n\n"
+        "⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="10 ₽ — 100 монет", callback_data="da_order:coins_10")],
+        [InlineKeyboardButton(text="50 ₽ — 500 монет", callback_data="da_order:coins_50")],
+        [InlineKeyboardButton(text="100 ₽ — 1 000 монет", callback_data="da_order:coins_100")],
+        [InlineKeyboardButton(text="150 ₽ — VIP на 30 дней", callback_data="da_order:vip_150")],
+        [InlineKeyboardButton(text="500 ₽ — 5 000 монет", callback_data="da_order:coins_500")],
+        [InlineKeyboardButton(text="🌐 Telegram Stars (резерв)", callback_data="show_stars_menu")],
+    ])
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("da_order:"))
@@ -2330,23 +2323,33 @@ async def cb_da_check_payment(callback: CallbackQuery):
 
 @router.callback_query(F.data == "show_stars_menu")
 async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-        vip_price, packs, sale = await get_current_prices(session, user.id)
-        starter_eligible = await is_starter_pack_eligible(session, user)
-        if not starter_eligible:
-            packs = {k: v for k, v in packs.items() if k != "starterpack"}
-            
+    # Отвечаем на callback до обращения к БД: Telegram не будет показывать
+    # зависшую загрузку, даже если запрос цен временно медленный.
+    await callback.answer()
+    try:
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            if not user:
+                await callback.message.answer("⚠️ Не удалось найти ваш профиль. Откройте магазин ещё раз.")
+                return
+            _, packs, _ = await get_current_prices(session, user.id)
+            starter_eligible = await is_starter_pack_eligible(session, user)
+            if not starter_eligible:
+                packs = {k: v for k, v in packs.items() if k != "starterpack"}
+    except Exception:
+        logger.exception("Error while building Telegram Stars packages")
+        await callback.message.answer(
+            "⚠️ Не удалось загрузить пакеты Stars. Попробуйте ещё раз через несколько секунд."
+        )
+        return
+
     buttons = [
         [InlineKeyboardButton(text="🔥 Купить в 3 раза дешевле через DonationAlerts", callback_data="btn_buy_callback")]
     ]
     for p_id, p_data in packs.items():
         buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
     buttons.append([InlineKeyboardButton(text="👈 Назад к выгодной оплате", callback_data="btn_buy_callback")])
-    
+
     text = (
         "⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n"
         "⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, "
@@ -2354,9 +2357,11 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         "💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 3 раза дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\n"
         "Выберите пакет Stars:"
     )
-    
-    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-    await callback.answer()
+    await callback.message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
 
 
 @router.callback_query(F.data == "btn_buy_callback")
