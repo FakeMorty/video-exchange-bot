@@ -109,8 +109,9 @@ DONATION_ALERTS_ORDER_TTL_MINUTES = max(10, _get_int("DONATION_ALERTS_ORDER_TTL_
 RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 10.0)  # 1 RUB = 10 монет
 VIP_PRICE_RUB = _get_float("VIP_PRICE_RUB", 150.0)        # 150 RUB = 30 дней VIP
 
-# Viewer-friendly пакеты Stars (заградительные цены ~в 3 раза дороже)
-STARTER_PACK_STARS = _get_int("STARTER_PACK_STARS", 27)
+# Viewer-friendly пакеты Stars (заградительные цены ~в 9 раз дороже)
+# Цены на те же пакеты монет увеличены в 3 раза относительно базового прайса.
+STARTER_PACK_STARS = _get_int("STARTER_PACK_STARS", 81)
 STARTER_PACK_COINS = _get_int("STARTER_PACK_COINS", 500)
 # Через сколько просмотров за день показать «залипшему» юзеру оффер первого платежа
 UPSELL_AFTER_VIEWS = _get_int("UPSELL_AFTER_VIEWS", 8)
@@ -125,9 +126,9 @@ DAILY_VIDEO_UPLOAD_LIMIT = _get_int("DAILY_VIDEO_UPLOAD_LIMIT", 100)
 
 STARS_PACKAGES = {
     "starterpack": {"stars": STARTER_PACK_STARS, "coins": STARTER_PACK_COINS, "title": f"Старт-пак: {STARTER_PACK_COINS} монет"},
-    "pack_50":  {"stars": 150, "coins": 500,  "title": "500 монет"},
-    "pack_100": {"stars": 300, "coins": 1000, "title": "1 000 монет"},
-    "pack_200": {"stars": 600, "coins": 2200, "title": "2 200 монет"},
+    "pack_50":  {"stars": 450, "coins": 500,  "title": "500 монет"},
+    "pack_100": {"stars": 900, "coins": 1000, "title": "1 000 монет"},
+    "pack_200": {"stars": 1800, "coins": 2200, "title": "2 200 монет"},
 }
 
 # Пакеты за реальные деньги (Примерно 1 Star = 2 RUB)

@@ -2344,7 +2344,7 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         return
 
     buttons = [
-        [InlineKeyboardButton(text="🔥 Купить в 3 раза дешевле через DonationAlerts", callback_data="btn_buy_callback")]
+        [InlineKeyboardButton(text="🔥 Купить в 9 раз дешевле через DonationAlerts", callback_data="btn_buy_callback")]
     ]
     for p_id, p_data in packs.items():
         buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
@@ -2353,8 +2353,8 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
     text = (
         "⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n"
         "⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, "
-        "цена при оплате через Stars <b>в 3 раза выше</b>, чем через DonationAlerts.\n\n"
-        "💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 3 раза дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\n"
+        "цена при оплате через Stars <b>в 9 раз выше</b>, чем через DonationAlerts.\n\n"
+        "💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 9 раз дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\n"
         "Выберите пакет Stars:"
     )
     await callback.message.answer(

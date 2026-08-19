@@ -2234,8 +2234,9 @@ async def test_stars_discount_affects_displayed_vip_and_pack_prices():
 
         assert discount == 0.25
         assert vip_price == 338
-        assert packs["pack_50"]["stars"] == 113
-        assert packs["pack_100"]["stars"] == 225
+        assert packs["pack_50"]["stars"] == 338
+        assert packs["pack_100"]["stars"] == 675
+        assert packs["pack_200"]["stars"] == 1350
 
     await engine.dispose()
 
@@ -2809,13 +2810,14 @@ async def test_suite_growth_pack():
         assert await is_starter_pack_eligible(s, u), "starter: not eligible fresh"
         _, packs, _ = await get_current_prices(s, uid2)
         sp = packs.get("starterpack")
-        assert sp and sp["stars"] == 27 and sp["coins"] == 500, f"starter price: {sp}"
+        assert sp and sp["stars"] == 81 and sp["coins"] == 500, f"starter price: {sp}"
         pay = await create_payment(s, uid2, "starterpack")
+        assert pay.stars_amount == 81
         paym, credited = await apply_successful_payment(s, pay.payload)
         assert paym and float(credited) >= 500, f"starter apply: {credited}"
         u = await s.get(User, uid2)
         assert not await is_starter_pack_eligible(s, u), "starter: still eligible after paid"
-    print("PASS  growth B: starter pack 9 Stars/500, одноразовость")
+    print("PASS  growth B: starter pack 81 Stars/500, одноразовость")
 
     # ---------- C. Zalip upsell ----------
     async with async_session() as s:

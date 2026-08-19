@@ -881,15 +881,15 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
       <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);">3 понятных пакета, чтобы быстро вернуться к просмотру:</p>
       <div style="display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto;">
         <div class="package-item">
-          <div><b>⚡ 500 монет</b><br><small style="color: var(--tg-theme-hint-color);">Быстрый старт · 50 ★</small></div>
+          <div><b>⚡ 500 монет</b><br><small style="color: var(--tg-theme-hint-color);">Быстрый старт · 450 ★</small></div>
           <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_50')">Купить</button>
         </div>
         <div class="package-item">
-          <div><b>🔥 1 000 монет</b><br><small style="color: var(--tg-theme-hint-color);">Популярный пакет · 100 ★</small></div>
+          <div><b>🔥 1 000 монет</b><br><small style="color: var(--tg-theme-hint-color);">Популярный пакет · 900 ★</small></div>
           <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_100')">Купить</button>
         </div>
         <div class="package-item">
-          <div><b>💎 2 200 монет</b><br><small style="color: var(--tg-theme-hint-color);">Самый выгодный · 200 ★</small></div>
+          <div><b>💎 2 200 монет</b><br><small style="color: var(--tg-theme-hint-color);">Самый выгодный · 1 800 ★</small></div>
           <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_200')">Купить</button>
         </div>
       </div>
