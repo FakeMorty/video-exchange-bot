@@ -2116,11 +2116,11 @@ async def cb_store_vip(callback: CallbackQuery):
 
 
 DA_ORDER_PACKAGES = {
-    "coins_10": {"amount": Decimal("10"), "coins": Decimal("100"), "title": "100 монет"},
-    "coins_50": {"amount": Decimal("50"), "coins": Decimal("500"), "title": "500 монет"},
-    "coins_100": {"amount": Decimal("100"), "coins": Decimal("1000"), "title": "1 000 монет"},
+    "coins_10": {"amount": Decimal("10"), "coins": Decimal("10"), "title": "10 монет"},
+    "coins_50": {"amount": Decimal("50"), "coins": Decimal("50"), "title": "50 монет"},
+    "coins_100": {"amount": Decimal("100"), "coins": Decimal("100"), "title": "100 монет"},
     "vip_150": {"amount": Decimal("150"), "coins": Decimal("0"), "reward_type": "vip", "title": "VIP на 30 дней"},
-    "coins_500": {"amount": Decimal("500"), "coins": Decimal("5000"), "title": "5 000 монет"},
+    "coins_500": {"amount": Decimal("500"), "coins": Decimal("500"), "title": "500 монет"},
 }
 
 
@@ -2139,11 +2139,11 @@ async def _show_legacy_donationalerts(message: Message, state: FSMContext):
         "⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="10 ₽ — 100 монет", callback_data="da_order:coins_10")],
-        [InlineKeyboardButton(text="50 ₽ — 500 монет", callback_data="da_order:coins_50")],
-        [InlineKeyboardButton(text="100 ₽ — 1 000 монет", callback_data="da_order:coins_100")],
+        [InlineKeyboardButton(text="10 ₽ — 10 монет (1 видео)", callback_data="da_order:coins_10")],
+        [InlineKeyboardButton(text="50 ₽ — 50 монет (5 видео)", callback_data="da_order:coins_50")],
+        [InlineKeyboardButton(text="100 ₽ — 100 монет (10 видео)", callback_data="da_order:coins_100")],
         [InlineKeyboardButton(text="150 ₽ — VIP на 30 дней", callback_data="da_order:vip_150")],
-        [InlineKeyboardButton(text="500 ₽ — 5 000 монет", callback_data="da_order:coins_500")],
+        [InlineKeyboardButton(text="500 ₽ — 500 монет (50 видео)", callback_data="da_order:coins_500")],
         [InlineKeyboardButton(text="🌐 Telegram Stars (резерв)", callback_data="show_stars_menu")],
     ])
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
@@ -2344,7 +2344,7 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         return
 
     buttons = [
-        [InlineKeyboardButton(text="🔥 Купить в 9 раз дешевле через DonationAlerts", callback_data="btn_buy_callback")]
+        [InlineKeyboardButton(text="🔥 Купить дешевле через DonationAlerts", callback_data="btn_buy_callback")]
     ]
     for p_id, p_data in packs.items():
         buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
@@ -2353,8 +2353,8 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
     text = (
         "⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n"
         "⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, "
-        "цена при оплате через Stars <b>в 9 раз выше</b>, чем через DonationAlerts.\n\n"
-        "💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 9 раз дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\n"
+        "цена при оплате через Stars <b>выше</b>, чем через DonationAlerts.\n\n"
+        "💡 <i>Рекомендуем оплачивать через DonationAlerts — без комиссий магазинов, с любой карты или СБП, зачисление автоматическое.</i>\n\n"
         "Выберите пакет Stars:"
     )
     await callback.message.answer(

@@ -57,7 +57,7 @@ services:
       - key: DONATION_ALERTS_ORDER_TTL_MINUTES
         value: "120"
       - key: RUB_TO_COINS_RATE
-        value: "10.0"
+        value: "1.0"
       - key: VIP_PRICE_RUB
         value: "150.0"
       - key: ENABLE_ARCADE

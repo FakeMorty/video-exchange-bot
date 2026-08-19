@@ -106,10 +106,10 @@ DONATION_ALERTS_OAUTH_REDIRECT_URI = _get_str(
 DONATION_ALERTS_OAUTH_STATE = _get_str("DONATION_ALERTS_OAUTH_STATE", "")
 DONATION_ALERTS_SYNC_INTERVAL_SECONDS = max(60, _get_int("DONATION_ALERTS_SYNC_INTERVAL_SECONDS", 60))
 DONATION_ALERTS_ORDER_TTL_MINUTES = max(10, _get_int("DONATION_ALERTS_ORDER_TTL_MINUTES", 120))
-RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 10.0)  # 1 RUB = 10 монет
+RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 1.0)  # 1 RUB = 1 монета; 1 видео (10 монет) = 10 ₽
 VIP_PRICE_RUB = _get_float("VIP_PRICE_RUB", 150.0)        # 150 RUB = 30 дней VIP
 
-# Viewer-friendly пакеты Stars (заградительные цены ~в 9 раз дороже)
+# Пакеты Stars дороже рублёвых (комиссии App Store / Google Play / Telegram).
 # Цены на те же пакеты монет увеличены в 3 раза относительно базового прайса.
 STARTER_PACK_STARS = _get_int("STARTER_PACK_STARS", 81)
 STARTER_PACK_COINS = _get_int("STARTER_PACK_COINS", 500)
@@ -131,11 +131,11 @@ STARS_PACKAGES = {
     "pack_200": {"stars": 1800, "coins": 2200, "title": "2 200 монет"},
 }
 
-# Пакеты за реальные деньги (Примерно 1 Star = 2 RUB)
+# Пакеты за реальные деньги (1 ₽ = 1 монета; 1 видео = 10 ₽)
 MONEY_PACKAGES = {
-    "money_99":  {"amount": 9900,  "coins": 700,   "title": "700 монет"},
-    "money_199": {"amount": 19900, "coins": 1600,   "title": "1 600 монет"},
-    "money_499": {"amount": 49900, "coins": 4400,  "title": "4 400 монет"},
+    "money_99":  {"amount": 9900,  "coins": 99,   "title": "99 монет"},
+    "money_199": {"amount": 19900, "coins": 199,  "title": "199 монет"},
+    "money_499": {"amount": 49900, "coins": 499,  "title": "499 монет"},
 }
 
 # Интервал показа офферов

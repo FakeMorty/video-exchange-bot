@@ -3350,7 +3350,7 @@ async def test_donationalerts_integration():
         session.add(u1)
         await session.commit()
 
-        # 1. Process donation for coins (100 RUB = 1000 coins)
+        # 1. Process donation for coins (100 RUB = 100 coins)
         mock_bot = AsyncMock()
         ok, msg = await process_donationalerts_donation(
             session=session,
@@ -3361,11 +3361,11 @@ async def test_donationalerts_integration():
             bot=mock_bot
         )
         assert ok is True
-        assert "+1 000 монет" in msg
+        assert "+100 монет" in msg
 
-        # Check balance increased to 1100
+        # Check balance increased to 200
         refreshed_u1 = (await session.execute(select(User).where(User.telegram_id == 888001))).scalar_one()
-        assert refreshed_u1.balance == Decimal("1100.00")
+        assert refreshed_u1.balance == Decimal("200.00")
 
         # Check notification sent to user
         mock_bot.send_message.assert_called()
@@ -3581,7 +3581,7 @@ async def test_donationalerts_order_matching_and_exception_queue():
         stored_order = await session.get(DonationAlertOrder, order.id)
         assert stored_order.status == "completed"
         refreshed_user = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
-        assert refreshed_user.balance == Decimal("1000.00")
+        assert refreshed_user.balance == Decimal("100.00")
 
         mismatch_order = await create_donationalerts_order(
             session,
@@ -3630,3 +3630,16 @@ def test_donationalerts_event_parser_accepts_nested_centrifugo_payload():
     assert event.donation_id == "77"
     assert event.amount == 100
     assert event.message == "DA-ABC"
+
+
+def test_one_video_costs_ten_rubles():
+    from app.config import RUB_TO_COINS_RATE, WATCH_COST
+    from app.user_handlers import DA_ORDER_PACKAGES
+
+    assert float(RUB_TO_COINS_RATE) == 1.0
+    assert float(WATCH_COST) / float(RUB_TO_COINS_RATE) == 10.0
+    assert DA_ORDER_PACKAGES["coins_10"]["amount"] == Decimal("10")
+    assert DA_ORDER_PACKAGES["coins_10"]["coins"] == Decimal("10")
+    assert DA_ORDER_PACKAGES["coins_50"]["coins"] == Decimal("50")
+    assert DA_ORDER_PACKAGES["coins_100"]["coins"] == Decimal("100")
+    assert DA_ORDER_PACKAGES["coins_500"]["coins"] == Decimal("500")
