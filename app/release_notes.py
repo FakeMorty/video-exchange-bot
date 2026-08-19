@@ -9,7 +9,7 @@ from pathlib import Path
 # поэтому будущим агентам достаточно:
 # 1) обновить CURRENT_VERSION при релизе,
 # 2) добавить записи в CHANGELOG.md.
-CURRENT_VERSION = "v3.16.0-stars-coin-pricing"
+CURRENT_VERSION = "v3.16.1-stars-coin-pricing"
 CURRENT_STATUS = "Актуальная боевая сборка"
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
