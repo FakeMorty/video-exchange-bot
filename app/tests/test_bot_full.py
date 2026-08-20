@@ -3630,3 +3630,63 @@ def test_donationalerts_event_parser_accepts_nested_centrifugo_payload():
     assert event.donation_id == "77"
     assert event.amount == 100
     assert event.message == "DA-ABC"
+
+
+# ══════════════════════════════════════════════════════════════
+#  административные опросы с наградой
+# ══════════════════════════════════════════════════════════════
+@pytest.mark.asyncio
+async def test_admin_poll_reward_is_idempotent_and_respects_closure():
+    from app.models import AdminPoll, AdminPollResponse
+    from app.services import submit_admin_poll_response
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        user = User(telegram_id=810001, balance=Decimal("5.00"))
+        session.add(user)
+        await session.flush()
+        poll = AdminPoll(
+            question="Какой формат вам удобнее?",
+            poll_type="single",
+            options_json='["Видео", "Фото"]',
+            reward=Decimal("20.00"),
+            created_by=user.id,
+        )
+        session.add(poll)
+        await session.commit()
+
+        answered_poll, reward, error = await submit_admin_poll_response(
+            session, poll.id, user.id, option_indexes=[0]
+        )
+        assert answered_poll is not None
+        assert reward == Decimal("20.00")
+        assert error is None
+        await session.refresh(user)
+        assert user.balance == Decimal("25.00")
+        logs = (await session.execute(select(BalanceLog).where(BalanceLog.user_id == user.id))).scalars().all()
+        assert len(logs) == 1
+        assert logs[0].source == "admin_poll_reward"
+
+        _poll, duplicate_reward, duplicate_error = await submit_admin_poll_response(
+            session, poll.id, user.id, option_indexes=[1]
+        )
+        assert duplicate_reward is None
+        assert duplicate_error == "Вы уже прошли этот опрос."
+        await session.refresh(user)
+        assert user.balance == Decimal("25.00")
+        assert (await session.execute(select(func.count(AdminPollResponse.id)))).scalar_one() == 1
+
+        poll.is_active = False
+        await session.commit()
+        blocked_poll, blocked_reward, blocked_error = await submit_admin_poll_response(
+            session, poll.id, user.id, option_indexes=[0]
+        )
+        assert blocked_poll is None
+        assert blocked_reward is None
+        assert blocked_error == "Опрос уже завершён или недоступен."
+
+    await engine.dispose()

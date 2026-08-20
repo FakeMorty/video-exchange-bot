@@ -59,6 +59,7 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📢 Офферы и реклама", callback_data="admin_offers_menu")],
         [InlineKeyboardButton(text="📨 Сообщение всем от админа", callback_data="admin_direct_message_all")],
         [InlineKeyboardButton(text="📣 Промо-рассылки", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="📊 Опросы с наградой", callback_data="admin_polls")],
         [InlineKeyboardButton(text="🎉 События", callback_data="admin_events_menu")],
         [InlineKeyboardButton(text="🛍 Акции и скидки", callback_data="admin_sales")],
         [InlineKeyboardButton(text="🚨 Жалобы", callback_data="admin_reports")],

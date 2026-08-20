@@ -70,6 +70,7 @@ INCOME_SOURCE_LABELS = {
     "promocode_activation": "Промокоды",
     "content_views_milestone": "Контент: порог просмотров",
     "content_quality_bonus": "Контент: бонус за качество",
+    "admin_poll_reward": "Опросы администрации",
     "referral_milestone": "Рефералы: этапы",
     "lottery_win_2": "Секслото: 2 совпадения",
     "lottery_win_3": "Секслото: 3 совпадения",

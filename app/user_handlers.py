@@ -4,6 +4,7 @@ import uuid
 import random
 import math
 import asyncio
+import json
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
 from collections import defaultdict
@@ -67,7 +68,7 @@ from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
     DailyQuestProgress, GameHistory, Offer, Payment, Promocode,
     LootboxOpen, LotteryTicket, UserActionLog, DonationAlertOrder,
-    utc_now,
+    AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
     get_or_create_user, get_user, get_user_by_id, get_video_by_id, reject_video, get_setting, save_video, save_photo,
@@ -108,7 +109,7 @@ from app.services import (
     count_blocked_authors, unblock_user, unblock_all_authors,
     is_starter_pack_eligible, count_views_today, maybe_send_zalip_upsell,
     check_daily_video_upload_possible,
-    create_donationalerts_order,
+    create_donationalerts_order, submit_admin_poll_response,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
@@ -377,6 +378,11 @@ class LotteryBuyState(StatesGroup):
 
 class StylesCaseState(StatesGroup):
     configuring = State()
+
+
+class UserPollState(StatesGroup):
+    waiting_text = State()
+    selecting_multiple = State()
 
 
 class BlockedAuthorsState(StatesGroup):
@@ -5019,3 +5025,257 @@ async def welcome_lootbox_claim(callback: CallbackQuery):
         except Exception:
             await callback.message.answer(msg_cap, parse_mode="HTML")
         await callback.answer(f"+{reward} монет!", show_alert=True)
+
+
+# ====================================================
+# ОПРОСЫ АДМИНИСТРАТОРА С НАГРАДОЙ
+# ====================================================
+async def _get_poll_for_user(poll_id: int) -> AdminPoll | None:
+    async with async_session() as session:
+        return await session.scalar(
+            select(AdminPoll).where(AdminPoll.id == poll_id, AdminPoll.is_active == True)
+        )
+
+
+def _multiple_poll_keyboard(poll_id: int, options: list[str], selected: set[int]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, option in enumerate(options):
+        marker = "☑️" if index in selected else "▫️"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{marker} {option}",
+                callback_data=f"poll_multi_toggle:{poll_id}:{index}",
+            )
+        ])
+    rows.extend([
+        [InlineKeyboardButton(text="✅ Отправить ответ", callback_data=f"poll_multi_submit:{poll_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"poll_multi_cancel:{poll_id}")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _complete_poll_answer(
+    callback: CallbackQuery,
+    *,
+    poll_id: int,
+    answer_text: str | None = None,
+    option_indexes: list[int] | None = None,
+) -> tuple[bool, str]:
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            return False, "Сначала открой бота командой /start."
+        _poll, reward, error = await submit_admin_poll_response(
+            session,
+            poll_id,
+            user.id,
+            answer_text=answer_text,
+            option_indexes=option_indexes,
+        )
+    if error:
+        return False, error
+    reward_text = f"{reward:.0f}" if reward is not None else "20"
+    return True, f"✅ Спасибо за ответ! Тебе начислено {reward_text} монет."
+
+
+@router.callback_query(F.data.startswith("poll_single:"))
+async def poll_single_answer(callback: CallbackQuery):
+    try:
+        _, poll_id_raw, option_raw = callback.data.split(":", 2)
+        poll_id = int(poll_id_raw)
+        option_index = int(option_raw)
+    except (AttributeError, ValueError):
+        await callback.answer("Некорректный вариант ответа.", show_alert=True)
+        return
+    ok, text = await _complete_poll_answer(
+        callback,
+        poll_id=poll_id,
+        option_indexes=[option_index],
+    )
+    if ok:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer("Награда начислена.")
+        await callback.message.answer(text)
+    else:
+        await callback.answer(text, show_alert=True)
+
+
+@router.callback_query(F.data.startswith("poll_text:"))
+async def poll_text_start(callback: CallbackQuery, state: FSMContext):
+    try:
+        poll_id = int(callback.data.split(":", 1)[1])
+    except (AttributeError, ValueError):
+        await callback.answer("Некорректный опрос.", show_alert=True)
+        return
+    poll = await _get_poll_for_user(poll_id)
+    if not poll or poll.poll_type != "text":
+        await callback.answer("Опрос уже завершён или недоступен.", show_alert=True)
+        return
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        already_answered = bool(user and await session.scalar(
+            select(AdminPollResponse.id).where(
+                AdminPollResponse.poll_id == poll_id,
+                AdminPollResponse.user_id == user.id,
+            )
+        ))
+    if already_answered:
+        await callback.answer("Вы уже прошли этот опрос.", show_alert=True)
+        return
+    await state.set_state(UserPollState.waiting_text)
+    await state.update_data(poll_id=poll_id)
+    await callback.message.answer(
+        "✍️ Напиши свой ответ одним сообщением. После отправки тебе будет начислено 20 монет.",
+    )
+    await callback.answer()
+
+
+@router.message(UserPollState.waiting_text)
+async def poll_text_submit(message: Message, state: FSMContext):
+    poll_id = (await state.get_data()).get("poll_id")
+    answer_text = (message.text or "").strip()
+    if not poll_id:
+        await state.clear()
+        await message.answer("Опрос не найден. Открой его заново.")
+        return
+    if not answer_text:
+        await message.answer("❌ Ответ не может быть пустым.")
+        return
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            await state.clear()
+            await message.answer("Сначала открой бота командой /start.")
+            return
+        _poll, reward, error = await submit_admin_poll_response(
+            session,
+            int(poll_id),
+            user.id,
+            answer_text=answer_text,
+        )
+    if error:
+        await message.answer(f"❌ {error}")
+        if "уже" in error or "недоступен" in error:
+            await state.clear()
+        return
+    await state.clear()
+    await message.answer(f"✅ Спасибо за ответ! Тебе начислено {reward:.0f} монет.")
+
+
+@router.callback_query(F.data.startswith("poll_multi_open:"))
+async def poll_multi_open(callback: CallbackQuery, state: FSMContext):
+    try:
+        poll_id = int(callback.data.split(":", 1)[1])
+    except (AttributeError, ValueError):
+        await callback.answer("Некорректный опрос.", show_alert=True)
+        return
+    poll = await _get_poll_for_user(poll_id)
+    if not poll or poll.poll_type != "multiple":
+        await callback.answer("Опрос уже завершён или недоступен.", show_alert=True)
+        return
+    try:
+        options = json.loads(poll.options_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        options = []
+    if not options:
+        await callback.answer("В опросе нет вариантов.", show_alert=True)
+        return
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        already_answered = bool(user and await session.scalar(
+            select(AdminPollResponse.id).where(
+                AdminPollResponse.poll_id == poll_id,
+                AdminPollResponse.user_id == user.id,
+            )
+        ))
+    if already_answered:
+        await callback.answer("Вы уже прошли этот опрос.", show_alert=True)
+        return
+    await state.set_state(UserPollState.selecting_multiple)
+    await state.update_data(poll_id=poll_id, poll_selected=[])
+    await callback.message.answer(
+        f"📊 <b>{escape(poll.question)}</b>\n\nВыбери один или несколько вариантов, затем нажми «Отправить ответ».",
+        parse_mode="HTML",
+        reply_markup=_multiple_poll_keyboard(poll_id, options, set()),
+    )
+    await callback.answer()
+
+
+@router.callback_query(UserPollState.selecting_multiple, F.data.startswith("poll_multi_toggle:"))
+async def poll_multi_toggle(callback: CallbackQuery, state: FSMContext):
+    try:
+        _, poll_id_raw, option_raw = callback.data.split(":", 2)
+        poll_id = int(poll_id_raw)
+        option_index = int(option_raw)
+    except (AttributeError, ValueError):
+        await callback.answer("Некорректный вариант.", show_alert=True)
+        return
+    data = await state.get_data()
+    if data.get("poll_id") != poll_id:
+        await callback.answer("Открой опрос заново.", show_alert=True)
+        return
+    poll = await _get_poll_for_user(poll_id)
+    if not poll or poll.poll_type != "multiple":
+        await state.clear()
+        await callback.answer("Опрос уже завершён или недоступен.", show_alert=True)
+        return
+    try:
+        options = json.loads(poll.options_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        options = []
+    if option_index < 0 or option_index >= len(options):
+        await callback.answer("Некорректный вариант.", show_alert=True)
+        return
+    selected = {int(index) for index in data.get("poll_selected", [])}
+    if option_index in selected:
+        selected.remove(option_index)
+    else:
+        selected.add(option_index)
+    await state.update_data(poll_selected=sorted(selected))
+    await callback.message.edit_reply_markup(
+        reply_markup=_multiple_poll_keyboard(poll_id, options, selected)
+    )
+    await callback.answer()
+
+
+@router.callback_query(UserPollState.selecting_multiple, F.data.startswith("poll_multi_submit:"))
+async def poll_multi_submit(callback: CallbackQuery, state: FSMContext):
+    try:
+        poll_id = int(callback.data.split(":", 1)[1])
+    except (AttributeError, ValueError):
+        await callback.answer("Некорректный опрос.", show_alert=True)
+        return
+    data = await state.get_data()
+    if data.get("poll_id") != poll_id:
+        await callback.answer("Открой опрос заново.", show_alert=True)
+        return
+    selected = data.get("poll_selected", [])
+    if not selected:
+        await callback.answer("Выберите хотя бы один вариант.", show_alert=True)
+        return
+    ok, text = await _complete_poll_answer(callback, poll_id=poll_id, option_indexes=selected)
+    if ok:
+        await state.clear()
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer("Награда начислена.")
+        await callback.message.answer(text)
+    else:
+        if "уже" in text or "недоступен" in text:
+            await state.clear()
+        await callback.answer(text, show_alert=True)
+
+
+@router.callback_query(UserPollState.selecting_multiple, F.data.startswith("poll_multi_cancel:"))
+async def poll_multi_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer("Выбор отменён.")

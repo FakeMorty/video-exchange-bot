@@ -655,6 +655,46 @@ class ModNotification(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class AdminPoll(Base):
+    """Опрос, созданный администратором и разосланный пользователям."""
+    __tablename__ = "admin_polls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    poll_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # poll_type: "single", "multiple" или "text"
+    options_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("20.00"))
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
+    responses: Mapped[List["AdminPollResponse"]] = relationship(
+        back_populates="poll", cascade="all, delete-orphan"
+    )
+
+
+class AdminPollResponse(Base):
+    """Один завершённый ответ пользователя на административный опрос."""
+    __tablename__ = "admin_poll_responses"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "user_id", name="uq_admin_poll_response_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    poll_id: Mapped[int] = mapped_column(ForeignKey("admin_polls.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer_options_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    rewarded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    poll: Mapped["AdminPoll"] = relationship(back_populates="responses")
+    user: Mapped["User"] = relationship(foreign_keys=[user_id])
+
+
 class KatyaChat(Base):
     """Чат пользователя с Катей."""
     __tablename__ = "katya_chats"

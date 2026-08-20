@@ -1,6 +1,7 @@
 from app.models import utc_now
 import os
 import asyncio
+import json
 from datetime import datetime, timezone, timedelta
 from html import escape
 from decimal import Decimal
@@ -23,6 +24,7 @@ from app.models import (
     User, Video, TrustedUploader, Event, ActiveSale,
     VideoReport, ModNotification, Offer, OfferRental,
     DonationAlertException,
+    AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
     get_user, get_user_by_id, get_user_by_username,
@@ -151,6 +153,12 @@ class DAManualState(StatesGroup):
     """Ручное зачисление платежа DonationAlerts."""
     waiting_user = State()
     waiting_amount = State()
+
+
+class AdminPollCreationState(StatesGroup):
+    """Пошаговое создание опроса с фиксированной наградой."""
+    waiting_question = State()
+    waiting_options = State()
 
 
 # =========================
@@ -3990,12 +3998,54 @@ async def admin_reports_menu(callback: CallbackQuery):
                 callback_data=f"report_remove_video:{r.id}:{r.video_id}",
             ),
         ])
+        kb_rows.append([
+            InlineKeyboardButton(
+                text=f"👀 Посмотреть видео #{r.video_id}",
+                callback_data=f"report_view_video:{r.id}:{r.video_id}",
+            ),
+        ])
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_center")])
 
     await callback.message.answer(
         text, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("report_view_video:"))
+async def report_view_video(callback: CallbackQuery):
+    """Открыть публикацию из жалобы без ручного поиска по ID."""
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Неверный формат.", show_alert=True)
+        return
+    try:
+        report_id = int(parts[1])
+        video_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Неверный формат.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        report = await session.get(VideoReport, report_id)
+        video = await get_video_by_id(session, video_id)
+        uploader = await get_user_by_id(session, video.uploader_user_id) if video else None
+    if not report or report.video_id != video_id or not video:
+        await callback.answer("Видео или жалоба больше недоступны.", show_alert=True)
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Оставить видео", callback_data=f"report_dismiss:{report.id}"),
+            InlineKeyboardButton(text="🗑 Удалить видео", callback_data=f"report_remove_video:{report.id}:{video.id}"),
+        ],
+        [InlineKeyboardButton(text="◀️ К жалобам", callback_data="admin_reports")],
+    ])
+    await _send_admin_video_card(callback.message, video, uploader, keyboard)
     await callback.answer()
 
 
@@ -4580,3 +4630,355 @@ async def admin_da_exception_close(callback: CallbackQuery):
 
     await callback.answer("Запись закрыта без начисления.")
     await admin_da_exceptions(callback)
+
+
+# ====================================================
+# ОПРОСЫ АДМИНИСТРАТОРА С НАГРАДОЙ
+# ====================================================
+_POLL_REWARD = Decimal("20.00")
+_POLL_TYPE_LABELS = {
+    "single": "один вариант",
+    "multiple": "несколько вариантов",
+    "text": "свободный ответ",
+}
+
+
+def _poll_admin_keyboard(polls: list[AdminPoll]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="➕ Создать опрос", callback_data="admin_poll_create")],
+    ]
+    for poll in polls[:8]:
+        status = "🟢" if poll.is_active else "⚫"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{status} #{poll.id} {poll.question[:34]}",
+                callback_data=f"admin_poll_view:{poll.id}",
+            )
+        ])
+    rows.append([InlineKeyboardButton(text="◀️ В админку", callback_data="admin_center")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_admin_polls_menu(callback: CallbackQuery) -> None:
+    async with async_session() as session:
+        polls = (await session.execute(
+            select(AdminPoll).order_by(AdminPoll.is_active.desc(), AdminPoll.id.desc()).limit(8)
+        )).scalars().all()
+        active_count = int((await session.execute(
+            select(func.count(AdminPoll.id)).where(AdminPoll.is_active == True)
+        )).scalar_one() or 0)
+
+    text = (
+        "📊 <b>Опросы с наградой</b>\n\n"
+        "Создавайте опросы с одним вариантом, несколькими вариантами или свободным ответом. "
+        "За одно успешное прохождение активного опроса пользователь получает <b>20 монет</b>.\n\n"
+        f"Активных опросов: <b>{active_count}</b>"
+    )
+    await _safe_edit(
+        callback,
+        text,
+        parse_mode="HTML",
+        reply_markup=_poll_admin_keyboard(polls),
+    )
+
+
+@router.callback_query(F.data == "admin_polls")
+async def admin_polls_menu(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.clear()
+    await _render_admin_polls_menu(callback)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_poll_create")
+async def admin_poll_create(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.clear()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔘 Один вариант", callback_data="admin_poll_type:single")],
+        [InlineKeyboardButton(text="☑️ Несколько вариантов", callback_data="admin_poll_type:multiple")],
+        [InlineKeyboardButton(text="✍️ Свободный ответ", callback_data="admin_poll_type:text")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_polls")],
+    ])
+    await _safe_edit(
+        callback,
+        "➕ <b>Новый опрос</b>\n\nВыбери формат ответа. Награда за прохождение всегда составляет <b>20 монет</b>.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_poll_type:"))
+async def admin_poll_select_type(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    poll_type = callback.data.split(":", 1)[1]
+    if poll_type not in _POLL_TYPE_LABELS:
+        await callback.answer("Неизвестный формат.", show_alert=True)
+        return
+    await state.set_state(AdminPollCreationState.waiting_question)
+    await state.update_data(poll_type=poll_type)
+    await callback.message.answer(
+        "✍️ Напиши вопрос опроса одним сообщением (от 1 до 1000 символов).",
+    )
+    await callback.answer()
+
+
+async def _show_poll_preview(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    question = escape(data["poll_question"])
+    poll_type = data["poll_type"]
+    options = data.get("poll_options", [])
+    details = ""
+    if options:
+        details = "\n\n<b>Варианты:</b>\n" + "\n".join(
+            f"{idx + 1}. {escape(option)}" for idx, option in enumerate(options)
+        )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Разослать опрос", callback_data="admin_poll_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_polls")],
+    ])
+    await message.answer(
+        f"📋 <b>Предпросмотр опроса</b>\n\n"
+        f"<b>Формат:</b> {_POLL_TYPE_LABELS[poll_type]}\n"
+        f"<b>Вопрос:</b> {question}{details}\n\n"
+        f"Награда каждому участнику: <b>20 монет</b>.\n\n"
+        "Разослать опрос всем активным пользователям?",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+@router.message(AdminPollCreationState.waiting_question)
+async def admin_poll_receive_question(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    question = (message.text or "").strip()
+    if not question:
+        await message.answer("❌ Вопрос не может быть пустым.")
+        return
+    if len(question) > 1000:
+        await message.answer("❌ Вопрос слишком длинный: максимум 1000 символов.")
+        return
+    await state.update_data(poll_question=question)
+    data = await state.get_data()
+    if data.get("poll_type") == "text":
+        await state.update_data(poll_options=[])
+        await _show_poll_preview(message, state)
+        return
+    await state.set_state(AdminPollCreationState.waiting_options)
+    await message.answer(
+        "📝 Отправь варианты ответов: по одному варианту в каждой строке.\n"
+        "Нужно от 2 до 12 вариантов, каждый не длиннее 64 символов.",
+    )
+
+
+@router.message(AdminPollCreationState.waiting_options)
+async def admin_poll_receive_options(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    options = [line.strip() for line in (message.text or "").splitlines() if line.strip()]
+    if not 2 <= len(options) <= 12:
+        await message.answer("❌ Нужно указать от 2 до 12 вариантов — каждый с новой строки.")
+        return
+    if len(set(option.casefold() for option in options)) != len(options):
+        await message.answer("❌ Варианты не должны повторяться.")
+        return
+    if any(len(option) > 64 for option in options):
+        await message.answer("❌ Каждый вариант должен быть не длиннее 64 символов.")
+        return
+    await state.update_data(poll_options=options)
+    await _show_poll_preview(message, state)
+
+
+async def _broadcast_admin_poll(bot, creator_telegram_id: int, poll_id: int) -> None:
+    """Рассылает опрос фоном, не блокируя обработку обновлений бота."""
+    async with async_session() as session:
+        poll = await session.get(AdminPoll, poll_id)
+        targets = (await session.execute(
+            select(User.telegram_id).where(User.status == "active")
+        )).scalars().all()
+    if not poll or not poll.is_active:
+        return
+
+    try:
+        options = json.loads(poll.options_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        options = []
+
+    header = (
+        "📊 <b>Опрос от администрации</b>\n\n"
+        f"{escape(poll.question)}\n\n"
+        "Пройди опрос один раз и получи <b>20 монет</b>."
+    )
+    if poll.poll_type == "text":
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✍️ Написать ответ", callback_data=f"poll_text:{poll.id}")
+        ]])
+    elif poll.poll_type == "single":
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=option, callback_data=f"poll_single:{poll.id}:{index}")]
+            for index, option in enumerate(options)
+        ])
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="☑️ Выбрать варианты", callback_data=f"poll_multi_open:{poll.id}")
+        ]])
+
+    sent = 0
+    for telegram_id in targets:
+        try:
+            await bot.send_message(telegram_id, header, parse_mode="HTML", reply_markup=keyboard)
+            sent += 1
+            if sent % 30 == 0:
+                await asyncio.sleep(0.5)
+        except Exception:
+            continue
+
+    try:
+        await bot.send_message(
+            creator_telegram_id,
+            f"✅ <b>Опрос #{poll_id} разослан.</b>\n\nДоставлено: <b>{sent}</b> активным пользователям.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "admin_poll_confirm")
+async def admin_poll_confirm(callback: CallbackQuery, state: FSMContext, bot):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    data = await state.get_data()
+    question = (data.get("poll_question") or "").strip()
+    poll_type = data.get("poll_type")
+    options = data.get("poll_options", [])
+    if not question or poll_type not in _POLL_TYPE_LABELS:
+        await callback.answer("Черновик опроса не найден. Создай его заново.", show_alert=True)
+        return
+    if poll_type in {"single", "multiple"} and not options:
+        await callback.answer("Укажи варианты ответов.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        admin = await get_user(session, callback.from_user.id)
+        poll = AdminPoll(
+            question=question,
+            poll_type=poll_type,
+            options_json=json.dumps(options, ensure_ascii=False),
+            reward=_POLL_REWARD,
+            created_by=admin.id if admin else None,
+        )
+        session.add(poll)
+        await session.commit()
+        poll_id = poll.id
+
+    await state.clear()
+    await _safe_edit(
+        callback,
+        f"⏳ <b>Опрос #{poll_id} создаётся и рассылается в фоновом режиме.</b>\n\n"
+        "После завершения рассылки бот пришлёт количество доставленных сообщений.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 К опросам", callback_data="admin_polls")],
+        ]),
+    )
+    await callback.answer("Рассылка запущена.")
+    asyncio.create_task(_broadcast_admin_poll(bot, callback.from_user.id, poll_id))
+
+
+@router.callback_query(F.data.startswith("admin_poll_view:"))
+async def admin_poll_view(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    try:
+        poll_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await callback.answer("Некорректный опрос.", show_alert=True)
+        return
+
+    async with async_session() as session:
+        poll = await session.get(AdminPoll, poll_id)
+        responses = (await session.execute(
+            select(AdminPollResponse).where(AdminPollResponse.poll_id == poll_id).order_by(AdminPollResponse.id.asc())
+        )).scalars().all() if poll else []
+    if not poll:
+        await callback.answer("Опрос не найден.", show_alert=True)
+        return
+
+    try:
+        options = json.loads(poll.options_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        options = []
+    status = "🟢 активен" if poll.is_active else "⚫ завершён"
+    text = (
+        f"📊 <b>Опрос #{poll.id}</b> — {status}\n\n"
+        f"<b>Вопрос:</b> {escape(poll.question)}\n"
+        f"<b>Формат:</b> {_POLL_TYPE_LABELS.get(poll.poll_type, poll.poll_type)}\n"
+        f"<b>Ответов:</b> {len(responses)}\n"
+        f"<b>Выдано наград:</b> {len([response for response in responses if response.rewarded_at]) * 20} монет\n\n"
+    )
+    if poll.poll_type in {"single", "multiple"}:
+        counts = [0 for _ in options]
+        for response in responses:
+            try:
+                for index in json.loads(response.answer_options_json or "[]"):
+                    if isinstance(index, int) and 0 <= index < len(counts):
+                        counts[index] += 1
+            except (TypeError, json.JSONDecodeError):
+                continue
+        text += "<b>Распределение ответов:</b>\n" + "\n".join(
+            f"{index + 1}. {escape(option)} — <b>{counts[index]}</b>"
+            for index, option in enumerate(options)
+        )
+    else:
+        text += "<b>Последние ответы:</b>\n"
+        if responses:
+            text += "\n".join(
+                f"• {escape((response.answer_text or '—')[:180])}"
+                for response in responses[-8:]
+            )
+        else:
+            text += "Пока нет."
+
+    rows = []
+    if poll.is_active:
+        rows.append([InlineKeyboardButton(text="⏹ Завершить опрос", callback_data=f"admin_poll_close:{poll.id}")])
+    rows.append([InlineKeyboardButton(text="◀️ К опросам", callback_data="admin_polls")])
+    await _safe_edit(
+        callback,
+        text[:4000],
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_poll_close:"))
+async def admin_poll_close(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    try:
+        poll_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await callback.answer("Некорректный опрос.", show_alert=True)
+        return
+    async with async_session() as session:
+        poll = await session.get(AdminPoll, poll_id)
+        if not poll or not poll.is_active:
+            await callback.answer("Опрос уже завершён или не найден.", show_alert=True)
+            return
+        poll.is_active = False
+        poll.closed_at = utc_now()
+        await session.commit()
+    await callback.answer("Опрос завершён.")
+    await admin_poll_view(callback)

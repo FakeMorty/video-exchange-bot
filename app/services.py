@@ -8,6 +8,7 @@ import asyncio
 import uuid
 import random
 import re
+import json
 from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
@@ -27,6 +28,7 @@ from app.models import (
     LootboxOpen,
     TrustedUploader, UserPerk,
     DonationAlertOrder, DonationAlertException,
+    AdminPoll, AdminPollResponse,
 )
 
 logger = get_logger(__name__)
@@ -3489,10 +3491,17 @@ async def flush_mod_notifications(bot, session: AsyncSession) -> int:
     lines.append("\n/admin — панель модерации")
     text = "\n".join(lines)
 
+    reply_markup = None
+    if "report" in by_kind:
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🚨 Открыть жалобы", callback_data="admin_reports")
+        ]])
+
     sent = 0
     for admin_tid in ADMINS:
         try:
-            await bot.send_message(admin_tid, text, parse_mode="HTML")
+            await bot.send_message(admin_tid, text, parse_mode="HTML", reply_markup=reply_markup)
             sent += 1
         except Exception:
             pass
@@ -3503,6 +3512,91 @@ async def flush_mod_notifications(bot, session: AsyncSession) -> int:
         n.sent_at = utc_now()
     await session.commit()
     return sent
+
+
+async def submit_admin_poll_response(
+    session: AsyncSession,
+    poll_id: int,
+    user_id: int,
+    *,
+    answer_text: str | None = None,
+    option_indexes: list[int] | None = None,
+) -> tuple[AdminPoll | None, Decimal | None, str | None]:
+    """Сохраняет ответ на активный опрос и один раз начисляет его награду.
+
+    Уникальность пары ``poll_id/user_id`` дополнительно защищается ограничением
+    базы данных, поэтому повторные нажатия и параллельные callback-запросы не
+    смогут принести пользователю монеты дважды.
+    """
+    poll = await session.scalar(
+        select(AdminPoll).where(AdminPoll.id == poll_id, AdminPoll.is_active == True)
+    )
+    if not poll:
+        return None, None, "Опрос уже завершён или недоступен."
+
+    exists = await session.scalar(
+        select(AdminPollResponse.id).where(
+            AdminPollResponse.poll_id == poll_id,
+            AdminPollResponse.user_id == user_id,
+        )
+    )
+    if exists:
+        return poll, None, "Вы уже прошли этот опрос."
+
+    try:
+        options = json.loads(poll.options_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        options = []
+
+    normalized_indexes: list[int] | None = None
+    normalized_text: str | None = None
+    if poll.poll_type == "text":
+        normalized_text = (answer_text or "").strip()
+        if not normalized_text:
+            return poll, None, "Ответ не может быть пустым."
+        if len(normalized_text) > 1000:
+            return poll, None, "Ответ слишком длинный: максимум 1000 символов."
+    elif poll.poll_type in {"single", "multiple"}:
+        normalized_indexes = sorted({int(idx) for idx in (option_indexes or [])})
+        if not normalized_indexes:
+            return poll, None, "Выберите хотя бы один вариант."
+        if poll.poll_type == "single" and len(normalized_indexes) != 1:
+            return poll, None, "Для этого опроса можно выбрать только один вариант."
+        if any(idx < 0 or idx >= len(options) for idx in normalized_indexes):
+            return poll, None, "Выбран недопустимый вариант ответа."
+    else:
+        return poll, None, "Неизвестный тип опроса."
+
+    response = AdminPollResponse(
+        poll_id=poll.id,
+        user_id=user_id,
+        answer_text=normalized_text,
+        answer_options_json=json.dumps(normalized_indexes, ensure_ascii=False) if normalized_indexes is not None else None,
+    )
+    session.add(response)
+    try:
+        # Flush до начисления: уникальное ограничение срабатывает до движения баланса.
+        await session.flush()
+    except Exception:
+        await session.rollback()
+        return poll, None, "Вы уже прошли этот опрос."
+
+    reward = Decimal(str(poll.reward or Decimal("20.00")))
+    updated_user = await change_balance_atomic(
+        session,
+        user_id,
+        reward,
+        "admin_poll_reward",
+        source_id=poll.id,
+        details=f"Награда за опрос #{poll.id}",
+    )
+    if not updated_user:
+        await session.rollback()
+        return poll, None, "Пользователь не найден."
+
+    response.rewarded_at = utc_now()
+    await session.commit()
+    return poll, reward, None
 
 
 async def should_flush_notifications(session: AsyncSession) -> bool:
