@@ -2125,6 +2125,55 @@ async def cb_admin_view_user_videos(callback: CallbackQuery):
     await callback.answer()
 
 
+def _format_admin_extended_stats(stats: dict) -> str:
+    """Собирает короткую, читаемую без прокрутки сводку для Telegram."""
+    audience = stats["audience"]
+    content = stats["content"]
+    economy = stats["economy"]
+    moderation = stats["moderation"]
+    engagement = stats["engagement"]
+
+    change = audience["registration_change_pct"]
+    if change is None:
+        growth = "недостаточно данных для сравнения"
+    elif change > 0:
+        growth = f"↗️ +{change:.0f}% к предыдущим 7 дням"
+    elif change < 0:
+        growth = f"↘️ {change:.0f}% к предыдущим 7 дням"
+    else:
+        growth = "→ без изменений к предыдущим 7 дням"
+
+    pending_content_age = (
+        f", старейшая {content_pending_age:.0f} ч"
+        if (content_pending_age := moderation["oldest_pending_content_age_hours"]) >= 1 else ""
+    )
+    pending_report_age = (
+        f", старейшая {report_pending_age:.0f} ч"
+        if (report_pending_age := moderation["oldest_report_age_hours"]) >= 1 else ""
+    )
+
+    return (
+        "📊 <b>Оперативная статистика</b>\n"
+        "<i>Периодные показатели — за последние 7 дней.</i>\n\n"
+        "<b>👥 Аудитория</b>\n"
+        f"Всего: <b>{stats['users']}</b> · активных аккаунтов: <b>{audience['active_accounts']}</b> · VIP: <b>{stats['vip']}</b>\n"
+        f"Прирост: <b>+{audience['new_users_1d']}</b> за 24 ч · <b>+{audience['new_users_7d']}</b> за 7 дн. ({growth})\n"
+        f"Активность: DAU <b>{audience['dau']}</b> · WAU <b>{audience['wau']}</b> · MAU <b>{audience['mau']}</b> · липкость <b>{audience['sticky_pct']:.1f}%</b>\n"
+        f"Онбординг: правила <b>{audience['rules_accept_rate_pct']:.1f}%</b> · ник <b>{audience['nickname_rate_pct']:.1f}%</b> · платят <b>{audience['payer_conversion_pct']:.1f}%</b>\n\n"
+        "<b>🎬 Контент и вовлечение</b>\n"
+        f"За 7 дн.: <b>{content['uploads_7d']}</b> загрузок от <b>{content['creators_7d']}</b> авторов · <b>{content['views_7d']}</b> просмотров от <b>{content['viewers_7d']}</b> зрителей\n"
+        f"Обсуждение: <b>{content['comments_7d']}</b> комментариев · <b>{content['reactions_7d']}</b> реакций · средняя оценка <b>{content['average_rating']:.2f}/5</b>\n"
+        f"Модерация контента: ожидает <b>{content['pending']}</b>{pending_content_age} · одобрено <b>{content['approval_rate_pct']:.1f}%</b>\n\n"
+        "<b>💰 Экономика</b>\n"
+        f"Баланс в системе: <b>{stats['total_balance_in_system']:.2f}</b> монет\n"
+        f"За 7 дн.: начислено <b>+{economy['coins_in_7d']:.2f}</b> · списано <b>−{economy['coins_out_7d']:.2f}</b> · чистый поток <b>{economy['net_coins_7d']:+.2f}</b>\n"
+        f"Оплаты: <b>{economy['payments_7d']}</b> на <b>{economy['paid_stars_7d']}</b> Stars от <b>{economy['payers_7d']}</b> пользователей\n\n"
+        "<b>🛡 Очереди и обратная связь</b>\n"
+        f"Жалобы: ожидает <b>{moderation['reports_pending']}</b>{pending_report_age} · новых за 7 дн. <b>{moderation['reports_7d']}</b>\n"
+        f"Опросы: активных <b>{engagement['polls_active']}</b> · ответов за 7 дн. <b>{engagement['poll_responses_7d']}</b>"
+    )
+
+
 @router.callback_query(F.data == "admin_extended_stats")
 async def admin_extended_stats(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id):
@@ -2132,7 +2181,7 @@ async def admin_extended_stats(callback: CallbackQuery):
     async with async_session() as session:
         stats = await get_admin_extended_stats(session)
 
-    rows = []
+    rows = [[InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_extended_stats")]]
     if is_super_admin(callback.from_user.id):
         rows.append([InlineKeyboardButton(text="📊 Экспорт PDF по боту", callback_data="admin_export_bot_pdf")])
         rows.append([InlineKeyboardButton(text="👥 Экспорт PDF по всем пользователям", callback_data="admin_export_all_users_pdf")])
@@ -2140,8 +2189,9 @@ async def admin_extended_stats(callback: CallbackQuery):
 
     await _safe_edit(
         callback,
-        f"📊 <b>Статистика</b>\n\n👥 Юзеров: {stats['users']}\n💰 Баланс: {stats['total_balance_in_system']:.2f}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        _format_admin_extended_stats(stats),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
 

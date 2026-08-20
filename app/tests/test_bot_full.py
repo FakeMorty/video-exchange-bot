@@ -3690,3 +3690,79 @@ async def test_admin_poll_reward_is_idempotent_and_respects_closure():
         assert blocked_error == "Опрос уже завершён или недоступен."
 
     await engine.dispose()
+
+
+# ══════════════════════════════════════════════════════════════
+#  оперативная статистика администратора
+# ══════════════════════════════════════════════════════════════
+@pytest.mark.asyncio
+async def test_admin_extended_stats_collects_operational_metrics():
+    from app.models import (
+        AdminPoll, AdminPollResponse, BalanceLog, Comment, ContentReaction,
+        Payment, VideoRating, VideoReport, VideoView,
+    )
+    from app.services import get_admin_extended_stats
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    now = utc_now()
+    async with Session() as session:
+        creator = User(
+            telegram_id=820001, balance=Decimal("100.00"), nickname_set=True,
+            agreed_to_rules=True, created_at=now - timedelta(days=2),
+        )
+        viewer = User(
+            telegram_id=820002, balance=Decimal("20.00"), nickname_set=True,
+            agreed_to_rules=True, created_at=now - timedelta(hours=12),
+        )
+        session.add_all([creator, viewer])
+        await session.flush()
+
+        approved = Video(
+            uploader_user_id=creator.id, telegram_file_id="stats_video_ok",
+            telegram_file_unique_id="stats_unique_ok", status="approved",
+            created_at=now - timedelta(days=1),
+        )
+        pending = Video(
+            uploader_user_id=creator.id, telegram_file_id="stats_video_wait",
+            telegram_file_unique_id="stats_unique_wait", status="pending",
+            created_at=now - timedelta(hours=3),
+        )
+        session.add_all([approved, pending])
+        await session.flush()
+        session.add_all([
+            VideoView(user_id=viewer.id, video_id=approved.id, created_at=now - timedelta(hours=4)),
+            VideoRating(user_id=viewer.id, video_id=approved.id, rating=5),
+            Comment(user_id=viewer.id, video_id=approved.id, text="Отлично!", created_at=now - timedelta(hours=4)),
+            ContentReaction(user_id=viewer.id, video_id=approved.id, reaction_type="👍", created_at=now - timedelta(hours=4)),
+            VideoReport(video_id=pending.id, reporter_user_id=viewer.id, reason="spam", status="pending", created_at=now - timedelta(hours=2)),
+            Payment(user_id=viewer.id, payload="stats_payment", stars_amount=15, coins_amount=Decimal("150.00"), status="paid", created_at=now - timedelta(hours=3)),
+            BalanceLog(user_id=viewer.id, amount=Decimal("30.00"), balance_before=Decimal("20.00"), balance_after=Decimal("50.00"), source="test_income", created_at=now - timedelta(hours=3)),
+            BalanceLog(user_id=viewer.id, amount=Decimal("-10.00"), balance_before=Decimal("50.00"), balance_after=Decimal("40.00"), source="watch", created_at=now - timedelta(hours=2)),
+        ])
+        poll = AdminPoll(question="Статистика полезна?", poll_type="single", options_json='["Да", "Нет"]', reward=Decimal("20.00"), created_by=creator.id)
+        session.add(poll)
+        await session.flush()
+        session.add(AdminPollResponse(
+            poll_id=poll.id, user_id=viewer.id, answer_options_json="[0]", completed_at=now - timedelta(hours=1), rewarded_at=now - timedelta(hours=1),
+        ))
+        await session.commit()
+
+        stats = await get_admin_extended_stats(session)
+        assert stats["users"] == 2
+        assert stats["audience"]["new_users_7d"] == 2
+        assert stats["audience"]["dau"] >= 1
+        assert stats["content"]["uploads_7d"] == 2
+        assert stats["content"]["views_7d"] == 1
+        assert stats["content"]["average_rating"] == 5.0
+        assert stats["economy"]["coins_in_7d"] == Decimal("30.00")
+        assert stats["economy"]["coins_out_7d"] == Decimal("10.00")
+        assert stats["economy"]["paid_stars_7d"] == 15
+        assert stats["moderation"]["reports_pending"] == 1
+        assert stats["engagement"]["polls_active"] == 1
+        assert stats["engagement"]["poll_responses_7d"] == 1
+
+    await engine.dispose()

@@ -28,7 +28,7 @@ from app.models import (
     LootboxOpen,
     TrustedUploader, UserPerk,
     DonationAlertOrder, DonationAlertException,
-    AdminPoll, AdminPollResponse,
+    VideoReport, AdminPoll, AdminPollResponse,
 )
 
 logger = get_logger(__name__)
@@ -2133,49 +2133,201 @@ async def increment_game_played(session: AsyncSession, user_id: int):
 # СТАТИСТИКА
 # ============================
 async def get_admin_extended_stats(session: AsyncSession) -> dict:
+    """Собирает компактный набор показателей для оперативной админ-статистики.
+
+    PDF-отчёт остаётся подробным инструментом анализа, а этот набор рассчитан
+    на быстрое принятие решений прямо в Telegram: рост, активность, состояние
+    очередей, денежные потоки и качество вовлечения за последние 7 дней.
+    """
     from app.models import OfferRental
 
-    users = (await session.execute(select(func.count(User.id)))).scalar_one()
-    vip = (await session.execute(
-        select(func.count(User.id)).where(User.vip_until > utc_now())
-    )).scalar_one()
-    with_nickname = (await session.execute(
-        select(func.count(User.id)).where(User.nickname_set)
-    )).scalar_one()
-    comments = (await session.execute(select(func.count(Comment.id)))).scalar_one()
-    reactions = (await session.execute(select(func.count(ContentReaction.id)))).scalar_one()
-    games = (await session.execute(select(func.count(GameHistory.id)))).scalar_one()
-    offers = (await session.execute(select(func.count(Offer.id)))).scalar_one()
-    active_rentals = (await session.execute(
-        select(func.count(OfferRental.id)).where(
-            OfferRental.status == "active",
-            OfferRental.expires_at > utc_now(),
+    now = utc_now()
+    day_ago = now - timedelta(days=1)
+    week_ago = now - timedelta(days=7)
+    two_weeks_ago = now - timedelta(days=14)
+    month_ago = now - timedelta(days=30)
+
+    async def _count(stmt) -> int:
+        return int((await session.execute(stmt)).scalar_one() or 0)
+
+    async def _active_user_count(since) -> int:
+        """Считает уникальных пользователей по реальным действиям, а не по входам."""
+        statements = (
+            select(UserActionLog.user_id).where(UserActionLog.created_at >= since),
+            select(VideoView.user_id).where(VideoView.created_at >= since),
+            select(Comment.user_id).where(Comment.created_at >= since),
+            select(ContentReaction.user_id).where(ContentReaction.created_at >= since),
+            select(Video.uploader_user_id).where(Video.created_at >= since),
+            select(AdminPollResponse.user_id).where(AdminPollResponse.completed_at >= since),
         )
-    )).scalar_one() or 0
-    total_rent_income = (await session.execute(
+        user_ids: set[int] = set()
+        for stmt in statements:
+            user_ids.update(
+                int(user_id) for user_id in (await session.execute(stmt)).scalars().all()
+                if user_id is not None
+            )
+        return len(user_ids)
+
+    users = await _count(select(func.count(User.id)))
+    active_accounts = await _count(select(func.count(User.id)).where(User.status == "active"))
+    vip = await _count(select(func.count(User.id)).where(User.vip_until > now))
+    with_nickname = await _count(select(func.count(User.id)).where(User.nickname_set))
+    rules_accepted = await _count(select(func.count(User.id)).where(User.agreed_to_rules == True))
+    new_users_1d = await _count(select(func.count(User.id)).where(User.created_at >= day_ago))
+    new_users_7d = await _count(select(func.count(User.id)).where(User.created_at >= week_ago))
+    new_users_prev_7d = await _count(select(func.count(User.id)).where(
+        User.created_at >= two_weeks_ago,
+        User.created_at < week_ago,
+    ))
+    dau = await _active_user_count(day_ago)
+    wau = await _active_user_count(week_ago)
+    mau = await _active_user_count(month_ago)
+    sticky_pct = (dau * 100 / mau) if mau else 0.0
+    registration_change_pct = (
+        (new_users_7d - new_users_prev_7d) * 100 / new_users_prev_7d
+        if new_users_prev_7d else None
+    )
+
+    comments = await _count(select(func.count(Comment.id)))
+    reactions = await _count(select(func.count(ContentReaction.id)))
+    games = await _count(select(func.count(GameHistory.id)))
+    offers = await _count(select(func.count(Offer.id)))
+    active_rentals = await _count(select(func.count(OfferRental.id)).where(
+        OfferRental.status == "active",
+        OfferRental.expires_at > now,
+    ))
+    total_rent_income = Decimal(str((await session.execute(
         select(func.sum(OfferRental.cost_paid)).where(
             OfferRental.status.in_(["pending", "active", "expired"]),
         )
-    )).scalar_one() or Decimal("0")
-    total_balance = (await session.execute(
-        select(func.sum(User.balance))
-    )).scalar_one() or Decimal("0")
-    total_admin_given = (await session.execute(
-        select(func.sum(BalanceLog.amount)).where(
-            BalanceLog.source == "admin_balance", BalanceLog.amount > 0
-        )
-    )).scalar_one() or Decimal("0")
-    total_game_profit = (await session.execute(
-        select(func.sum(GameHistory.result))
-    )).scalar_one() or Decimal("0")
+    )).scalar_one() or 0))
+
+    content_total = await _count(select(func.count(Video.id)))
+    content_approved = await _count(select(func.count(Video.id)).where(Video.status == "approved"))
+    content_rejected = await _count(select(func.count(Video.id)).where(Video.status == "rejected"))
+    content_pending = await _count(select(func.count(Video.id)).where(Video.status == "pending"))
+    uploads_7d = await _count(select(func.count(Video.id)).where(Video.created_at >= week_ago))
+    views_total = await _count(select(func.count(VideoView.id)))
+    views_7d = await _count(select(func.count(VideoView.id)).where(VideoView.created_at >= week_ago))
+    viewers_7d = await _count(select(func.count(func.distinct(VideoView.user_id))).where(VideoView.created_at >= week_ago))
+    creators_7d = await _count(select(func.count(func.distinct(Video.uploader_user_id))).where(Video.created_at >= week_ago))
+    comments_7d = await _count(select(func.count(Comment.id)).where(Comment.created_at >= week_ago))
+    reactions_7d = await _count(select(func.count(ContentReaction.id)).where(ContentReaction.created_at >= week_ago))
+    average_rating = float((await session.execute(select(func.avg(VideoRating.rating)))).scalar_one() or 0)
+    approval_rate_pct = (content_approved * 100 / content_total) if content_total else 0.0
+    pending_content_since = (await session.execute(
+        select(func.min(Video.created_at)).where(Video.status == "pending")
+    )).scalar_one_or_none()
+    pending_content_age_hours = (
+        max(0.0, (now - pending_content_since).total_seconds() / 3600)
+        if pending_content_since else 0.0
+    )
+
+    reports_pending = await _count(select(func.count(VideoReport.id)).where(VideoReport.status == "pending"))
+    reports_7d = await _count(select(func.count(VideoReport.id)).where(VideoReport.created_at >= week_ago))
+    oldest_pending_report = (await session.execute(
+        select(func.min(VideoReport.created_at)).where(VideoReport.status == "pending")
+    )).scalar_one_or_none()
+    oldest_report_age_hours = (
+        max(0.0, (now - oldest_pending_report).total_seconds() / 3600)
+        if oldest_pending_report else 0.0
+    )
+
+    total_balance = Decimal(str((await session.execute(select(func.sum(User.balance)))).scalar_one() or 0))
+    coins_in_7d = Decimal(str((await session.execute(select(func.sum(BalanceLog.amount)).where(
+        BalanceLog.amount > 0,
+        BalanceLog.created_at >= week_ago,
+    ))).scalar_one() or 0))
+    coins_out_7d = abs(Decimal(str((await session.execute(select(func.sum(BalanceLog.amount)).where(
+        BalanceLog.amount < 0,
+        BalanceLog.created_at >= week_ago,
+    ))).scalar_one() or 0)))
+    total_admin_given = Decimal(str((await session.execute(select(func.sum(BalanceLog.amount)).where(
+        BalanceLog.source == "admin_balance", BalanceLog.amount > 0
+    ))).scalar_one() or 0))
+    total_game_profit = Decimal(str((await session.execute(select(func.sum(GameHistory.result)))).scalar_one() or 0))
+    paid_stars_7d = int((await session.execute(select(func.sum(Payment.stars_amount)).where(
+        Payment.status == "paid",
+        Payment.created_at >= week_ago,
+    ))).scalar_one() or 0)
+    payments_7d = await _count(select(func.count(Payment.id)).where(
+        Payment.status == "paid",
+        Payment.created_at >= week_ago,
+    ))
+    payers_total = await _count(select(func.count(func.distinct(Payment.user_id))).where(Payment.status == "paid"))
+    payers_7d = await _count(select(func.count(func.distinct(Payment.user_id))).where(
+        Payment.status == "paid",
+        Payment.created_at >= week_ago,
+    ))
+
+    polls_active = await _count(select(func.count(AdminPoll.id)).where(AdminPoll.is_active == True))
+    poll_responses_7d = await _count(select(func.count(AdminPollResponse.id)).where(
+        AdminPollResponse.completed_at >= week_ago,
+    ))
+
     return {
-        "users": users, "vip": vip, "with_nickname": with_nickname,
-        "comments": comments, "reactions": reactions, "games": games,
-        "offers": offers, "active_rentals": int(active_rentals),
+        # Исторические ключи сохранены для совместимости с внешними вызовами.
+        "users": users,
+        "vip": vip,
+        "with_nickname": with_nickname,
+        "comments": comments,
+        "reactions": reactions,
+        "games": games,
+        "offers": offers,
+        "active_rentals": active_rentals,
         "total_balance_in_system": total_balance,
         "total_admin_given": total_admin_given,
         "total_game_profit": total_game_profit,
         "total_rent_income": total_rent_income,
+        # Оперативные блоки обновлённого экрана.
+        "audience": {
+            "active_accounts": active_accounts,
+            "new_users_1d": new_users_1d,
+            "new_users_7d": new_users_7d,
+            "new_users_prev_7d": new_users_prev_7d,
+            "registration_change_pct": registration_change_pct,
+            "dau": dau,
+            "wau": wau,
+            "mau": mau,
+            "sticky_pct": sticky_pct,
+            "nickname_rate_pct": (with_nickname * 100 / users) if users else 0.0,
+            "rules_accept_rate_pct": (rules_accepted * 100 / users) if users else 0.0,
+            "payer_conversion_pct": (payers_total * 100 / users) if users else 0.0,
+        },
+        "content": {
+            "total": content_total,
+            "approved": content_approved,
+            "rejected": content_rejected,
+            "pending": content_pending,
+            "uploads_7d": uploads_7d,
+            "views_total": views_total,
+            "views_7d": views_7d,
+            "viewers_7d": viewers_7d,
+            "creators_7d": creators_7d,
+            "comments_7d": comments_7d,
+            "reactions_7d": reactions_7d,
+            "average_rating": average_rating,
+            "approval_rate_pct": approval_rate_pct,
+        },
+        "economy": {
+            "coins_in_7d": coins_in_7d,
+            "coins_out_7d": coins_out_7d,
+            "net_coins_7d": coins_in_7d - coins_out_7d,
+            "paid_stars_7d": paid_stars_7d,
+            "payments_7d": payments_7d,
+            "payers_7d": payers_7d,
+            "payers_total": payers_total,
+        },
+        "moderation": {
+            "reports_pending": reports_pending,
+            "reports_7d": reports_7d,
+            "oldest_report_age_hours": oldest_report_age_hours,
+            "oldest_pending_content_age_hours": pending_content_age_hours,
+        },
+        "engagement": {
+            "polls_active": polls_active,
+            "poll_responses_7d": poll_responses_7d,
+        },
     }
 
 
