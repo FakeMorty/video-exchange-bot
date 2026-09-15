@@ -38,7 +38,8 @@ from app.config import (
     CONTENT_VIEWS_MILESTONE_THRESHOLD, VIDEO_VIEWS_MILESTONE_REWARD, PHOTO_VIEWS_MILESTONE_REWARD,
     CONTENT_QUALITY_MIN_AVG_RATING, CONTENT_QUALITY_MIN_RATINGS, CONTENT_QUALITY_BONUS,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES,
-    STARS_PACKAGES, STARS_TO_COINS_RATE,
+    STARS_PACKAGES, STARS_TO_COINS_RATE, DA_ORDER_PACKAGES,
+    RUB_TO_COINS_RATE, VIP_PRICE_RUB,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     DAILY_BONUS_STREAK_BASE, DAILY_BONUS_STREAK_INCREASE,
     MAX_BONUS_STREAK,
@@ -50,6 +51,7 @@ from app.config import (
     PROMOCODE_BULK_DISCOUNT_THRESHOLD,
     PROMOCODE_BULK_DISCOUNT_RATE,
     PROMOCODE_CREATOR_BONUS_PERCENT,
+    PROMOCODE_STAR_PRICE_MARKUP,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
     DYNAMIC_STAR_DISCOUNT_ENABLED,
@@ -1423,7 +1425,7 @@ async def maybe_send_zalip_upsell(session: AsyncSession, bot, user: "User", *,
         return False
     if await has_action_today(session, user.id, "zalip_upsell"):
         return False
-    starter = STARS_PACKAGES.get(STARTER_PACK_KEY) or {}
+    starter = (await get_shop_star_packages(session)).get(STARTER_PACK_KEY) or {}
     text = (
         "🔥 <b>Залип? Тогда тебе сюда.</b>\n\n"
         f"Специально для первого платежа — старт-пак: <b>{starter.get('coins', '?')} монет "
@@ -1600,7 +1602,8 @@ async def create_payment(
     *,
     stars_amount_override: int | None = None,
 ) -> Payment:
-    pack = STARS_PACKAGES.get(pack_key)
+    packs = await get_shop_star_packages(session)
+    pack = packs.get(pack_key)
     if not pack:
         raise ValueError("Unknown pack")
     coins = to_decimal(pack["coins"])
@@ -1624,7 +1627,8 @@ async def create_custom_payment(
     *,
     billed_stars_amount: int | None = None,
 ) -> Payment:
-    coins = to_decimal(stars * STARS_TO_COINS_RATE)
+    rate = float(await get_runtime_value(session, "stars_to_coins_rate") or STARS_TO_COINS_RATE)
+    coins = to_decimal(stars * rate)
     payload = f"custom_{user_id}_{uuid.uuid4().hex[:6]}"
     payment = Payment(
         user_id=user_id,
@@ -2430,12 +2434,49 @@ def generate_promocode_str(length: int = 10) -> str:
     return ''.join(random.choices(chars, k=length))
 
 
-def calculate_promocode_star_cost(coin_amount: Decimal, max_uses: int) -> int:
-    """Рассчёт стоимости промокода в Stars."""
-    base = float(coin_amount) * max_uses * PROMOCODE_CREATION_STAR_RATE
-    if max_uses >= PROMOCODE_BULK_DISCOUNT_THRESHOLD:
-        base *= PROMOCODE_BULK_DISCOUNT_RATE
-    return max(1, int(base))
+async def get_promocode_star_rate_effective(session: AsyncSession) -> float:
+    """Эффективный курс промокода, Stars за 1 монету (1 использование).
+
+    = max(настроенный flat-курс, лучший базовый курс магазина Stars * (1+markup)).
+    Благодаря floor от цен магазина промокод всегда дороже (или равен) покупки
+    тех же монет прямо в магазине — арбитраж «промокод дешевле магазина»
+    математически невозможен, а при смене цен в админке курс пересчитывается
+    автоматически.
+    """
+    flat_rate = float(await get_runtime_value(session, "promocode_creation_star_rate") or PROMOCODE_CREATION_STAR_RATE)
+    shop_rate = await get_shop_effective_star_rate(session)
+    if shop_rate is None:
+        return max(0.0, flat_rate)
+    markup = float(await get_runtime_value(session, "promocode_star_price_markup") or PROMOCODE_STAR_PRICE_MARKUP)
+    floor = shop_rate * max(0.0, 1.0 + markup)
+    return max(flat_rate, floor)
+
+
+async def calculate_promocode_star_cost(
+    session: AsyncSession,
+    coin_amount: Decimal,
+    max_uses: int,
+) -> int:
+    """Рассчёт стоимости промокода в Stars (асинхронно: цены из настроек).
+
+    Цена = max(базовая цена по flat-курсу с bulk-скидкой, цена тех же монет в
+    магазине с наценкой PROMOCODE_STAR_PRICE_MARKUP). Магазинный floor
+    пересчитывается от актуальных цен пакетов (настройки бота), поэтому
+    промокод не может выйти дешевле магазина — даже с bulk-скидкой.
+    """
+    total_coins = float(coin_amount) * max_uses
+    flat_rate = float(await get_runtime_value(session, "promocode_creation_star_rate") or PROMOCODE_CREATION_STAR_RATE)
+    base = total_coins * max(0.0, flat_rate)
+    bulk_threshold = int(float(await get_runtime_value(session, "promocode_bulk_discount_threshold") or PROMOCODE_BULK_DISCOUNT_THRESHOLD))
+    if max_uses >= bulk_threshold:
+        base *= float(await get_runtime_value(session, "promocode_bulk_discount_rate") or PROMOCODE_BULK_DISCOUNT_RATE)
+
+    floor = 0.0
+    shop_rate = await get_shop_effective_star_rate(session)
+    if shop_rate is not None:
+        markup = float(await get_runtime_value(session, "promocode_star_price_markup") or PROMOCODE_STAR_PRICE_MARKUP)
+        floor = total_coins * shop_rate * max(0.0, 1.0 + markup)
+    return max(1, int(math.ceil(max(base, floor))))
 
 
 async def create_promocode(
@@ -2464,7 +2505,7 @@ async def create_promocode(
     if hours < 1 or hours > PROMOCODE_MAX_HOURS:
         return None, 0, f"Срок от 1 до {PROMOCODE_MAX_HOURS} часов."
 
-    star_cost = calculate_promocode_star_cost(coin_amount, max_uses)
+    star_cost = await calculate_promocode_star_cost(session, coin_amount, max_uses)
 
     if not admin_free:
         # Проверка VIP (бесплатный промокод раз в месяц)
@@ -3126,20 +3167,110 @@ async def get_active_sale(session: AsyncSession):
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
+# ============================
+# ДИНАМИЧЕСКИЕ ЦЕНЫ МАГАЗИНА (из настроек бота)
+# ============================
+# Админ меняет цены в админке («🛍 Магазин»); значения живут в bot_settings:
+#   shop_stars_<pack_key> — цена пакета в Stars (целое число);
+#   rub_to_coins_rate     — курс 1 RUB -> N монет (пересчитывает все цены в рублях);
+#   shop_rub_<pack_key>   — своя цена пакета в рублях (перекрывает пересчёт по курсу);
+#   vip_price_rub         — цена VIP-подписки в рублях.
+# Все витрины, инвойсы и стоимость промокодов пересчитываются от этих значений
+# в момент запроса — купить монеты «контуром» (промокод/пакет) дешевле, чем
+# прямо в магазине, невозможно: при смене цен в магазине цена промокода
+# пересчитывается автоматически (floor от лучшей цены пакета + наценка).
+
+
+def _parse_price_int(raw: str | None, default: int, max_value: int = 100_000_000) -> int:
+    """Целое положительное число из строки настройки; битое значение -> default."""
+    if raw is None:
+        return default
+    try:
+        val = int(float(str(raw).strip()))
+    except (ValueError, TypeError):
+        return default
+    if val < 1 or val > max_value:
+        return default
+    return val
+
+
+async def get_shop_star_packages(session: AsyncSession) -> dict:
+    """Актуальные пакеты Stars: STARS_PACKAGES + переопределения shop_stars_<key>."""
+    packs = {
+        k: {"stars": int(v["stars"]), "coins": int(v["coins"]), "title": v["title"]}
+        for k, v in STARS_PACKAGES.items()
+    }
+    for k in packs:
+        raw = await get_setting(session, f"shop_stars_{k}", "")
+        if raw:
+            val = _parse_price_int(raw, 0)
+            if val:
+                packs[k]["stars"] = val
+    return packs
+
+
+async def get_shop_rub_packages(session: AsyncSession) -> dict:
+    """Актуальные пакеты в рублях (DonationAlerts).
+
+    Цена пакета монет = ceil(coins / rub_to_coins_rate), если админ не задал
+    свою цену (shop_rub_<key>); цена VIP = vip_price_rub. Рублёвый магазин
+    всегда пересчитан из единого курса — пакет не может оказаться дешевле
+    прямого доната на ту же сумму.
+    """
+    raw_rate = await get_setting(session, "rub_to_coins_rate", "")
+    try:
+        rate = float(raw_rate) if raw_rate else float(RUB_TO_COINS_RATE)
+    except (ValueError, TypeError):
+        rate = float(RUB_TO_COINS_RATE)
+    if rate <= 0:
+        rate = float(RUB_TO_COINS_RATE)
+    vip_price = _parse_price_int(await get_setting(session, "vip_price_rub", ""), int(VIP_PRICE_RUB))
+
+    packs = {}
+    for k, v in DA_ORDER_PACKAGES.items():
+        coins = int(v["coins"])
+        pack = {"amount": int(v["amount"]), "coins": coins, "title": v["title"]}
+        if v.get("reward_type") == "vip":
+            pack["reward_type"] = "vip"
+            pack["amount"] = vip_price
+            packs[k] = pack
+            continue
+        raw = await get_setting(session, f"shop_rub_{k}", "")
+        if raw:
+            pack["amount"] = _parse_price_int(raw, pack["amount"], max_value=1_000_000)
+        else:
+            pack["amount"] = max(1, math.ceil(coins / rate))
+        packs[k] = pack
+    return packs
+
+
+async def get_shop_effective_star_rate(session: AsyncSession) -> float | None:
+    """Лучший (минимальный) БАЗОВЫЙ курс магазина Stars: Stars за 1 монету.
+
+    Берётся по регулярным пакетам без учёта акций/скидок (старт-пак исключён —
+    он одноразовый и только для первого платежа). None, если таких пакетов нет.
+    """
+    packs = await get_shop_star_packages(session)
+    rates = [
+        p["stars"] / p["coins"]
+        for k, p in packs.items()
+        if k != STARTER_PACK_KEY and p["coins"] > 0
+    ]
+    return min(rates) if rates else None
+
+
 def _discount_stars_amount(base_stars: int, discount: float) -> int:
     return max(1, math.ceil(base_stars * (1.0 - discount)))
 
 
 async def get_current_prices(session: AsyncSession, user_id: int | None = None):
     try:
-        from app.config import VIP_PRICE_STARS, STARS_PACKAGES
+        from app.config import VIP_PRICE_STARS
         sale = await get_active_sale(session)
         active_events = await get_active_events(session)
 
         vip_price = int(VIP_PRICE_STARS)
-        packs = {}
-        for k, v in STARS_PACKAGES.items():
-            packs[k] = {"stars": v["stars"], "coins": v["coins"], "title": v["title"]}
+        packs = await get_shop_star_packages(session)
 
         # Приоритет систем скидок (берётся максимальная, не суммируются):
         # 1) Event — гибкая система скидок (applies_vip / applies_coins).
@@ -4340,10 +4471,14 @@ _SETTINGS_DEFAULTS = {
     "promocode_bulk_discount_threshold": PROMOCODE_BULK_DISCOUNT_THRESHOLD,
     "promocode_bulk_discount_rate": PROMOCODE_BULK_DISCOUNT_RATE,
     "promocode_creator_bonus_percent": PROMOCODE_CREATOR_BONUS_PERCENT,
+    "promocode_star_price_markup": PROMOCODE_STAR_PRICE_MARKUP,
     "promocode_max_amount": PROMOCODE_MAX_AMOUNT,
     "promocode_max_uses": PROMOCODE_MAX_USES,
     "promocode_max_hours": PROMOCODE_MAX_HOURS,
     "vip_free_promo_per_month": VIP_FREE_PROMO_PER_MONTH,
+    # Магазин (цены в рублях; цены Stars — настройки shop_stars_<pack_key>)
+    "rub_to_coins_rate": RUB_TO_COINS_RATE,
+    "vip_price_rub": VIP_PRICE_RUB,
 }
 
 
@@ -4634,11 +4769,13 @@ async def process_donationalerts_donation(
     if not user:
         return False, f"Пользователь с Telegram ID {telegram_user_id} не найден"
 
-    # 3. Определяем, что выдаём
+    # 3. Определяем, что выдаём (курс и цена VIP — из настроек бота)
     comment_lower = (comment or "").lower()
-    from app.config import VIP_PRICE_RUB, RUB_TO_COINS_RATE, ADMINS
-    
-    is_vip = "vip" in comment_lower or (abs(amount_rub - Decimal(str(VIP_PRICE_RUB))) < Decimal("0.01"))
+    from app.config import ADMINS
+    rub_rate = float(await get_runtime_value(session, "rub_to_coins_rate") or RUB_TO_COINS_RATE)
+    vip_price_rub = float(await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB)
+
+    is_vip = "vip" in comment_lower or (abs(amount_rub - Decimal(str(vip_price_rub))) < Decimal("0.01"))
 
     coins_reward = Decimal("0")
     if is_vip:
@@ -4646,7 +4783,7 @@ async def process_donationalerts_donation(
         reward_desc = "👑 VIP-подписка на 30 дней"
         await log_user_action(session, user.id, "vip_purchased_da", f"amount_rub={amount_rub}, da_id={donation_id}")
     else:
-        coins_reward = Decimal(str(amount_rub * Decimal(str(RUB_TO_COINS_RATE))))
+        coins_reward = Decimal(str(amount_rub * Decimal(str(rub_rate))))
         await change_balance_atomic(
             session, user.id, coins_reward, "donationalerts_deposit",
             details=f"rub={amount_rub}, da_id={donation_id}"

@@ -2778,6 +2778,7 @@ async def admin_bot_settings(callback: CallbackQuery):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Экономика", callback_data="settings_economy")],
+        [InlineKeyboardButton(text="🛍 Магазин (цены)", callback_data="settings_shop")],
         [InlineKeyboardButton(text="👑 VIP", callback_data="settings_vip")],
         [InlineKeyboardButton(text="🎁 Лутбоксы", callback_data="settings_games")],
         [InlineKeyboardButton(text="🚀 Аркада", callback_data="settings_arcade")],
@@ -2838,6 +2839,65 @@ async def settings_economy(callback: CallbackQuery):
         [InlineKeyboardButton(text="✏️ Реферал (пригл.)", callback_data="settings_edit:referral_reward_inviter")],
         [InlineKeyboardButton(text="✏️ Реферал (новый)", callback_data="settings_edit:referral_reward_new_user")],
         [InlineKeyboardButton(text="✏️ Бонус 1-й покупки", callback_data="settings_edit:first_purchase_daily_bonus")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
+    ])
+    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+# ---------- МАГАЗИН (ЦЕНЫ) ----------
+@router.callback_query(F.data == "settings_shop")
+async def settings_shop(callback: CallbackQuery):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    async with async_session() as session:
+        from app.services import (
+            get_setting, get_shop_star_packages, get_shop_rub_packages,
+            get_shop_effective_star_rate, get_promocode_star_rate_effective,
+        )
+        star_packs = await get_shop_star_packages(session)
+        rub_packs = await get_shop_rub_packages(session)
+        rub_rate = await get_setting(session, "rub_to_coins_rate", "")
+        vip_rub = await get_setting(session, "vip_price_rub", "")
+        eff_rate = await get_shop_effective_star_rate(session)
+        promo_rate = await get_promocode_star_rate_effective(session)
+    from app.config import STARS_PACKAGES, RUB_TO_COINS_RATE, VIP_PRICE_RUB
+    def v(db_val, default):
+        return f"{db_val or default}"
+
+    text = (
+        f"🛍 <b>Магазин (цены)</b>\n\n"
+        f"⭐ <b>Telegram Stars:</b>\n"
+    )
+    for k, p in star_packs.items():
+        mark = "" if p["stars"] == int(STARS_PACKAGES.get(k, {}).get("stars", p["stars"])) else " ✏️"
+        text += f"• {p['title']}: {p['stars']} Stars{mark}\n"
+    text += (
+        f"\n💳 <b>Рубли (DonationAlerts):</b>\n"
+        f"• Курс: 1 ₽ = {v(rub_rate, RUB_TO_COINS_RATE)} монет (цены пакетов пересчитываются от курса)\n"
+    )
+    for k, p in rub_packs.items():
+        if p.get("reward_type") == "vip":
+            text += f"• VIP 30 дней: {p['amount']} ₽\n"
+        else:
+            text += f"• {p['title']}: {p['amount']} ₽\n"
+    text += (
+        f"\n🎟 <b>Промокоды:</b> мин. цена пересчитывается от цен пакета "
+        f"(≈ {promo_rate:.2f} Stars/монета, магазин: {eff_rate:.3f} Stars/монета) — "
+        "промокод не может выйти дешевле магазина."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✏️ Старт-пак ({star_packs['starterpack']['stars']} Stars)", callback_data="settings_edit:shop_stars_starterpack")],
+        [InlineKeyboardButton(text=f"✏️ 500 монет ({star_packs['pack_50']['stars']} Stars)", callback_data="settings_edit:shop_stars_pack_50")],
+        [InlineKeyboardButton(text=f"✏️ 1 000 монет ({star_packs['pack_100']['stars']} Stars)", callback_data="settings_edit:shop_stars_pack_100")],
+        [InlineKeyboardButton(text=f"✏️ 2 200 монет ({star_packs['pack_200']['stars']} Stars)", callback_data="settings_edit:shop_stars_pack_200")],
+        [InlineKeyboardButton(text=f"✏️ Курс 1 ₽ = {v(rub_rate, RUB_TO_COINS_RATE)} монет", callback_data="settings_edit:rub_to_coins_rate")],
+        [InlineKeyboardButton(text=f"✏️ Цена VIP ({v(vip_rub, VIP_PRICE_RUB)} ₽)", callback_data="settings_edit:vip_price_rub")],
+        [InlineKeyboardButton(text=f"✏️ 100 монет ({rub_packs['coins_10']['amount']} ₽)", callback_data="settings_edit:shop_rub_coins_10")],
+        [InlineKeyboardButton(text=f"✏️ 500 монет ({rub_packs['coins_50']['amount']} ₽)", callback_data="settings_edit:shop_rub_coins_50")],
+        [InlineKeyboardButton(text=f"✏️ 1 000 монет ({rub_packs['coins_100']['amount']} ₽)", callback_data="settings_edit:shop_rub_coins_100")],
+        [InlineKeyboardButton(text=f"✏️ 5 000 монет ({rub_packs['coins_500']['amount']} ₽)", callback_data="settings_edit:shop_rub_coins_500")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
@@ -3041,14 +3101,23 @@ async def settings_promos(callback: CallbackQuery):
     from app.config import (
         PROMOCODE_CREATION_STAR_RATE, PROMOCODE_BULK_DISCOUNT_THRESHOLD,
         PROMOCODE_BULK_DISCOUNT_RATE, PROMOCODE_CREATOR_BONUS_PERCENT,
+        PROMOCODE_STAR_PRICE_MARKUP,
         PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
         VIP_FREE_PROMO_PER_MONTH,
     )
+    async with async_session() as session:
+        from app.services import get_setting, get_shop_effective_star_rate, get_promocode_star_rate_effective
+        mk = await get_setting(session, "promocode_star_price_markup", "")
+        shop_rate = await get_shop_effective_star_rate(session)
+        eff_rate = await get_promocode_star_rate_effective(session)
     def v(db_val, default):
         return f"{db_val or default}"
     text = (
         f"🎟 <b>Промокоды</b>\n\n"
-        f"Цена (Stars за 1 монету): {v(sr, PROMOCODE_CREATION_STAR_RATE)}\n"
+        f"Базовая цена (Stars за 1 монету): {v(sr, PROMOCODE_CREATION_STAR_RATE)}\n"
+        f"Наценка к цене магазина: {v(mk, PROMOCODE_STAR_PRICE_MARKUP)} (0.10 = +10%)\n"
+        f"Текущий курс магазина: {shop_rate:.3f} Stars/монета\n"
+        f"➜ Итоговая цена: ≈ <b>{eff_rate:.2f} Stars за 1 монету</b> — промокод не может быть дешевле магазина\n"
         f"Порог bulk скидки: {v(bt, PROMOCODE_BULK_DISCOUNT_THRESHOLD)}\n"
         f"Rate bulk скидки: {v(br, PROMOCODE_BULK_DISCOUNT_RATE)}\n"
         f"Бонус создателю (%): {v(cb, PROMOCODE_CREATOR_BONUS_PERCENT)}\n"
@@ -3058,7 +3127,8 @@ async def settings_promos(callback: CallbackQuery):
         f"Бесплатных промо VIP/мес: {v(vp, VIP_FREE_PROMO_PER_MONTH)}\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Цена Stars за 1 монету", callback_data="settings_edit:promocode_creation_star_rate")],
+        [InlineKeyboardButton(text="✏️ Базовая цена Stars за 1 монету", callback_data="settings_edit:promocode_creation_star_rate")],
+        [InlineKeyboardButton(text="✏️ Наценка к цене магазина", callback_data="settings_edit:promocode_star_price_markup")],
         [InlineKeyboardButton(text="✏️ Порог bulk скидки", callback_data="settings_edit:promocode_bulk_discount_threshold")],
         [InlineKeyboardButton(text="✏️ Rate bulk скидки", callback_data="settings_edit:promocode_bulk_discount_rate")],
         [InlineKeyboardButton(text="✏️ Бонус создателю", callback_data="settings_edit:promocode_creator_bonus_percent")],
@@ -3171,10 +3241,13 @@ async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None
         DONATION_ALERTS_ACCESS_TOKEN, DONATION_ALERTS_CLIENT_ID,
         DONATION_ALERTS_REFRESH_TOKEN,
     )
+    from app.services import get_setting, get_runtime_value
     async with async_session() as session:
         pending_exceptions = (await session.execute(
             select(func.count(DonationAlertException.id)).where(DonationAlertException.status == "pending")
         )).scalar() or 0
+        rub_rate = await get_runtime_value(session, "rub_to_coins_rate") or RUB_TO_COINS_RATE
+        vip_price_rub = await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB
 
     oauth_ready = bool(DONATION_ALERTS_ACCESS_TOKEN or (
         DONATION_ALERTS_CLIENT_ID and DONATION_ALERTS_REFRESH_TOKEN
@@ -3186,14 +3259,18 @@ async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None
         f"🤖 <b>Автоматизация:</b> {automation_status}\n"
         f"⚠️ <b>Очередь сверки:</b> {pending_exceptions}\n\n"
         f"📊 <b>Текущие настройки:</b>\n"
-        f"• 1 RUB ➔ <b>{int(RUB_TO_COINS_RATE)} монет</b>\n"
-        f"• VIP-подписка ➔ <b>{int(VIP_PRICE_RUB)} RUB / 30 дней</b>\n\n"
+        f"• 1 RUB ➔ <b>{int(rub_rate)} монет</b>\n"
+        f"• VIP-подписка ➔ <b>{int(vip_price_rub)} RUB / 30 дней</b>\n\n"
+        "Цены пакетов в рублях пересчитываются от курса 1 RUB = N монет "
+        "(точечные цены пакетов — в настройках «🛍 Магазин (цены)»).\n\n"
         "Автоматически зачисляются только платежи с действующим одноразовым кодом "
         "заказа и точной суммой. Всё остальное попадает в очередь сверки."
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"⚠️ Очередь сверки ({pending_exceptions})", callback_data="admin_da_exceptions")],
+        [InlineKeyboardButton(text=f"✏️ Курс 1 RUB = {int(rub_rate)} монет", callback_data="settings_edit:rub_to_coins_rate")],
+        [InlineKeyboardButton(text=f"✏️ Цена VIP ({int(vip_price_rub)} RUB)", callback_data="settings_edit:vip_price_rub")],
         [InlineKeyboardButton(text="➕ Начислить донат вручную", callback_data="admin_da_manual_start")],
         [InlineKeyboardButton(text="◀️ Назад в панель", callback_data="admin_center")],
     ])
@@ -3411,6 +3488,11 @@ async def settings_set_day(callback: CallbackQuery, state: FSMContext):
 
 
 
+def _is_numeric_setting_key(key: str) -> bool:
+    return key in ("rub_to_coins_rate", "vip_price_rub", "promocode_star_price_markup",
+                   "promocode_creation_star_rate") or key.startswith(("shop_stars_", "shop_rub_"))
+
+
 @router.message(BotSettingsState.waiting_value)
 async def settings_edit_save(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id):
@@ -3418,7 +3500,18 @@ async def settings_edit_save(message: Message, state: FSMContext):
     data = await state.get_data()
     key = data.get("settings_key", "")
     value = message.text.strip()
-    
+
+    if value != "-" and _is_numeric_setting_key(key):
+        try:
+            num = float(value.replace(",", "."))
+        except (ValueError, TypeError):
+            await message.answer("❌ Введи число (например <code>450</code> или <code>0.1</code>).")
+            return
+        if num <= 0:
+            await message.answer("❌ Цена должна быть положительным числом.")
+            return
+        value = str(int(num)) if num == int(num) else str(num)
+
     async with async_session() as session:
         from app.services import set_setting
         if value == "-":

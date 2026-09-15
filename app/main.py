@@ -1986,14 +1986,12 @@ async def api_lottery_buy_coins(request: web.Request) -> web.Response:
             return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
 
         pack_key = data.get("package_id", "")
-        from app.services import get_user, create_payment, get_current_prices
+        from app.services import get_user, create_payment, get_current_prices, get_shop_star_packages
         from app.db import async_session
-        from app.config import STARS_PACKAGES
-        pack = STARS_PACKAGES.get(pack_key)
-        if not pack:
-            return web.json_response({"ok": False, "error": "Unknown package"})
-
         async with async_session() as session:
+            pack = (await get_shop_star_packages(session)).get(pack_key)
+            if not pack:
+                return web.json_response({"ok": False, "error": "Unknown package"})
             user = await get_user(session, telegram_user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
