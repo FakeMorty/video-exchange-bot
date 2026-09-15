@@ -138,6 +138,19 @@ MONEY_PACKAGES = {
     "money_499": {"amount": 49900, "coins": 4400,  "title": "4 400 монет"},
 }
 
+# Дефолтные пакеты магазина в рублях (DonationAlerts).
+# Сумма «amount» — базовая цена в рублях; при изменении курса rub_to_coins_rate
+# в настройках бота суммы пересчитываются автоматически:
+# amount = ceil(coins / rub_to_coins_rate), если админ не задал свою цену
+# (настройка shop_rub_<key>). VIP-пакет берёт цену из vip_price_rub.
+DA_ORDER_PACKAGES = {
+    "coins_10":  {"amount": 10,  "coins": 100,  "title": "100 монет"},
+    "coins_50":  {"amount": 50,  "coins": 500,  "title": "500 монет"},
+    "coins_100": {"amount": 100, "coins": 1000, "title": "1 000 монет"},
+    "vip_150":   {"amount": 150, "coins": 0, "reward_type": "vip", "title": "VIP на 30 дней"},
+    "coins_500": {"amount": 500, "coins": 5000, "title": "5 000 монет"},
+}
+
 # Интервал показа офферов
 OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.5)
 OFFER_UNSUBSCRIBE_GRACE_MINUTES = _get_int("OFFER_UNSUBSCRIBE_GRACE_MINUTES", 15)
@@ -243,6 +256,12 @@ PROMOCODE_CREATION_STAR_RATE = 0.5
 PROMOCODE_BULK_DISCOUNT_THRESHOLD = 10
 PROMOCODE_BULK_DISCOUNT_RATE = 0.8
 PROMOCODE_CREATOR_BONUS_PERCENT = 5.0
+# Наценка на стоимость промокода относительно текущих цен магазина Stars.
+# Защита от арбитража: промокод ВСЕГДА пересчитывается от актуальных цен
+# магазина и не может выйти дешевле, чем купить те же монеты в магазине
+# (floor = цена_магазина * (1 + markup)). 0.10 = промокод на 10% дороже
+# магазина — перепродавать коды невыгодно.
+PROMOCODE_STAR_PRICE_MARKUP = _get_float("PROMOCODE_STAR_PRICE_MARKUP", 0.10)
 
 PROMOCODE_MAX_AMOUNT = 100000
 PROMOCODE_MAX_USES = 100

@@ -3766,3 +3766,148 @@ async def test_admin_extended_stats_collects_operational_metrics():
         assert stats["engagement"]["poll_responses_7d"] == 1
 
     await engine.dispose()
+
+
+# ══════════════════════════════════════════════════════════════
+#  Динамические цены магазина и защита от промо-арбитража
+#  (настройки shop_stars_* / rub_to_coins_rate / promocode_star_price_markup)
+# ══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_shop_star_price_overrides_flow_to_prices_and_payments():
+    """Переопределение цены пакета Stars в настройках бота сразу видят
+    витрина (get_current_prices) и инвойс (create_payment)."""
+    from app.services import (
+        get_shop_star_packages, get_current_prices, create_payment, set_setting,
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # Дефолты из config
+        packs = await get_shop_star_packages(session)
+        assert packs["pack_50"]["stars"] == 450
+
+        # Админ поднял цену пакета
+        await set_setting(session, "shop_stars_pack_50", "600")
+        packs = await get_shop_star_packages(session)
+        assert packs["pack_50"]["stars"] == 600
+
+        _, current_packs, _ = await get_current_prices(session)
+        assert current_packs["pack_50"]["stars"] == 600
+
+        user = User(telegram_id=9501, balance=Decimal("0.00"), nickname_set=True, display_name="BuyerX")
+        session.add(user)
+        await session.flush()
+        pay = await create_payment(session, user.id, "pack_50")
+        assert pay.stars_amount == 600
+        assert pay.coins_amount == Decimal("500")
+
+        # Некорректное значение игнорируется (возврат к дефолту)
+        await set_setting(session, "shop_stars_pack_50", "garbage")
+        packs = await get_shop_star_packages(session)
+        assert packs["pack_50"]["stars"] == 450
+        await set_setting(session, "shop_stars_pack_50", "0")
+        packs = await get_shop_star_packages(session)
+        assert packs["pack_50"]["stars"] == 450
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_promocode_cost_never_cheaper_than_shop():
+    """Схема «100 Stars за промокод на 200 монет» закрыта: цена промокода
+    пересчитывается от актуального прайса магазина (floor = лучший базовый
+    курс пакета + наценка) и не может упасть ниже цены тех же монет в
+    магазине — даже с bulk-скидкой. При смене цен в админке floor меняется."""
+    from app.services import (
+        calculate_promocode_star_cost, get_shop_effective_star_rate,
+        set_setting,
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # Дефолтный магазин: лучший базовый курс = 1800/2200 ≈ 0.818 Stars/монету.
+        # Старая цена 200 монет × 1 исп. была 200 * 0.5 = 100 Stars — дешевле
+        # магазина (164 Stars). Теперь floor = 200 * 0.818 * 1.10 ≈ 180.
+        rate = await get_shop_effective_star_rate(session)
+        assert abs(rate - 1800 / 2200) < 1e-9
+
+        cost = await calculate_promocode_star_cost(session, Decimal(200), 1)
+        assert cost >= 180, f"промокод дешевле магазина: {cost}"
+        assert cost > 100, "схема 100 Stars за 200 монет не пресечена"
+
+        # Цена тех же 200 монет в магазине (pack_200) = 200 * 1800/2200 ≈ 164
+        shop_price_200 = 200 * 1800 / 2200
+        assert cost >= shop_price_200
+
+        # Bulk-скидка не пробивает floor: 200 × 10 исп. не дешевле 2000 монет по курсу магазина
+        cost_bulk = await calculate_promocode_star_cost(session, Decimal(200), 10)
+        assert cost_bulk >= 2000 * (1800 / 2200) * 1.10 - 0.001
+
+        # Админ поднял цены магазина -> floor пересчитался вверх
+        for k, v in (("shop_stars_pack_50", "550"), ("shop_stars_pack_100", "1100"), ("shop_stars_pack_200", "2200")):
+            await set_setting(session, k, v)
+        rate2 = await get_shop_effective_star_rate(session)
+        assert abs(rate2 - 1.0) < 1e-9
+        cost2 = await calculate_promocode_star_cost(session, Decimal(200), 1)
+        assert cost2 >= 220, f"floor не пересчитан вверх: {cost2}"
+
+        # Админ опустил цены магазина -> floor пересчитался вниз,
+        # но не ниже базового flat-курса (0.5 * 200 = 100)
+        for k, v in (("shop_stars_pack_50", "250"), ("shop_stars_pack_100", "500"), ("shop_stars_pack_200", "1000")):
+            await set_setting(session, k, v)
+        cost3 = await calculate_promocode_star_cost(session, Decimal(200), 1)
+        assert cost3 == 100, f"floor не учёл удешевление магазина: {cost3}"
+
+        # Наценка 0 -> промокод ровно по цене магазина (не дешевле)
+        await set_setting(session, "promocode_star_price_markup", "0")
+        cost4 = await calculate_promocode_star_cost(session, Decimal(200), 1)
+        shop_now = 200 * min(250 / 500, 500 / 1000, 1000 / 2200)
+        assert cost4 >= shop_now - 1e-9, f"промокод дешевле магазина при markup=0: {cost4} < {shop_now}"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rub_packages_recalculated_from_rate():
+    """Рублёвые пакеты пересчитываются от курса 1 RUB = N монет; точечная
+    цена (shop_rub_<key>) и цена VIP (vip_price_rub) перекрывают пересчёт."""
+    from app.services import get_shop_rub_packages, set_setting
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # Дефолт: 10 монет за рубль -> 10/50/100/500 ₽ (как было в прайсе)
+        packs = await get_shop_rub_packages(session)
+        assert [packs[k]["amount"] for k in ("coins_10", "coins_50", "coins_100", "coins_500")] == [10, 50, 100, 500]
+        assert packs["vip_150"]["amount"] == 150
+        assert packs["vip_150"]["reward_type"] == "vip"
+
+        # Админ изменил курс -> все цены пересчитаны, пакет не дешевле прямого доната
+        await set_setting(session, "rub_to_coins_rate", "12")
+        packs = await get_shop_rub_packages(session)
+        assert packs["coins_10"]["amount"] == 9
+        assert packs["coins_50"]["amount"] == 42
+        assert packs["coins_100"]["amount"] == 84
+        assert packs["coins_500"]["amount"] == 417
+
+        # Точечная цена пакета
+        await set_setting(session, "shop_rub_coins_10", "15")
+        packs = await get_shop_rub_packages(session)
+        assert packs["coins_10"]["amount"] == 15
+        assert packs["coins_50"]["amount"] == 42, "соседние пакеты не должны меняться"
+
+        # Цена VIP
+        await set_setting(session, "vip_price_rub", "200")
+        packs = await get_shop_rub_packages(session)
+        assert packs["vip_150"]["amount"] == 200
+
+    await engine.dispose()

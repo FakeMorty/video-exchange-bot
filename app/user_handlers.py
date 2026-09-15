@@ -36,7 +36,7 @@ def is_any_admin(telegram_id: int, user_obj=None) -> bool:
 
 
 from app.config import (
-    ADMINS, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD, STARS_PACKAGES, STARS_TO_COINS_RATE,
+    ADMINS, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD, STARS_TO_COINS_RATE,
     ENABLE_ADMIN_FREE,
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
@@ -47,7 +47,6 @@ from app.config import (
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES, DAILY_PHOTO_LIMIT,
-    PROMOCODE_CREATION_STAR_RATE,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
     DYNAMIC_STAR_DISCOUNT_ENABLED,
@@ -103,6 +102,7 @@ from app.services import (
     can_show_offer_to_user, mark_offer_shown,
     get_random_active_offer, open_lootbox_for_stars,
     get_current_prices, get_active_events,
+    get_shop_rub_packages, get_shop_star_packages, get_promocode_star_rate_effective,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
     BLOCK_AUTHOR_REASONS, block_user, get_blocked_author_entries,
@@ -1105,10 +1105,12 @@ async def show_vip(message: Message, state: FSMContext):
                 if not sale_badge and sale and sale.applies_to in ("all", "vip"):
                     sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
                 
+                from app.services import get_runtime_value
                 from app.config import VIP_PRICE_RUB
+                vip_price_rub = int(float(await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB))
                 await message.answer(
                     f"👑 <b>VIP статус через DonationAlerts</b>\n\n"
-                    f"💰 Стоимость на 30 дней: <b>{int(VIP_PRICE_RUB)} руб.</b>{sale_badge}{admin_free_badge}\n\n"
+                    f"💰 Стоимость на 30 дней: <b>{vip_price_rub} руб.</b>{sale_badge}{admin_free_badge}\n\n"
                     f"Привилегии:\n"
                     f"• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n"
                     f"• 🎬 Просмотр фото без дневного лимита\n"
@@ -1118,7 +1120,7 @@ async def show_vip(message: Message, state: FSMContext):
                     "в поле «Сообщение» DonationAlerts вместе с точной суммой.",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="👑 Получить код VIP за 150 ₽", callback_data="da_order:vip_150")],
+                        [InlineKeyboardButton(text=f"👑 Получить код VIP за {vip_price_rub} ₽", callback_data="da_order:vip_150")],
                         [InlineKeyboardButton(text=f"⭐️ Резерв: VIP за {vip_price} Stars", callback_data="buy_vip")],
                     ])
                 )
@@ -2121,22 +2123,24 @@ async def cb_store_vip(callback: CallbackQuery):
     await callback.answer()
 
 
-DA_ORDER_PACKAGES = {
-    "coins_10": {"amount": Decimal("10"), "coins": Decimal("100"), "title": "100 монет"},
-    "coins_50": {"amount": Decimal("50"), "coins": Decimal("500"), "title": "500 монет"},
-    "coins_100": {"amount": Decimal("100"), "coins": Decimal("1000"), "title": "1 000 монет"},
-    "vip_150": {"amount": Decimal("150"), "coins": Decimal("0"), "reward_type": "vip", "title": "VIP на 30 дней"},
-    "coins_500": {"amount": Decimal("500"), "coins": Decimal("5000"), "title": "5 000 монет"},
-}
-
-
 async def _show_legacy_donationalerts(message: Message, state: FSMContext):
-    """Показывает выбор пакета без лишнего обращения к БД.
+    """Показывает выбор пакета (цены — актуальные, из настроек бота).
 
     Проверка пользователя и создание защищённого одноразового заказа происходят
-    после выбора пакета. Благодаря этому витрина всегда открывается мгновенно.
+    после выбора пакета.
     """
     await state.clear()
+    try:
+        async with async_session() as session:
+            rub_packages = await get_shop_rub_packages(session)
+    except Exception:
+        logger.exception("Error while building DonationAlerts packages")
+        await message.answer("⚠️ Не удалось загрузить пакеты. Попробуйте ещё раз через несколько секунд.")
+        return
+    if not rub_packages:
+        await message.answer("⚠️ Пакеты временно недоступны. Попробуйте ещё раз.")
+        return
+
     text = (
         "💳 <b>Пополнение через DonationAlerts</b>\n\n"
         "Выберите фиксированный пакет. После выбора бот создаст одноразовый "
@@ -2144,26 +2148,23 @@ async def _show_legacy_donationalerts(message: Message, state: FSMContext):
         "Так платёж автоматически и безопасно привяжется к вашему аккаунту.\n\n"
         "⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом."
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="10 ₽ — 100 монет", callback_data="da_order:coins_10")],
-        [InlineKeyboardButton(text="50 ₽ — 500 монет", callback_data="da_order:coins_50")],
-        [InlineKeyboardButton(text="100 ₽ — 1 000 монет", callback_data="da_order:coins_100")],
-        [InlineKeyboardButton(text="150 ₽ — VIP на 30 дней", callback_data="da_order:vip_150")],
-        [InlineKeyboardButton(text="500 ₽ — 5 000 монет", callback_data="da_order:coins_500")],
-        [InlineKeyboardButton(text="🌐 Telegram Stars (резерв)", callback_data="show_stars_menu")],
-    ])
+    rows = [
+        [InlineKeyboardButton(text=f"{p_data['amount']} ₽ — {p_data['title']}", callback_data=f"da_order:{p_id}")]
+        for p_id, p_data in rub_packages.items()
+    ]
+    rows.append([InlineKeyboardButton(text="🌐 Telegram Stars (резерв)", callback_data="show_stars_menu")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("da_order:"))
 async def cb_create_donationalerts_order(callback: CallbackQuery):
     package_key = callback.data.split(":", 1)[1]
-    package = DA_ORDER_PACKAGES.get(package_key)
-    if not package:
-        await callback.answer("Пакет не найден.", show_alert=True)
-        return
-
     async with async_session() as session:
+        package = (await get_shop_rub_packages(session)).get(package_key)
+        if not package:
+            await callback.answer("Пакет не найден.", show_alert=True)
+            return
         user = await get_user(session, callback.from_user.id)
         if not user:
             await callback.answer()
@@ -2179,7 +2180,7 @@ async def cb_create_donationalerts_order(callback: CallbackQuery):
     expires_at = order.expires_at.strftime("%H:%M")
     await callback.message.answer(
         f"✅ <b>Заказ создан: {package['title']}</b>\n\n"
-        f"Сумма: <b>{package['amount']:.0f} ₽</b>\n"
+        f"Сумма: <b>{int(package['amount'])} ₽</b>\n"
         f"Код заказа: <code>{order.order_code}</code>\n\n"
         "1️⃣ Нажмите «Перейти к оплате».\n"
         "2️⃣ Укажите точную сумму заказа.\n"
@@ -2205,12 +2206,12 @@ async def cb_copy_donationalerts_order(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("buy:"))
 async def cb_buy_pack(callback: CallbackQuery):
     pack_key = callback.data.split(":")[1]
-    pack = STARS_PACKAGES.get(pack_key)
-    if not pack:
-        await callback.answer("Пакет не найден.", show_alert=True)
-        return
 
     async with async_session() as session:
+        base_pack = (await get_shop_star_packages(session)).get(pack_key)
+        if not base_pack:
+            await callback.answer("Пакет не найден.", show_alert=True)
+            return
         user = await get_user(session, callback.from_user.id)
         if not user:
             await callback.answer()
@@ -2225,6 +2226,8 @@ async def cb_buy_pack(callback: CallbackQuery):
         if not current_pack:
             await callback.answer("Пакет не найден.", show_alert=True)
             return
+
+        pack = base_pack
 
         # Admin free — выдаём монеты без оплаты
         if await is_admin_free_eligible(session, callback.from_user.id, user):
@@ -4358,10 +4361,12 @@ async def btn_promo(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="🎁 Еженедельная Халява", callback_data="promo_freebie_start")],
             [InlineKeyboardButton(text="📋 Мои промокоды", callback_data="promo_my")],
         ])
+        rate = await get_promocode_star_rate_effective(session)
         await message.answer(
             "🎟 <b>Промокоды</b>\n\n"
             "Создай код на монеты и поделись им с друзьями!\n"
-            f"Стоимость создания: {PROMOCODE_CREATION_STAR_RATE} Stars за 1 монету × использования.\n"
+            f"Стоимость создания: ≈ <b>{rate:.2f} Stars</b> за 1 монету × использования.\n"
+            "Цена пересчитывается от актуального прайса магазина — промокод не может быть дешевле магазина.\n"
             f"VIP: {VIP_FREE_PROMO_PER_MONTH} бесплатный код в месяц.",
             parse_mode="HTML",
             reply_markup=kb
@@ -4422,13 +4427,15 @@ async def promo_hours(message: Message, state: FSMContext):
     data = await state.get_data()
     amount = data["promo_amount"]
     uses = data["promo_uses"]
-    star_cost = calculate_promocode_star_cost(to_decimal(amount), uses)
 
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
             await state.clear()
             return
+        # Цена пересчитывается от актуального прайса магазина (floor + markup):
+        # промокод всегда дороже (или равен) покупке тех же монет в магазине.
+        star_cost = await calculate_promocode_star_cost(session, to_decimal(amount), uses)
         admin_free = is_admin_or_super(message.from_user.id, user)
         if admin_free:
             promo, _, error = await create_promocode(session, message.from_user.id,
@@ -4464,15 +4471,16 @@ async def promo_hours(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        # Платный – выставляем инвойс
-        discount = await get_stars_discount(session, user.id)
-        billed_star_cost = max(1, int(math.ceil(star_cost * (1 - discount)))) if discount > 0 else star_cost
+        # Платный – выставляем инвойс.
+        # ВАЖНО: скидка за перк на цену промокода НЕ применяется — floor
+        # уже считает от базового прайса магазина, а пересдача кода
+        # пользователю без скидки должна оставаться невыгодной.
         payload = f"promo_{message.from_user.id}_{amount}_{uses}_{hours}_{uuid.uuid4().hex[:4]}"
         await ensure_payment_pending(
             session,
             user_id=user.id,
             payload=payload,
-            stars_amount=billed_star_cost,
+            stars_amount=star_cost,
         )
         await session.commit()
         await message.answer_invoice(
@@ -4480,7 +4488,7 @@ async def promo_hours(message: Message, state: FSMContext):
             description=f"{amount} монет × {uses} исп. на {hours}ч",
             payload=payload,
             currency="XTR",
-            prices=[LabeledPrice(label="Промокод", amount=billed_star_cost)]
+            prices=[LabeledPrice(label="Промокод", amount=star_cost)]
         )
     await state.clear()
 
