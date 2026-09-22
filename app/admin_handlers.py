@@ -1983,10 +1983,9 @@ async def cb_admin_user_dossier_detailed(callback: CallbackQuery):
         if not d:
             await callback.answer("Пользователь не найден.", show_alert=True)
             return
-            
-    from app.user_handlers import is_vip
-    user = d["user"]
-    styled_name = await get_styled_display_name(session, user, card=True)
+        from app.user_handlers import is_vip
+        user = d["user"]
+        styled_name = await get_styled_display_name(session, user, card=True)
     
     text = (
         f"🔍 <b>ПОЛНОЕ СЛЕДСТВЕННОЕ ДОСЬЕ ПОЛЬЗОВАТЕЛЯ</b>\n"
@@ -3098,12 +3097,14 @@ async def settings_promos(callback: CallbackQuery):
         mu = await get_setting(session, "promocode_max_uses", "")
         mh = await get_setting(session, "promocode_max_hours", "")
         vp = await get_setting(session, "vip_free_promo_per_month", "")
+        vmc = await get_setting(session, "vip_free_promo_max_coins", "")
+        vmu = await get_setting(session, "vip_free_promo_max_uses", "")
     from app.config import (
         PROMOCODE_CREATION_STAR_RATE, PROMOCODE_BULK_DISCOUNT_THRESHOLD,
         PROMOCODE_BULK_DISCOUNT_RATE, PROMOCODE_CREATOR_BONUS_PERCENT,
         PROMOCODE_STAR_PRICE_MARKUP,
         PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
-        VIP_FREE_PROMO_PER_MONTH,
+        VIP_FREE_PROMO_PER_MONTH, VIP_FREE_PROMO_MAX_COINS, VIP_FREE_PROMO_MAX_USES,
     )
     async with async_session() as session:
         from app.services import get_setting, get_shop_effective_star_rate, get_promocode_star_rate_effective
@@ -3125,6 +3126,8 @@ async def settings_promos(callback: CallbackQuery):
         f"Макс. использований: {v(mu, PROMOCODE_MAX_USES)}\n"
         f"Макс. часов: {v(mh, PROMOCODE_MAX_HOURS)}\n"
         f"Бесплатных промо VIP/мес: {v(vp, VIP_FREE_PROMO_PER_MONTH)}\n"
+        f"Макс. монет в бесплатном VIP промо: {v(vmc, VIP_FREE_PROMO_MAX_COINS)}\n"
+        f"Макс. исп. в бесплатном VIP промо: {v(vmu, VIP_FREE_PROMO_MAX_USES)}\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Базовая цена Stars за 1 монету", callback_data="settings_edit:promocode_creation_star_rate")],
@@ -3136,6 +3139,8 @@ async def settings_promos(callback: CallbackQuery):
         [InlineKeyboardButton(text="✏️ Макс. использований", callback_data="settings_edit:promocode_max_uses")],
         [InlineKeyboardButton(text="✏️ Макс. часов", callback_data="settings_edit:promocode_max_hours")],
         [InlineKeyboardButton(text="✏️ Бесплатных промо VIP", callback_data="settings_edit:vip_free_promo_per_month")],
+        [InlineKeyboardButton(text="✏️ Макс. монет бесплатного промо VIP", callback_data="settings_edit:vip_free_promo_max_coins")],
+        [InlineKeyboardButton(text="✏️ Макс. исп. бесплатного промо VIP", callback_data="settings_edit:vip_free_promo_max_uses")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
@@ -3490,7 +3495,8 @@ async def settings_set_day(callback: CallbackQuery, state: FSMContext):
 
 def _is_numeric_setting_key(key: str) -> bool:
     return key in ("rub_to_coins_rate", "vip_price_rub", "promocode_star_price_markup",
-                   "promocode_creation_star_rate") or key.startswith(("shop_stars_", "shop_rub_"))
+                   "promocode_creation_star_rate", "vip_free_promo_max_coins",
+                   "vip_free_promo_max_uses") or key.startswith(("shop_stars_", "shop_rub_"))
 
 
 @router.message(BotSettingsState.waiting_value)

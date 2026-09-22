@@ -54,6 +54,8 @@ from app.config import (
     PROMOCODE_STAR_PRICE_MARKUP,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
+    VIP_FREE_PROMO_MAX_COINS,
+    VIP_FREE_PROMO_MAX_USES,
     DYNAMIC_STAR_DISCOUNT_ENABLED,
     DYNAMIC_STAR_DISCOUNT_HOURS,
     DYNAMIC_STAR_DISCOUNT_MULTIPLIER,
@@ -1213,12 +1215,25 @@ async def check_daily_photo_limit(session: AsyncSession, user_id: int) -> bool:
 # ============================
 # РЕЙТИНГИ
 # ============================
-async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating: int) -> bool:
+async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating: int) -> tuple[bool, bool, str | None]:
+    """
+    Returns (ok, is_new, error_message).
+    - Checks that user is not the uploader.
+    - If already rated, updates the rating and returns is_new=False.
+    - If first rating, adds new rating and returns is_new=True.
+    """
+    video = await get_video_by_id(session, video_id)
+    if not video:
+        return False, False, "Видео не найдено."
+    if video.uploader_user_id == user_id:
+        return False, False, "Нельзя оценивать собственный контент."
+
     existing = (await session.execute(
         select(VideoRating).where(
             VideoRating.user_id == user_id, VideoRating.video_id == video_id
         )
     )).scalar_one_or_none()
+    is_new = existing is None
     if existing:
         existing.rating = rating
     else:
@@ -1226,7 +1241,7 @@ async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating:
     await session.commit()
     await _apply_content_quality_bonus_if_needed(session, video_id)
     await session.commit()
-    return True
+    return True, is_new, None
 
 
 # ============================
@@ -1883,7 +1898,7 @@ async def start_offer_participation(session: AsyncSession, user_id: int,
                                     offer_id: int) -> tuple["OfferParticipation | None", bool]:
     offer = await get_offer_by_id(session, offer_id)
     user = await get_user_by_id(session, user_id)
-    if not user or not is_offer_available(offer):
+    if not user or not is_offer_available(offer) or offer.creator_user_id == user_id:
         return None, False
 
     existing = (await session.execute(
@@ -1941,7 +1956,7 @@ async def verify_offer_subscription(
 
     offer = await get_offer_by_id(session, offer_id)
     user = await get_user_by_id(session, user_id)
-    if not user or not is_offer_available(offer):
+    if not user or not is_offer_available(offer) or offer.creator_user_id == user_id:
         return False, Decimal("0")
 
     part.status = "completed"
@@ -2488,10 +2503,13 @@ async def create_promocode(
     is_public: bool = False,
     admin_free: bool = False,
     auto_commit: bool = True,
+    is_paid: bool = False,
+    stars_paid: int | None = None,
 ) -> tuple["Promocode | None", int, str | None]:
     """
     Создаёт промокод.
     admin_free=True — бесплатно для админа (без списания Stars).
+    is_paid=True — промокод уже оплачен через инвойс Stars на stars_paid.
     Возвращает (промокод, цена_Stars, ошибка).
     """
     user = await get_user(session, creator_tg_id)
@@ -2507,28 +2525,31 @@ async def create_promocode(
 
     star_cost = await calculate_promocode_star_cost(session, coin_amount, max_uses)
 
-    if not admin_free:
-        # Проверка VIP (бесплатный промокод раз в месяц)
-        # Correct logic: separate month-tracking field
+    if is_paid:
+        star_cost = int(stars_paid if stars_paid is not None else star_cost)
+    elif not admin_free:
+        # Проверка VIP (бесплатный промокод раз в месяц, строго в рамках лимита)
         if user.vip_until and user.vip_until > utc_now():
             month_key = utc_now().year * 12 + utc_now().month
-            # Use dedicated promo_month field to track last reset month
             promo_month = getattr(user, 'promo_month', 0) or 0
-            # Сбрасываем счётчик если новый месяц
             if promo_month != month_key:
                 user.promo_created_this_month = 0
                 user.promo_month = month_key
-            if user.promo_created_this_month < VIP_FREE_PROMO_PER_MONTH:
+            max_free_coins = int(await get_runtime_value(session, "vip_free_promo_max_coins") or VIP_FREE_PROMO_MAX_COINS)
+            max_free_uses = int(await get_runtime_value(session, "vip_free_promo_max_uses") or VIP_FREE_PROMO_MAX_USES)
+            if (
+                user.promo_created_this_month < VIP_FREE_PROMO_PER_MONTH
+                and (float(coin_amount) * max_uses) <= max_free_coins
+                and max_uses <= max_free_uses
+            ):
                 star_cost = 0
                 user.promo_created_this_month += 1
 
-        # Если не админ и нужна оплата -> нужен инвойс (здесь просто возвращаем стоимость)
-        if star_cost > 0:
-            # Проверяем только стоимость, само списание будет через инвойс
-            pass
-
     code = generate_promocode_str()
     expires_at = utc_now() + timedelta(hours=hours)
+
+    is_via_stars = is_paid or (star_cost > 0 and not admin_free)
+    actual_stars_paid = int(stars_paid) if stars_paid is not None else (star_cost if is_via_stars else 0)
 
     promo = Promocode(
         creator_user_id=user.id,
@@ -2538,8 +2559,8 @@ async def create_promocode(
         used_count=0,
         is_active=True,
         is_public=is_public,
-        created_via_stars=(star_cost > 0 and not admin_free),
-        stars_paid=0 if (admin_free or (star_cost == 0 and user.vip_until)) else star_cost,
+        created_via_stars=is_via_stars,
+        stars_paid=actual_stars_paid,
         expires_at=expires_at,
     )
     session.add(promo)
@@ -2548,7 +2569,7 @@ async def create_promocode(
     else:
         await session.flush()
     await log_user_action(session, user.id, "create_promocode",
-                          f"code={code}, amount={coin_amount}, uses={max_uses}, admin_free={admin_free}",
+                          f"code={code}, amount={coin_amount}, uses={max_uses}, admin_free={admin_free}, paid_stars={actual_stars_paid}",
                           auto_commit=auto_commit)
     return promo, star_cost, None
 
@@ -2569,6 +2590,9 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         return "Промокод истёк."
     if promo.used_count >= promo.max_uses:
         return "Лимит использований исчерпан."
+    # Запрет создателю активировать собственный промокод
+    if promo.creator_user_id == user_id:
+        return "❌ Нельзя активировать собственный промокод."
     # Проверка на повторную активацию
     already = (await session.execute(
         select(PromocodeActivation).where(
@@ -2578,24 +2602,51 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
     )).scalar_one_or_none()
     if already:
         return "Этот промокод уже активирован."
+
+    from sqlalchemy import case
+    from sqlalchemy.exc import IntegrityError
+
+    # Атомарный инкремент с проверкой лимита
+    upd_res = await session.execute(
+        update(Promocode)
+        .where(
+            Promocode.id == promo.id,
+            Promocode.is_active == True,
+            Promocode.used_count < Promocode.max_uses,
+        )
+        .values(
+            used_count=Promocode.used_count + 1,
+            is_active=case(
+                (Promocode.used_count + 1 >= Promocode.max_uses, False),
+                else_=True,
+            ),
+        )
+    )
+    if upd_res.rowcount == 0:
+        return "Лимит использований исчерпан."
+
     # Начисление
     amount = promo.coin_amount
     await change_balance_atomic(session, user.id, amount, "promocode_activation",
                                  details=f"code={promo.code}")
-    promo.used_count += 1
-    if promo.used_count >= promo.max_uses:
-        promo.is_active = False
     # Запись активации
     activation = PromocodeActivation(promocode_id=promo.id, user_id=user_id)
     session.add(activation)
-    # Бонус создателю
-    if PROMOCODE_CREATOR_BONUS_PERCENT > 0:
+    # Бонус создателю: ТОЛЬКО для не-Stars промокодов от админов,
+    # для платных за Stars промокодов бонус создателю отключён, чтобы исключить
+    # накрутку бонусных монет из воздуха через твинков (арбитраж против магазина).
+    creator_bonus_pct = float(await get_runtime_value(session, "promocode_creator_bonus_percent") or PROMOCODE_CREATOR_BONUS_PERCENT)
+    if creator_bonus_pct > 0 and not promo.created_via_stars:
         creator = await get_user_by_id(session, promo.creator_user_id)
-        if creator and creator.id != user_id:
-            bonus = amount * to_decimal(PROMOCODE_CREATOR_BONUS_PERCENT / 100)
+        if creator and creator.id != user_id and is_admin_or_super(creator.telegram_id, creator):
+            bonus = amount * to_decimal(creator_bonus_pct / 100)
             await change_balance_atomic(session, creator.id, bonus, "promocode_creator_bonus",
                                          details=f"code={promo.code}, activator={user_id}")
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return "Этот промокод уже активирован."
     return f"✅ Промокод активирован! Начислено {amount} монет."
 
 
@@ -2983,6 +3034,8 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
             continue
         group_total = round_coin(pool * share)
         per_ticket = round_coin(group_total / len(winner_group))
+        if source == "lottery_win_3" and per_ticket < to_decimal(LOTTERY_MATCH3_REWARD):
+            per_ticket = to_decimal(LOTTERY_MATCH3_REWARD)
         for t in winner_group:
             user = await get_user_by_id(session, t.user_id)
             if not user or t.reward_paid:
@@ -2999,7 +3052,6 @@ async def settle_lottery_round(session: AsyncSession, round_obj: LotteryRound) -
             paid_total += per_ticket
 
     consolation_map = [
-        (winners_3, to_decimal(LOTTERY_MATCH3_REWARD), "lottery_win_3"),
         (winners_2, to_decimal(LOTTERY_MATCH2_REWARD), "lottery_win_2"),
     ]
     for winner_group, fixed_reward, source in consolation_map:
@@ -3439,6 +3491,7 @@ async def activate_perk(
         )
     )).scalar_one_or_none()
     
+    user = await get_user_by_id(session, user_id)
     if existing:
         # Продлеваем существующий
         new_end = max(existing.active_until, now) + timedelta(days=duration_days)
@@ -3446,6 +3499,9 @@ async def activate_perk(
         # Для custom_nick — обновляем style_id если передан
         if perk_type == "custom_nick" and style_id is not None:
             existing.style_id = style_id
+        if perk_type == "vip" and user:
+            cur_vip = max(user.vip_until, now) if user.vip_until and user.vip_until > now else now
+            user.vip_until = cur_vip + timedelta(days=duration_days)
         await session.commit()
         return existing
     else:
@@ -3456,6 +3512,9 @@ async def activate_perk(
             active_until=now + timedelta(days=duration_days),
         )
         session.add(perk)
+        if perk_type == "vip" and user:
+            cur_vip = max(user.vip_until, now) if user.vip_until and user.vip_until > now else now
+            user.vip_until = cur_vip + timedelta(days=duration_days)
         await session.commit()
         return perk
 
@@ -3471,6 +3530,10 @@ async def deactivate_perk(session: AsyncSession, user_id: int, perk_type: str) -
     )).scalar_one_or_none()
     if perk:
         perk.is_active = False
+        if perk_type == "vip":
+            user = await get_user_by_id(session, user_id)
+            if user:
+                user.vip_until = None
         await session.commit()
         return True
     return False
@@ -4476,6 +4539,8 @@ _SETTINGS_DEFAULTS = {
     "promocode_max_uses": PROMOCODE_MAX_USES,
     "promocode_max_hours": PROMOCODE_MAX_HOURS,
     "vip_free_promo_per_month": VIP_FREE_PROMO_PER_MONTH,
+    "vip_free_promo_max_coins": VIP_FREE_PROMO_MAX_COINS,
+    "vip_free_promo_max_uses": VIP_FREE_PROMO_MAX_USES,
     # Магазин (цены в рублях; цены Stars — настройки shop_stars_<pack_key>)
     "rub_to_coins_rate": RUB_TO_COINS_RATE,
     "vip_price_rub": VIP_PRICE_RUB,
@@ -4796,7 +4861,7 @@ async def process_donationalerts_donation(
         payload=payload_key,
         stars_amount=0,
         coins_amount=coins_reward,
-        status="completed"
+        status="paid"
     )
     session.add(payment)
     await session.commit()
