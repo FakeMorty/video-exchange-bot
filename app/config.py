@@ -191,6 +191,8 @@ VIP_BONUS_MULTIPLIER = _get_float("VIP_BONUS_MULTIPLIER", 2.0) # Снижено 
 VIP_FREE_PHOTOS = True
 VIP_WATCH_DISCOUNT = _get_float("VIP_WATCH_DISCOUNT", 0.5)   # скидка 50%
 VIP_FREE_PROMO_PER_MONTH = 1                                  # бесплатных промокодов для VIP
+VIP_FREE_PROMO_MAX_COINS = _get_int("VIP_FREE_PROMO_MAX_COINS", 200)   # макс. монет в бесплатном VIP промокоде
+VIP_FREE_PROMO_MAX_USES = _get_int("VIP_FREE_PROMO_MAX_USES", 1)       # макс. использований бесплатного VIP промокода
 
 # ============================
 # ИГРЫ

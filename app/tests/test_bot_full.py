@@ -3911,3 +3911,112 @@ async def test_rub_packages_recalculated_from_rate():
         assert packs["vip_150"]["amount"] == 200
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_promocode_self_activation_forbidden_and_no_paid_creator_bonus():
+    """Схема «создать промокод за 91 звезду и накрутить монеты»:
+    1) Создатель НЕ может активировать собственный промокод.
+    2) Для промокодов, купленных за Stars, бонус создателю НЕ начисляется
+       (исключает накрутку монет из воздуха через твинков).
+    3) Другой пользователь успешно активирует промокод и получает ровно сумму монет."""
+    from app.services import create_promocode, activate_promocode
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        creator = User(telegram_id=91001, balance=Decimal("0.00"), nickname_set=True, display_name="CreatorUser")
+        friend = User(telegram_id=91002, balance=Decimal("0.00"), nickname_set=True, display_name="FriendUser")
+        session.add_all([creator, friend])
+        await session.commit()
+
+        # Создаём платный промокод (100 монет за 91 звезду)
+        promo, cost, err = await create_promocode(
+            session, creator.telegram_id, Decimal("100"), 1, is_paid=True, stars_paid=91
+        )
+        assert err is None
+        assert promo.created_via_stars is True
+        assert promo.stars_paid == 91
+
+        # Попытка создателя активировать свой же промокод -> ОТКАЗ
+        res_self = await activate_promocode(session, creator.id, promo.code)
+        assert "Нельзя активировать собственный промокод" in res_self
+        await session.refresh(creator)
+        assert creator.balance == Decimal("0.00")
+
+        # Друг активирует промокод -> УСПЕХ
+        res_friend = await activate_promocode(session, friend.id, promo.code)
+        assert "активирован" in res_friend
+        await session.refresh(friend)
+        await session.refresh(creator)
+
+        # Друг получил ровно 100 монет
+        assert friend.balance == Decimal("100.00")
+        # Создатель НЕ получил бонус монет из воздуха (для платных Stars-промокодов)
+        assert creator.balance == Decimal("0.00")
+        assert friend.balance + creator.balance == Decimal("100.00")
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_vip_free_promocode_capped_and_cannot_self_activate():
+    """Бесплатный VIP-промокод строго ограничен лимитом (по умолчанию 200 монет и 1 исп.)
+    и не может быть активирован самим VIP-пользователем."""
+    from app.services import create_promocode, activate_promocode
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        vip = User(
+            telegram_id=92001,
+            balance=Decimal("0.00"),
+            nickname_set=True,
+            display_name="VipUser",
+            vip_until=utc_now() + timedelta(days=30),
+        )
+        friend = User(
+            telegram_id=92002,
+            balance=Decimal("0.00"),
+            nickname_set=True,
+            display_name="VipFriend",
+        )
+        session.add_all([vip, friend])
+        await session.commit()
+
+        # 1. В пределах лимита (100 монет, 1 исп.) -> бесплатно (cost = 0)
+        promo_free, cost_free, err = await create_promocode(
+            session, vip.telegram_id, Decimal("100"), 1
+        )
+        assert err is None
+        assert cost_free == 0
+        assert promo_free.created_via_stars is False
+
+        # VIP не может активировать свой бесплатный промокод
+        res_self = await activate_promocode(session, vip.id, promo_free.code)
+        assert "Нельзя активировать собственный промокод" in res_self
+        await session.refresh(vip)
+        assert vip.balance == Decimal("0.00")
+
+        # Друг может активировать
+        res_friend = await activate_promocode(session, friend.id, promo_free.code)
+        assert "активирован" in res_friend
+        await session.refresh(friend)
+        assert friend.balance == Decimal("100.00")
+
+        # 2. Попытка создания с превышением лимита (например 1000 монет или 5 исп.) -> ПЛАТНО
+        vip.promo_created_this_month = 0  # имитируем попытку сделать халявный промокод
+        promo_paid, cost_paid, err = await create_promocode(
+            session, vip.telegram_id, Decimal("1000"), 1
+        )
+        assert err is None
+        assert cost_paid > 0, "промокод на 1000 монет не должен быть бесплатным для VIP"
+
+    await engine.dispose()
+

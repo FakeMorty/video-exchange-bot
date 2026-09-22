@@ -49,6 +49,8 @@ from app.config import (
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES, DAILY_PHOTO_LIMIT,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
+    VIP_FREE_PROMO_MAX_COINS,
+    VIP_FREE_PROMO_MAX_USES,
     DYNAMIC_STAR_DISCOUNT_ENABLED,
     DYNAMIC_STAR_DISCOUNT_HOURS,
     DYNAMIC_STAR_DISCOUNT_MULTIPLIER,
@@ -90,7 +92,7 @@ from app.services import (
     get_or_create_game_session,
     check_daily_photo_limit,
     create_promocode, activate_promocode,
-    calculate_promocode_star_cost,
+    calculate_promocode_star_cost, get_runtime_value,
     create_feedback, process_referral_reward,
     ensure_current_lottery_round, buy_lottery_ticket, buy_lottery_tickets,
     get_latest_lottery_round, get_user_lottery_tickets, get_weekly_lottery_leaderboard, get_lottery_state_dict,
@@ -2580,13 +2582,14 @@ async def successful_payment(message: Message):
                     session, creator_tg_id,
                     to_decimal(amount), uses, hours,
                     auto_commit=False,
+                    is_paid=True,
+                    stars_paid=paid_stars,
                 )
                 if error:
                     await session.rollback()
                     session.expunge_all()
                     await message.answer(f"❌ Ошибка создания промокода: {error}")
                 else:
-                    # Фиксируем фактически оплаченные Stars, чтобы учёт не врал при скидках.
                     promo.stars_paid = paid_stars
                     await session.commit()
                     if await _is_first_paid_payment(session, user.id):
@@ -2596,7 +2599,8 @@ async def successful_payment(message: Message):
                         f"✅ Промокод создан:\n"
                         f"<code>{promo.code}</code>\n"
                         f"Сумма: {amount} монет, использований: {uses}/{promo.max_uses}\n"
-                        f"Ссылка: t.me/{bot.username}?start=promo_{promo.code}",
+                        f"Ссылка: t.me/{bot.username}?start=promo_{promo.code}\n\n"
+                        f"⚠️ Поделись ссылкой с другом. Активировать собственный промокод нельзя.",
                         parse_mode="HTML"
                     )
         else:
@@ -4362,12 +4366,15 @@ async def btn_promo(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="📋 Мои промокоды", callback_data="promo_my")],
         ])
         rate = await get_promocode_star_rate_effective(session)
+        max_free_coins = int(await get_runtime_value(session, "vip_free_promo_max_coins") or VIP_FREE_PROMO_MAX_COINS)
+        max_free_uses = int(await get_runtime_value(session, "vip_free_promo_max_uses") or VIP_FREE_PROMO_MAX_USES)
         await message.answer(
             "🎟 <b>Промокоды</b>\n\n"
             "Создай код на монеты и поделись им с друзьями!\n"
             f"Стоимость создания: ≈ <b>{rate:.2f} Stars</b> за 1 монету × использования.\n"
             "Цена пересчитывается от актуального прайса магазина — промокод не может быть дешевле магазина.\n"
-            f"VIP: {VIP_FREE_PROMO_PER_MONTH} бесплатный код в месяц.",
+            f"VIP: {VIP_FREE_PROMO_PER_MONTH} бесплатный код в месяц (до {max_free_coins} монет, {max_free_uses} исп.).\n"
+            "⚠️ Активировать свой собственный промокод нельзя — промокоды предназначены для друзей.",
             parse_mode="HTML",
             reply_markup=kb
         )
@@ -4448,14 +4455,21 @@ async def promo_hours(message: Message, state: FSMContext):
                     f"✅ Промокод создан (админ-режим):\n"
                     f"<code>{promo.code}</code>\n"
                     f"Сумма: {amount} монет, использований: {uses}/{promo.max_uses}\n"
-                    f"Ссылка: t.me/{(await message.bot.get_me()).username}?start=promo_{promo.code}",
+                    f"Ссылка: t.me/{(await message.bot.get_me()).username}?start=promo_{promo.code}\n\n"
+                    f"⚠️ Поделись ссылкой с пользователями. Активировать собственный промокод нельзя.",
                     parse_mode="HTML"
                 )
             await state.clear()
             return
 
-        # VIP бесплатный
-        if is_vip(user) and user.promo_created_this_month < VIP_FREE_PROMO_PER_MONTH:
+        # VIP бесплатный (строго в пределах лимита)
+        max_free_coins = int(await get_runtime_value(session, "vip_free_promo_max_coins") or VIP_FREE_PROMO_MAX_COINS)
+        max_free_uses = int(await get_runtime_value(session, "vip_free_promo_max_uses") or VIP_FREE_PROMO_MAX_USES)
+        is_vip_user = is_vip(user)
+        has_free_left = is_vip_user and (getattr(user, "promo_created_this_month", 0) or 0) < VIP_FREE_PROMO_PER_MONTH
+        within_limits = (amount * uses) <= max_free_coins and uses <= max_free_uses
+
+        if has_free_left and within_limits:
             promo, cost, error = await create_promocode(session, message.from_user.id,
                                                          to_decimal(amount), uses, hours)
             if error:
@@ -4465,11 +4479,19 @@ async def promo_hours(message: Message, state: FSMContext):
                     f"✅ Бесплатный VIP-промокод:\n"
                     f"<code>{promo.code}</code>\n"
                     f"Сумма: {amount} монет, использований: {uses}\n"
-                    f"Осталось бесплатных в этом месяце: {VIP_FREE_PROMO_PER_MONTH - user.promo_created_this_month}",
+                    f"Осталось бесплатных в этом месяце: {VIP_FREE_PROMO_PER_MONTH - user.promo_created_this_month}\n\n"
+                    f"⚠️ Поделись кодом с другом! Активировать собственный промокод нельзя.",
                     parse_mode="HTML"
                 )
             await state.clear()
             return
+
+        if has_free_left and not within_limits:
+            await message.answer(
+                f"ℹ️ Бесплатный VIP-промокод ограничен: максимум <b>{max_free_coins}</b> монет и <b>{max_free_uses}</b> исп.\n"
+                f"Твой запрос ({amount} монет × {uses} исп.) превышает лимит бесплатного кода и оформляется как платный через Stars.",
+                parse_mode="HTML"
+            )
 
         # Платный – выставляем инвойс.
         # ВАЖНО: скидка за перк на цену промокода НЕ применяется — floor
