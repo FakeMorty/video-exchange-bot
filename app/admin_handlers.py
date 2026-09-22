@@ -1983,10 +1983,9 @@ async def cb_admin_user_dossier_detailed(callback: CallbackQuery):
         if not d:
             await callback.answer("Пользователь не найден.", show_alert=True)
             return
-            
-    from app.user_handlers import is_vip
-    user = d["user"]
-    styled_name = await get_styled_display_name(session, user, card=True)
+        from app.user_handlers import is_vip
+        user = d["user"]
+        styled_name = await get_styled_display_name(session, user, card=True)
     
     text = (
         f"🔍 <b>ПОЛНОЕ СЛЕДСТВЕННОЕ ДОСЬЕ ПОЛЬЗОВАТЕЛЯ</b>\n"

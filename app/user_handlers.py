@@ -1680,12 +1680,16 @@ async def cb_rate(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
-        await rate_video(session, user.id, video_id, rating)
-        xp_mult = await get_xp_multiplier(session, user.id)
-        user.xp += int(XP_PER_RATING * xp_mult)
-        await _level_up_check(session, user, callback)
-        await session.commit()
-        await _update_quest_progress(session, user.id, "rate", 1)
+        ok, is_new, err = await rate_video(session, user.id, video_id, rating)
+        if not ok:
+            await callback.answer(err or "Не удалось оценить видео.", show_alert=True)
+            return
+        if is_new:
+            xp_mult = await get_xp_multiplier(session, user.id)
+            user.xp += int(XP_PER_RATING * xp_mult)
+            await _level_up_check(session, user, callback)
+            await session.commit()
+            await _update_quest_progress(session, user.id, "rate", 1)
 
     await callback.answer(f"⭐ Оценка {rating} сохранена!")
 
@@ -1991,6 +1995,8 @@ async def handle_photo_upload(message: Message):
         await _level_up_check(session, user, message)
         await session.commit()
         await _update_quest_progress(session, user.id, "upload", 1)
+        # Запланировать агрегированное уведомление админам
+        await schedule_mod_notification(session, "video")
         data = _upload_notifications[user.id]
         if "count" not in data:
             data["count"] = 0
@@ -3185,6 +3191,9 @@ async def styles_case_open(callback: CallbackQuery, state: FSMContext):
     # Reset to main lootbox menu
     await state.clear()
     await lootbox_menu(callback)
+
+
+@router.callback_query(F.data == "btn_buy")
 async def cb_btn_buy(callback: CallbackQuery, state: FSMContext):
     # Точки входа из рекламы и low-balance сценариев ведут в единый магазин.
     await btn_store(callback.message, state)  # type: ignore
@@ -4550,10 +4559,25 @@ async def promo_activate_code(message: Message, state: FSMContext):
                 return
                 
             from app.models import utc_now
+            from sqlalchemy import update, or_
             current_week = utc_now().isocalendar()[1]
             current_year = utc_now().isocalendar()[0]
             
-            if user.last_freebie_week == current_week and user.last_freebie_year == current_year:
+            # Атомарно помечаем получение халявы на этой неделе
+            claim_res = await session.execute(
+                update(User)
+                .where(
+                    User.id == user.id,
+                    or_(
+                        User.last_freebie_week != current_week,
+                        User.last_freebie_year != current_year,
+                        User.last_freebie_week.is_(None),
+                        User.last_freebie_year.is_(None),
+                    )
+                )
+                .values(last_freebie_week=current_week, last_freebie_year=current_year)
+            )
+            if claim_res.rowcount == 0:
                 await message.answer("❌ Халява уже была получена на этой неделе!")
                 await state.clear()
                 return
@@ -4569,8 +4593,6 @@ async def promo_activate_code(message: Message, state: FSMContext):
                 "freebie_reward",
                 details=f"word={current_word}; week={current_week}"
             ) or user
-            user.last_freebie_week = current_week
-            user.last_freebie_year = current_year
             await session.commit()
             
         await message.answer(
@@ -5022,39 +5044,43 @@ async def cb_btn_promo_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+_welcome_claim_lock = asyncio.Lock()
+
+
 @router.callback_query(F.data == "welcome_lootbox_claim")
 async def welcome_lootbox_claim(callback: CallbackQuery):
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            return
-        from app.models import UserActionLog
-        from sqlalchemy import select
-        already_claimed = (await session.execute(select(UserActionLog).where(UserActionLog.user_id == user.id, UserActionLog.action == "welcome_lootbox"))).scalars().first()
-        if already_claimed:
-            await callback.answer("Стартовый лутбокс уже открыт!", show_alert=True)
+    async with _welcome_claim_lock:
+        async with async_session() as session:
+            user = await get_user(session, callback.from_user.id)
+            if not user:
+                return
+            from app.models import UserActionLog
+            from sqlalchemy import select
+            already_claimed = (await session.execute(select(UserActionLog).where(UserActionLog.user_id == user.id, UserActionLog.action == "welcome_lootbox"))).scalars().first()
+            if already_claimed:
+                await callback.answer("Стартовый лутбокс уже открыт!", show_alert=True)
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                return
+            from app.services import change_balance_atomic
+            import random
+            reward = random.choice(range(50, 410, 10))
+            await change_balance_atomic(session, user.id, Decimal(reward), "welcome_lootbox")
+            log = UserActionLog(user_id=user.id, action="welcome_lootbox", details=f"Reward: {reward}")
+            session.add(log)
+            await session.commit()
+            await session.refresh(user)
+            msg_cap = "🎁 <b>СТАРТОВЫЙ ЛУТБОКС ОТКРЫТ!</b>\n\nТебе выпало <b>+" + str(reward) + " монет</b>! 🤑\nТеперь твой баланс: <b>" + str(user.balance) + "</b>.\n\nЭтого хватит, чтобы насладиться контентом — скорее жми '🎬 Смотреть'!"
             try:
-                await callback.message.delete()
-            except:
-                pass
-            return
-        from app.services import change_balance_atomic
-        import random
-        reward = random.choice(range(50, 410, 10))
-        await change_balance_atomic(session, user.id, Decimal(reward), "welcome_lootbox")
-        log = UserActionLog(user_id=user.id, action="welcome_lootbox", details=f"Reward: {reward}")
-        session.add(log)
-        await session.commit()
-        await session.refresh(user)
-        msg_cap = "🎁 <b>СТАРТОВЫЙ ЛУТБОКС ОТКРЫТ!</b>\n\nТебе выпало <b>+" + str(reward) + " монет</b>! 🤑\nТеперь твой баланс: <b>" + str(user.balance) + "</b>.\n\nЭтого хватит, чтобы насладиться контентом — скорее жми '🎬 Смотреть'!"
-        try:
-            if getattr(callback.message, "caption", None):
-                await callback.message.edit_caption(caption=msg_cap, parse_mode="HTML")
-            else:
-                await callback.message.edit_text(msg_cap, parse_mode="HTML")
-        except Exception:
-            await callback.message.answer(msg_cap, parse_mode="HTML")
-        await callback.answer(f"+{reward} монет!", show_alert=True)
+                if getattr(callback.message, "caption", None):
+                    await callback.message.edit_caption(caption=msg_cap, parse_mode="HTML")
+                else:
+                    await callback.message.edit_text(msg_cap, parse_mode="HTML")
+            except Exception:
+                await callback.message.answer(msg_cap, parse_mode="HTML")
+            await callback.answer(f"+{reward} монет!", show_alert=True)
 
 
 # ====================================================

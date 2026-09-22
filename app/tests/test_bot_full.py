@@ -4020,3 +4020,200 @@ async def test_vip_free_promocode_capped_and_cannot_self_activate():
 
     await engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_rate_video_self_rating_and_deduplication():
+    """Тестирование защиты от самооценки контента и повторной накрутки опыта."""
+    from app.services import rate_video, save_video
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        author = User(telegram_id=94001, balance=Decimal("10.00"), nickname_set=True, display_name="Author")
+        rater = User(telegram_id=94002, balance=Decimal("10.00"), nickname_set=True, display_name="Rater")
+        session.add_all([author, rater])
+        await session.commit()
+
+        video, _ = await save_video(session, author.id, "fid_123", "fuid_123", 10, 1000)
+        assert video is not None
+
+        # 1. Автор не может оценить своё видео
+        ok, is_new, err = await rate_video(session, author.id, video.id, 5)
+        assert ok is False
+        assert is_new is False
+        assert "собственный контент" in err
+
+        # 2. Другой пользователь оценивает впервые
+        ok, is_new, err = await rate_video(session, rater.id, video.id, 5)
+        assert ok is True
+        assert is_new is True
+        assert err is None
+
+        # 3. Тот же пользователь меняет оценку (не должен считаться новой оценкой)
+        ok, is_new, err = await rate_video(session, rater.id, video.id, 4)
+        assert ok is True
+        assert is_new is False
+        assert err is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_offer_creator_cannot_participate_or_verify():
+    """Создатель оффера не может участвовать в своём же оффере."""
+    from app.services import start_offer_participation, verify_offer_subscription
+    from unittest.mock import AsyncMock
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        creator = User(telegram_id=95001, balance=Decimal("1000.00"), nickname_set=True, display_name="Creator")
+        session.add(creator)
+        await session.commit()
+
+        offer = Offer(
+            creator_user_id=creator.id,
+            title="My Channel",
+            description="Test offer",
+            channel_url="https://t.me/mychannel",
+            reward_preview=Decimal("10.00"),
+            reward_final=Decimal("50.00"),
+            duration_days=7,
+            status="approved",
+            is_active=True,
+            approved_at=utc_now(),
+        )
+        session.add(offer)
+        await session.commit()
+
+        # Создатель пытается участвовать
+        part, is_new = await start_offer_participation(session, creator.id, offer.id)
+        assert part is None
+        assert is_new is False
+
+        # Создатель пытается верифицировать
+        ok, rew = await verify_offer_subscription(session, creator.id, offer.id)
+        assert ok is False
+        assert rew == Decimal("0")
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_donationalerts_vip_sets_user_vip_until_and_status_paid():
+    """DA-донат на VIP устанавливает user.vip_until и Payment.status == 'paid'."""
+    from app.services import process_donationalerts_donation, is_vip
+    from unittest.mock import AsyncMock
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        u = User(telegram_id=96001, balance=Decimal("0.00"), nickname_set=True, display_name="VipDonor")
+        session.add(u)
+        await session.commit()
+
+        mock_bot = AsyncMock()
+        ok, msg = await process_donationalerts_donation(
+            session=session,
+            donation_id="da_vip_test_status",
+            amount_rub=150,
+            telegram_user_id=96001,
+            comment="vip",
+            bot=mock_bot
+        )
+        assert ok is True
+        await session.refresh(u)
+        assert is_vip(u) is True
+        assert u.vip_until is not None
+
+        pmt = (await session.execute(
+            select(Payment).where(Payment.payload == "donationalerts_da_vip_test_status")
+        )).scalar_one()
+        assert pmt.status == "paid"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_lottery_place_bet_api_blocks_negative_bet_and_late_bet(monkeypatch):
+    """API лотереи блокирует отрицательные ставки (эксплойт накрутки баланса) и ставки после начала розыгрыша."""
+    import app.main as m
+    from app.db import async_session
+    from app.models import User, LotteryRound, utc_now
+    from sqlalchemy import desc, select
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer, TestClient
+    import time, urllib.parse, hmac, hashlib, json
+
+    monkeypatch.setattr(m, "BOT_TOKEN", "testtoken123")
+    await reset_bot_db()
+
+    TG_ID = 555666777
+
+    def make_init_data() -> str:
+        user_json = json.dumps({"id": TG_ID, "first_name": "Test", "username": "bettor"},
+                               separators=(",", ":"))
+        data = {"auth_date": str(int(time.time())), "query_id": "AATEST", "user": user_json}
+        dcs = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+        secret = hmac.new(b"WebAppData", b"testtoken123", hashlib.sha256).digest()
+        hsh = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
+        return urllib.parse.urlencode({**data, "hash": hsh})
+
+    async with async_session() as s:
+        s.add(User(telegram_id=TG_ID, username="bettor", first_name="Test",
+                   balance=Decimal("100.00"), level=1))
+        await s.commit()
+
+    app = web.Application()
+    app.router.add_post("/api/lottery/place_bet", m.api_lottery_place_bet)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    # 1. Попытка ставки с отрицательной суммой (-100 монет для накрутки баланса)
+    r = await client.post("/api/lottery/place_bet", json={
+        "init_data": make_init_data(),
+        "bet_type": "first_even",
+        "bet_amount": -100
+    })
+    b = await r.json()
+    assert r.status == 200 and not b.get("ok") and "Некорректная сумма" in b.get("error", "")
+
+    # Проверяем, что баланс не увеличился
+    async with async_session() as s:
+        u = (await s.execute(select(User).where(User.telegram_id == TG_ID))).scalar_one()
+        assert u.balance == Decimal("100.00")
+
+    # 2. Нормальная ставка 10 монет списывает баланс
+    r = await client.post("/api/lottery/place_bet", json={
+        "init_data": make_init_data(),
+        "bet_type": "first_even",
+        "bet_amount": 10
+    })
+    b = await r.json()
+    assert r.status == 200 and b.get("ok")
+    assert abs(b["balance"] - 90.0) < 1e-6
+
+    # 3. Закрываем раунд (draw_starts_at в прошлом) -> ставка отклоняется
+    async with async_session() as s:
+        rnd = (await s.execute(select(LotteryRound).order_by(desc(LotteryRound.id)).limit(1))).scalar_one()
+        rnd.draw_starts_at = utc_now() - timedelta(minutes=5)
+        await s.commit()
+
+    r = await client.post("/api/lottery/place_bet", json={
+        "init_data": make_init_data(),
+        "bet_type": "first_even",
+        "bet_amount": 10
+    })
+    b = await r.json()
+    assert r.status == 200 and not b.get("ok") and "закрыт" in b.get("error", "")
+
+    await client.close()

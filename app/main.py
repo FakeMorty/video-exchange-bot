@@ -2045,9 +2045,15 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
             return web.json_response({"ok": False, "error": "Неверный тип ставки"})
 
         from app.services import get_user, ensure_current_lottery_round, change_balance_atomic, to_decimal
+        from app.models import utc_now
 
-        # В Mini App ставка фиксированная: 10 монет.
-        bet_amount = to_decimal(data.get("bet_amount", 10) or 10)
+        try:
+            bet_amount = to_decimal(data.get("bet_amount", 10) or 10)
+            if bet_amount <= 0 or not bet_amount.is_finite():
+                return web.json_response({"ok": False, "error": "Некорректная сумма ставки"})
+        except Exception:
+            return web.json_response({"ok": False, "error": "Некорректная сумма ставки"})
+
         from app.db import async_session
         from app.models import LotteryBet
         async with async_session() as session:
@@ -2058,7 +2064,8 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
                 return web.json_response({"ok": False, "error": "Недостаточно монет"})
 
             round_obj = await ensure_current_lottery_round(session)
-            if round_obj.status != "open":
+            now = utc_now()
+            if round_obj.status != "open" or (round_obj.draw_starts_at and now >= round_obj.draw_starts_at):
                 return web.json_response({"ok": False, "error": "Прием ставок закрыт"})
 
             await change_balance_atomic(session, user.id, -bet_amount, "lottery_bet", source_id=round_obj.id, details=f"type={bet_type}")
@@ -2841,15 +2848,16 @@ async def api_cases_state(request: web.Request) -> web.Response:
         })
 
 async def api_cases_open(request: web.Request) -> web.Response:
-    telegram_user_id = _get_webapp_user_id(request)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+
+    telegram_user_id = _get_webapp_user_id(request, data)
     if not telegram_user_id:
         return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
     
-    try:
-        data = await request.json()
-        case_id = data.get("case_id", "common")
-    except Exception:
-        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+    case_id = data.get("case_id", "common")
 
     from app.services import get_user  # lookup по telegram_id, а не по PK
     async with async_session() as session:
