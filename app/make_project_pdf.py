@@ -1,7 +1,6 @@
 from app.models import utc_now
 import os
 from pathlib import Path
-from datetime import datetime, timezone
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase.pdfmetrics import stringWidth

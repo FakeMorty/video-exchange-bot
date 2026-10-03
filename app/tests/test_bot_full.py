@@ -45,7 +45,7 @@ from app.arcade import (
     get_active_run,
     start_run,
 )
-from app.models import ArcadeRun, Base, GameHistory, User, utc_now
+from app.models import Base, GameHistory, User, utc_now
 from app.services import get_user
 import random
 from app.arcade import (
@@ -3359,7 +3359,7 @@ async def test_promo_otzyv_seed_and_title_management():
 @pytest.mark.asyncio
 async def test_donationalerts_integration():
     from app.services import process_donationalerts_donation, has_active_perk
-    from app.models import User, Payment, Base
+    from app.models import User, Base
     from unittest.mock import AsyncMock
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -4109,7 +4109,6 @@ async def test_rate_video_self_rating_and_deduplication():
 async def test_offer_creator_cannot_participate_or_verify():
     """Создатель оффера не может участвовать в своём же оффере."""
     from app.services import start_offer_participation, verify_offer_subscription
-    from unittest.mock import AsyncMock
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     Session = async_sessionmaker(engine, expire_on_commit=False)

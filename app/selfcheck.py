@@ -3,7 +3,6 @@ from app.models import utc_now
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession

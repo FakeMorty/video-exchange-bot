@@ -1,11 +1,10 @@
 from html import escape
 import os
 import uuid
-import random
 import math
 import asyncio
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from collections import defaultdict
 
@@ -36,13 +35,10 @@ def is_any_admin(telegram_id: int, user_obj=None) -> bool:
 
 
 from app.config import (
-    ADMINS, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD,
-    ENABLE_ADMIN_FREE,
-    XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
+    ADMINS, WATCH_COST, XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
-    VIP_PRICE_STARS, VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT,
+    VIP_DURATION_DAYS, VIP_BONUS_MULTIPLIER, VIP_WATCH_DISCOUNT,
     LEVEL_XP_BASE, LEVEL_XP_MULTIPLIER,
-    DAILY_QUESTS, PREMIUM_DAILY_QUESTS,
     COMMENTS_PER_10_MIN,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES, DAILY_PHOTO_LIMIT,
@@ -50,14 +46,10 @@ from app.config import (
     VIP_FREE_PROMO_PER_MONTH,
     VIP_FREE_PROMO_MAX_COINS,
     VIP_FREE_PROMO_MAX_USES,
-    DYNAMIC_STAR_DISCOUNT_ENABLED,
-    DYNAMIC_STAR_DISCOUNT_HOURS,
-    DYNAMIC_STAR_DISCOUNT_MULTIPLIER,
     FIRST_PURCHASE_DAILY_BONUS,
     ENABLE_PROMOCODES,
     OFFER_ACTION_COOLDOWN_SECONDS,
     PROMO_ACTIVATE_COOLDOWN_SECONDS,
-    GUESS_JACKPOT_CHANCE, GUESS_JACKPOT_MULTIPLIER,
     ENABLE_LOTTERY,
     WEBHOOK_BASE,
     ENABLE_LOOTBOXES, LOOTBOX_COIN_PRICE, LOOTBOX_STAR_PRICE,
@@ -66,13 +58,13 @@ from app.config import (
 from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
-    DailyQuestProgress, GameHistory, Offer, Payment, Promocode,
+    Offer, Payment, Promocode,
     LootboxOpen, LotteryTicket, UserActionLog, DonationAlertOrder,
     AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
     get_or_create_user, get_user, get_user_by_id, get_video_by_id, reject_video, get_setting, save_video, save_photo,
-    get_xp_multiplier, get_coin_multiplier, get_stars_discount,
+    get_xp_multiplier, get_stars_discount,
     get_random_video_for_user, get_random_photo_for_user,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
     record_photo_view,
@@ -86,13 +78,11 @@ from app.services import (
     change_balance_atomic, log_user_action, to_decimal,
     set_display_name, get_display_name, get_styled_display_name, log_balance_change,
     has_valid_nickname,
-    can_play_free_game, pay_for_game_session, increment_game_played,
-    get_or_create_game_session,
     check_daily_photo_limit,
     create_promocode, activate_promocode,
     calculate_promocode_star_cost, get_runtime_value,
     create_feedback, process_referral_reward,
-    ensure_current_lottery_round, buy_lottery_ticket, buy_lottery_tickets,
+    ensure_current_lottery_round, buy_lottery_tickets,
     get_latest_lottery_round, get_user_lottery_tickets, get_weekly_lottery_leaderboard, get_lottery_state_dict,
     get_lottery_draw_duration_seconds, get_lottery_max_tickets_for_balance,
     LOTTERY_MAX_TICKETS_PER_PURCHASE,
@@ -115,7 +105,7 @@ from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
     main_menu,
     video_rating_keyboard, photo_actions_keyboard,
-    watch_choice_keyboard, buy_coins_keyboard, vip_buy_keyboard, donationalerts_order_keyboard,
+    watch_choice_keyboard, donationalerts_order_keyboard,
     offers_list_keyboard, games_menu_keyboard,
     tops_menu_keyboard,
     reaction_menu_keyboard,
@@ -126,7 +116,6 @@ from app.keyboards import (
     BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
     BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_RULES, BTN_FAQ,
 )
-from app.user_offer_handlers import user_offers_menu
 from app.logger import get_logger
 from app.release_notes import build_version_text
 from app.rules_text import FULL_RULES_TEXT, SHORT_RULES_TEXT
@@ -2964,10 +2953,6 @@ async def lootbox_buy(callback: CallbackQuery):
     await callback.answer()
 
 
-from app.nick_styles import (
-    CATEGORIES, STYLES, STYLES_BY_CAT,
-    style_inline_preview, style_label
-)
 
 def _styles_case_kb(excluded_ids: list[int], current_price: Decimal) -> InlineKeyboardMarkup:
     from app.nick_styles import CATEGORIES, STYLES_BY_CAT
@@ -3004,7 +2989,7 @@ def _styles_case_kb(excluded_ids: list[int], current_price: Decimal) -> InlineKe
 
 
 def _styles_list_kb(cat_id: int, excluded_ids: list[int]) -> InlineKeyboardMarkup:
-    from app.nick_styles import STYLES_BY_CAT, style_label
+    from app.nick_styles import STYLES_BY_CAT
     kb = []
     cat_styles = STYLES_BY_CAT[cat_id]
     
@@ -3104,7 +3089,7 @@ async def styles_case_toggle_style(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     excluded_ids = list(data.get("excluded_ids", []))
     
-    from app.nick_styles import STYLES, STYLES_BY_CAT
+    from app.nick_styles import STYLES
     
     if style_id in excluded_ids:
         excluded_ids.remove(style_id)
@@ -4752,7 +4737,6 @@ async def cb_promo_freebie_start(callback: CallbackQuery, state: FSMContext):
 async def cb_btn_promo_back(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     # Call main promo menu
-    from aiogram.types import Message as TGMessage
     await btn_promo(callback.message, state)
     await callback.answer()
 
@@ -4774,7 +4758,7 @@ async def welcome_lootbox_claim(callback: CallbackQuery):
                 await callback.answer("Стартовый лутбокс уже открыт!", show_alert=True)
                 try:
                     await callback.message.delete()
-                except:
+                except Exception:
                     pass
                 return
             from app.services import change_balance_atomic

@@ -11,7 +11,7 @@ import random
 import re
 import json
 from urllib.parse import urlsplit, urlunsplit
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select, func, desc, update, delete, or_, Text
 from sqlalchemy.ext.asyncio import AsyncSession

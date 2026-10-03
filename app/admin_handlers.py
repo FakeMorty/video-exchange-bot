@@ -22,7 +22,7 @@ from app.db import async_session
 from app.models import (
     Base,
     User, Video, TrustedUploader, Event, ActiveSale,
-    VideoReport, ModNotification, Offer,
+    VideoReport, Offer,
     DonationAlertException,
     AdminPoll, AdminPollResponse, utc_now,
 )
@@ -32,8 +32,8 @@ from app.services import (
     get_next_pending_video, get_video_by_id, get_rejected_video, restore_rejected_video,
     approve_video, reject_video,
     get_admin_extended_stats, get_display_name, get_styled_display_name,
-    get_user_by_display_name, get_recent_feedback, get_active_sale,
-    get_active_events, approve_all_pending,
+    get_recent_feedback, get_active_sale,
+    approve_all_pending,
     get_pending_reports, dismiss_report, REPORT_REASONS,
     get_offer_moderation_counts, get_offers_for_admin, get_offer_by_id,
     moderate_offer, set_offer_active, get_offer_expires_at,
@@ -2603,18 +2603,23 @@ async def settings_economy(callback: CallbackQuery):
         await callback.answer()
         return
     async with async_session() as session:
-        from app.services import get_setting
+        from app.services import get_setting, get_shop_best_pack_fraction
         sb = await get_setting(session, "starting_balance", "")
         wc = await get_setting(session, "watch_cost", "")
         ur = await get_setting(session, "upload_reward", "")
         pr = await get_setting(session, "photo_upload_reward", "")
-        str_c = await get_setting(session, "stars_to_coins_rate", "")
         ri = await get_setting(session, "referral_reward_inviter", "")
         rn = await get_setting(session, "referral_reward_new_user", "")
         fp = await get_setting(session, "first_purchase_daily_bonus", "")
+        # Реальный курс Stars→Coins теперь выводится из пакетов магазина, а не из
+        # отдельной настройки (та больше не влияет на цены, поэтому убрана).
+        try:
+            stars_rate = float(await get_shop_best_pack_fraction(session))
+        except Exception:
+            stars_rate = None
     from app.config import (
         STARTING_BALANCE, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD,
-        STARS_TO_COINS_RATE, REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
+        REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER,
         FIRST_PURCHASE_DAILY_BONUS,
     )
     def v(db_val, default):
@@ -2625,8 +2630,8 @@ async def settings_economy(callback: CallbackQuery):
         f"Просмотр видео: {v(wc, WATCH_COST)}\n"
         f"Награда за видео: {v(ur, UPLOAD_REWARD)}\n"
         f"Награда за фото: {v(pr, PHOTO_UPLOAD_REWARD)}\n"
-        f"Курс Stars→Coins: {v(str_c, STARS_TO_COINS_RATE)}\n"
-        f"Реферал (пригласивший): {v(ri, REFERRAL_REWARD_INVITER)}\n"
+        + (f"Курс Stars→Coins (факт., по магазину): {stars_rate:.2f} монет за 1 Star\n" if stars_rate else "")
+        + f"Реферал (пригласивший): {v(ri, REFERRAL_REWARD_INVITER)}\n"
         f"Реферал (новый): {v(rn, REFERRAL_REWARD_NEW_USER)}\n"
         f"Бонус 1-й покупки: {v(fp, FIRST_PURCHASE_DAILY_BONUS)}\n"
     )
@@ -2635,7 +2640,6 @@ async def settings_economy(callback: CallbackQuery):
         [InlineKeyboardButton(text="✏️ Цена просмотра", callback_data="settings_edit:watch_cost")],
         [InlineKeyboardButton(text="✏️ Награда за видео", callback_data="settings_edit:upload_reward")],
         [InlineKeyboardButton(text="✏️ Награда за фото", callback_data="settings_edit:photo_upload_reward")],
-        [InlineKeyboardButton(text="✏️ Курс Stars→Coins", callback_data="settings_edit:stars_to_coins_rate")],
         [InlineKeyboardButton(text="✏️ Реферал (пригл.)", callback_data="settings_edit:referral_reward_inviter")],
         [InlineKeyboardButton(text="✏️ Реферал (новый)", callback_data="settings_edit:referral_reward_new_user")],
         [InlineKeyboardButton(text="✏️ Бонус 1-й покупки", callback_data="settings_edit:first_purchase_daily_bonus")],
@@ -3047,7 +3051,7 @@ async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None
         DONATION_ALERTS_ACCESS_TOKEN, DONATION_ALERTS_CLIENT_ID,
         DONATION_ALERTS_REFRESH_TOKEN,
     )
-    from app.services import get_setting, get_runtime_value
+    from app.services import get_runtime_value
     async with async_session() as session:
         pending_exceptions = (await session.execute(
             select(func.count(DonationAlertException.id)).where(DonationAlertException.status == "pending")

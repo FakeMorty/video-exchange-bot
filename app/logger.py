@@ -2,7 +2,6 @@ from app.models import utc_now
 import json
 import logging
 import traceback
-from datetime import datetime, timezone
 
 
 def get_logger(name: str) -> logging.Logger:

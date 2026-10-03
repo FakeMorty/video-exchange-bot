@@ -210,7 +210,6 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
 async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_at: datetime):
     from sqlalchemy import select
     from app.models import LotteryTicket, User
-    from datetime import timedelta
     from app.utils.messaging import format_time_for_user
     
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
@@ -2865,7 +2864,7 @@ async def api_cases_open(request: web.Request) -> web.Response:
         if not user:
              return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
         
-        from app.services import open_lootbox_for_coins, open_styles_lootbox, _roll_lootbox_reward_coins
+        from app.services import open_lootbox_for_coins, open_styles_lootbox
         
         win_item = None
         if case_id == "styles":
