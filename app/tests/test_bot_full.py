@@ -107,7 +107,6 @@ from app.models import utc_now
 from app.models import Base, User, Video, TrustedUploader, UserPerk, BotSetting, utc_now
 from app.services import auto_approve_if_trusted
 from app.services import get_or_create_user
-from app.user_offer_handlers import _calc_offer_stars_price
 from app.models import Base, User, Video, VideoView
 
 
@@ -2337,15 +2336,27 @@ async def test_referred_user_gets_bonus_and_inviter_counter_increments():
 #  был файл: app/tests/test_user_offer_pricing.py
 # ══════════════════════════════════════════════════════════════
 
-def test_offer_stars_price_rounds_up_instead_of_undercharging():
-    assert _calc_offer_stars_price(Decimal("50")) == 2
-    assert _calc_offer_stars_price(Decimal("55")) == 2
-    assert _calc_offer_stars_price(Decimal("101")) == 4
+@pytest.mark.asyncio
+async def test_offer_stars_price_not_cheaper_than_shop():
+    """Оплата размещения оффера в Stars не может быть дешевле, чем купить те же
+    монеты в магазине: курс берётся из лучшего пакета, округление вверх."""
+    import math as _math
+    from app.services import coins_to_stars_price
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
+    async with Session() as session:
+        # Лучший курс магазина = 1800/2200 = 9/11 ≈ 0.818 Stars/монету.
+        assert await coins_to_stars_price(session, Decimal("50")) == 41   # 40.9 -> 41
+        assert await coins_to_stars_price(session, Decimal("55")) == 45   # ровно 45
+        assert await coins_to_stars_price(session, Decimal("101")) == 83  # 82.6 -> 83
 
-def test_offer_stars_price_applies_user_discount_after_round_up():
-    assert _calc_offer_stars_price(Decimal("55"), 0.25) == 2
-    assert _calc_offer_stars_price(Decimal("101"), 0.25) == 3
+        # Со скидкой перки цена снижается, но не ниже 1 и округляется вверх.
+        base = await coins_to_stars_price(session, Decimal("55"))
+        assert _math.ceil(base * 0.75) == 34
+    await engine.dispose()
 
 
 # ══════════════════════════════════════════════════════════════

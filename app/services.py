@@ -2467,19 +2467,13 @@ async def calculate_promocode_star_cost(
         ))
 
     floor = Fraction(0)
-    packs = await get_shop_star_packages(session)
-    regular = [
-        (int(p["stars"]), int(p["coins"]))
-        for k, p in packs.items()
-        if k != STARTER_PACK_KEY and int(p["coins"]) > 0
-    ]
-    if regular:
-        best_stars, best_coins = min(regular, key=lambda sc: Fraction(sc[0], sc[1]))
+    rate = await get_shop_best_pack_fraction(session)
+    if rate is not None:
         markup = Fraction(str(
             await get_runtime_value(session, "promocode_star_price_markup") or PROMOCODE_STAR_PRICE_MARKUP
         ))
         # Точный floor: total_coins * (stars/coins) * (1+markup) без float-ошибки.
-        floor = total_coins * Fraction(best_stars, best_coins) * (Fraction(1) + markup)
+        floor = total_coins * rate * (Fraction(1) + markup)
 
     result = max(base, floor)
     return max(1, int(-(-result.numerator // result.denominator)))
@@ -3300,6 +3294,37 @@ async def get_shop_effective_star_rate(session: AsyncSession) -> float | None:
         if k != STARTER_PACK_KEY and p["coins"] > 0
     ]
     return min(rates) if rates else None
+
+
+async def get_shop_best_pack_fraction(session: AsyncSession) -> Fraction | None:
+    """Точный лучший курс магазина Stars как Fraction (Stars за 1 монету).
+
+    Используется там, где важно не продать монеты дешевле магазина:
+    промокоды, оплата пользовательских офферов и т.п. Старт-пак исключён.
+    """
+    packs = await get_shop_star_packages(session)
+    regular = [
+        (int(p["stars"]), int(p["coins"]))
+        for k, p in packs.items()
+        if k != STARTER_PACK_KEY and int(p["coins"]) > 0
+    ]
+    if not regular:
+        return None
+    best_stars, best_coins = min(regular, key=lambda sc: Fraction(sc[0], sc[1]))
+    return Fraction(best_stars, best_coins)
+
+
+async def coins_to_stars_price(session: AsyncSession, coins) -> int:
+    """Сколько Stars стоят `coins` монет по актуальному курсу магазина.
+
+    Округление вверх (ceil) — цена в Stars никогда не бывает дешевле, чем
+    купить те же монеты напрямую в магазине. Точная арифметика Fraction.
+    """
+    rate = await get_shop_best_pack_fraction(session)
+    if rate is None:
+        rate = Fraction(9, 10)  # страховка: ~курс пакета 450/500
+    value = Fraction(str(to_decimal(coins))) * rate
+    return max(1, int(-(-value.numerator // value.denominator)))
 
 
 def _discount_stars_amount(base_stars: int, discount: float) -> int:
