@@ -550,6 +550,14 @@ def _build_hour_weekday_heatmap(timestamps: list) -> dict:
     return {"weekdays": weekdays, "hours": hours, "matrix": matrix}
 
 
+def _heatmap_peak_comment(heatmap: dict) -> str:
+    cells = [(value, day, hour) for day, row in enumerate(heatmap["matrix"]) for hour, value in enumerate(row)]
+    value, day, hour = max(cells, key=lambda cell: cell[0], default=(0, 0, 0))
+    if not value:
+        return "Недостаточно активности для определения пика"
+    return f"Пик активности — {heatmap['weekdays'][day]} около {hour:02d}:00 UTC ({int(value)} действий)"
+
+
 def _build_cohort_retention(users: list[tuple[int, object]], activity_dates: dict[int, set], as_of_date) -> dict:
     summary = {
         1: {"eligible": 0, "retained": 0},
@@ -988,8 +996,8 @@ async def collect_bot_report_data() -> dict:
             "3 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_3")),
             "2 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_2")),
         }
-        lottery_spent = await _sum_balance(session, None, positive=False, sources={"lottery_ticket_purchase"})
-        lottery_paid = await _sum_balance(session, None, positive=True, sources={"lottery_win_2", "lottery_win_3", "lottery_win_4", "lottery_win_5", "lottery_win_6", "lottery_bet_win", "lottery_weekly_leaderboard"})
+        lottery_spent = abs(await _sum_balance(session, None, positive=False, sources={"lottery_ticket_purchase"}))
+        lottery_paid = await _sum_balance(session, None, positive=True, sources={"lottery_win_2", "lottery_win_3", "lottery_win_4", "lottery_win_5", "lottery_win_6"})
         rtp = float((lottery_paid / lottery_spent) * 100) if lottery_spent > 0 else 0.0
         penetration_pct = _safe_div(players_total * 100, total_users)
         avg_tickets_per_player = _safe_div(total_tickets, players_total)
@@ -1012,7 +1020,7 @@ async def collect_bot_report_data() -> dict:
                 stmt = stmt.where(User.created_at >= start)
             referred_rows.append({"period": label, "count": await _count_query(session, stmt)})
         retention_pushes = await _count_query(session, select(func.count(UserActionLog.id)).where(UserActionLog.action == "retention_push"))
-        weekly_promo_activations = await _count_query(session, select(func.count(PromocodeActivation.id)).join(Promocode, Promocode.id == PromocodeActivation.promocode_id).where(Promocode.code.like("FREEBIE_%")))
+        weekly_promo_activations = await _count_query(session, select(func.count(PromocodeActivation.id)).join(Promocode, Promocode.id == PromocodeActivation.promocode_id).where(Promocode.code.like("FREEBIE_%"))) + await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "freebie_reward", BalanceLog.amount > 0))
         retention_rows = (await session.execute(select(func.date(User.created_at), func.count(User.id)).where(User.referred_by_user_id.is_not(None), User.created_at >= now - timedelta(days=30)).group_by(func.date(User.created_at)))).all()
         retention_map = {str(day): float(count) for day, count in retention_rows}
 
@@ -1052,6 +1060,12 @@ async def collect_bot_report_data() -> dict:
         payment_stars_by_user = defaultdict(float)
         for payment in paid_payments:
             payment_stars_by_user[payment.user_id] += float(payment.stars_amount or 0)
+        top_payers = sorted(payment_stars_by_user.values(), reverse=True)
+        monetization_comment += (
+            f"; доля топ-1: {_fmt_pct(_safe_div(sum(top_payers[:1]) * 100, purchases_paid))}, "
+            f"топ-3: {_fmt_pct(_safe_div(sum(top_payers[:3]) * 100, purchases_paid))} выручки Stars"
+        )
+        content_comment += f"; топ-2 автора загрузили {_fmt_pct(_safe_div(sum(sorted(upload_count_map.values(), reverse=True)[:2]) * 100, content_total))} контента"
         activity_dates_str = {user_id: {str(day) for day in dates} for user_id, dates in activity_dates.items()}
         active_users_daily_series = [float(sum(1 for dates in activity_dates_str.values() if day_label in dates)) for day_label in labels_30]
         vip_share_pct = _safe_div(vip_users * 100, total_users)
@@ -1076,10 +1090,8 @@ async def collect_bot_report_data() -> dict:
         raw_funnel_steps = [
             ("Регистрация", set(all_user_ids)),
             ("Приняли правила", agreed_ids),
-            ("Поставили ник", nicknamed_ids),
             ("Посмотрели контент", viewer_ids),
             ("Сделали оплату", payer_ids),
-            ("Купили билет Секслото", lottery_player_ids),
         ]
         previous_count = total_users
         for idx, (label, step_ids) in enumerate(raw_funnel_steps):
@@ -1103,9 +1115,7 @@ async def collect_bot_report_data() -> dict:
         }
 
         churn_rows = [
-            {"label": "Приняли правила, но не поставили ник", "count": len(agreed_ids - nicknamed_ids), "share": _safe_div(len(agreed_ids - nicknamed_ids) * 100, total_users)},
-            {"label": "Поставили ник, но не посмотрели контент", "count": len(nicknamed_ids - viewer_ids), "share": _safe_div(len(nicknamed_ids - viewer_ids) * 100, total_users)},
-            {"label": "Поставили ник, но не сделали оплату", "count": len(nicknamed_ids - payer_ids), "share": _safe_div(len(nicknamed_ids - payer_ids) * 100, total_users)},
+            {"label": "Приняли правила, но не смотрели", "count": len(agreed_ids - viewer_ids), "share": _safe_div(len(agreed_ids - viewer_ids) * 100, total_users)},
             {"label": "Смотрели контент, но не оплатили", "count": len(viewer_ids - payer_ids), "share": _safe_div(len(viewer_ids - payer_ids) * 100, total_users)},
             {"label": "Платили, но спят 30+ дней", "count": len(payer_ids & sleeper_ids), "share": _safe_div(len(payer_ids & sleeper_ids) * 100, total_users)},
         ]
@@ -1113,8 +1123,6 @@ async def collect_bot_report_data() -> dict:
 
         biggest_segment = max(segment_rows, key=lambda row: row["count"], default=None)
         weakest_funnel_step = min(funnel_rows[1:], key=lambda row: row["step_rate"], default=None)
-        hottest_hour = max(range(24), key=lambda hour: sum(day[hour] for day in activity_heatmap["matrix"])) if activity_heatmap["matrix"] else 0
-        hottest_day_index = max(range(7), key=lambda day_index: sum(activity_heatmap["matrix"][day_index])) if activity_heatmap["matrix"] else 0
         segment_comment = (
             f"Самый крупный сегмент сейчас — {biggest_segment['label']} ({_fmt_pct(biggest_segment['share'])} базы)"
             if biggest_segment else
@@ -1130,7 +1138,7 @@ async def collect_bot_report_data() -> dict:
             if churn_rows else
             "Зоны оттока пока не набрали истории"
         )
-        heatmap_comment = f"Пик активности — {activity_heatmap['weekdays'][hottest_day_index]} около {hottest_hour:02d}:00"
+        heatmap_comment = _heatmap_peak_comment(activity_heatmap)
 
     return {
         "generated_at": generated_at,
@@ -1453,7 +1461,7 @@ def _render_bot_report_sync(data: dict, output_path: Path):
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_horizontal_bar("Базовая продуктовая воронка", funnel["chart"], tmp / "funnel.png", color="#7C3AED"), width=17 * cm, height=5.8 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("в сегментах длиннее полоса = больше пользователей в категории. Во воронке смотри не только абсолютные значения, но и столбцы «от прошлого шага»: именно они показывают, где сильнее всего теряется аудитория.", styles))
+        story.append(_chart_hint("в сегментах длиннее полоса = больше пользователей в категории. Ник необязателен, лотерея — отдельный сегмент. Воронка показывает пересечение групп, а не порядок событий. Во воронке смотри не только абсолютные значения, но и столбцы «от прошлого шага»: именно они показывают, где сильнее всего теряется аудитория.", styles))
         story.append(PageBreak())
 
         story.append(_section_banner("3. Рост аудитории", font_name, bg="#0F766E"))
@@ -1525,7 +1533,7 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         lottery = data["lottery"]
         story.append(_section_banner("7. Секслото", font_name, bg="#7C3AED"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Раундов в истории", str(lottery["rounds_total"])], ["Билетов всего", str(lottery["total_tickets"])], ["Игроков всего", str(lottery["players_total"])], ["Игроков за 30 дней", str(lottery["players_30"])], ["Проникновение в базу", _fmt_pct(lottery["penetration_pct"])], ["Среднее билетов на игрока", _fmt_dec(lottery["avg_tickets_per_player"])], ["RTP (грубая оценка)", _fmt_pct(lottery["rtp"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([["Метрика", "Значение"], ["Раундов в истории", str(lottery["rounds_total"])], ["Билетов всего", str(lottery["total_tickets"])], ["Игроков всего", str(lottery["players_total"])], ["Игроков за 30 дней", str(lottery["players_30"])], ["Проникновение в базу", _fmt_pct(lottery["penetration_pct"])], ["Среднее билетов на игрока", _fmt_dec(lottery["avg_tickets_per_player"])], ["RTP билетов (без ставок и рейтинга)", _fmt_pct(lottery["rtp"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_table([["Период", "Билетов"]] + [[row["period"], str(row["tickets"])] for row in lottery["rows"]], font_name, col_widths=[5 * cm, 5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
@@ -1575,7 +1583,7 @@ def _render_bot_report_sync(data: dict, output_path: Path):
             story.append(Spacer(1, 0.15 * cm))
             story.append(Image(_chart_distribution("D7 retention по последним когортам", cohorts["weekly_chart"], tmp / "cohorts_weekly.png"), width=16 * cm, height=5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("линия активных пользователей показывает, как меняется ядро аудитории день ко дню. Когортные таблицы D1/D7/D30 отвечают на вопрос: какой процент людей вернулся спустя 1, 7 или 30 дней после регистрации.", styles))
+        story.append(_chart_hint("линия активных пользователей показывает, как меняется ядро аудитории день ко дню. Когортные таблицы D1/D7/D30 отвечают на вопрос: какой процент людей вернулся именно на 1-й, 7-й или 30-й день. Знаменатель каждого показателя — только пользователи достаточного возраста; D30 может быть выше D7.", styles))
         story.append(PageBreak())
 
         leaders = data["leaders"]

@@ -86,7 +86,7 @@ class BanCheckMiddleware(BaseMiddleware):
                         "🔥 <b>Ежедневный бонус за возвращение!</b>\n\n"
                         f"Начислено: <b>+{reward:.0f}</b> монет\n"
                         f"Дней подряд: <b>{streak}</b>\n\n"
-                        "Заходи каждый день — бонус растёт с серией!",
+                        "Бонус растёт с серией до установленного дневного лимита.",
                         parse_mode="HTML",
                     )
                 except Exception:

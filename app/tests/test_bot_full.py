@@ -1889,7 +1889,7 @@ async def test_watch_video_triggers_referral_reward_check_after_successful_send(
             telegram_id=9102,
             balance=Decimal("100.00"),
             nickname_set=True,
-            display_name="Viewer",
+            agreed_to_rules=True, display_name="Viewer",
             referred_by_user_id=1,
         )
         uploader = User(telegram_id=9103, balance=Decimal("0.00"), nickname_set=True, display_name="Uploader")
@@ -2105,12 +2105,18 @@ async def test_collect_bot_report_data_adds_conversion_metrics(monkeypatch):
         await session.flush()
         session.add(LotteryTicket(round_id=lottery_round.id, user_id=user1.id, numbers="1,2,3,4,5,6", created_at=now - timedelta(days=8)))
 
+        for source, amount in [("lottery_ticket_purchase", "-22260"), ("lottery_win_3", "9936.93"), ("lottery_bet_win", "100"), ("freebie_reward", "200")]:
+            session.add(BalanceLog(user_id=user1.id, amount=Decimal(amount), balance_before=Decimal("0"), balance_after=Decimal(amount), source=source))
         session.add(Payment(user_id=user1.id, payload="pay_bot_report", stars_amount=40, coins_amount=Decimal("400.00"), status="paid", created_at=now - timedelta(days=9)))
         session.add(UserActionLog(user_id=user1.id, action="returned_d1", details="test", created_at=now - timedelta(days=9)))
         session.add(UserActionLog(user_id=user1.id, action="returned_d7", details="test", created_at=now - timedelta(days=3)))
         await session.commit()
 
     data = await reports.collect_bot_report_data()
+    assert data["lottery"]["spent"] == 22260
+    assert data["lottery"]["rtp"] == pytest.approx(44.6402965)
+    assert data["retention"]["weekly_promo_activations"] == 1
+    assert [row["label"] for row in data["funnel"]["rows"]] == ["Регистрация", "Приняли правила", "Посмотрели контент", "Сделали оплату"]
     assert data["summary"]["payer_count"] == 1
     assert data["summary"]["payment_conversion_pct"] == pytest.approx(50.0)
     assert data["economy"]["payment_type_counts"]
@@ -2462,7 +2468,7 @@ async def test_watch_video_no_content_shows_clear_message_with_exit(monkeypatch)
             telegram_id=2001,
             balance=Decimal("1000.00"),
             nickname_set=True,
-            display_name="Viewer",
+            agreed_to_rules=True, display_name="Viewer",
         )
         session.add(viewer)
         await session.commit()
@@ -2493,7 +2499,7 @@ async def test_watch_video_broken_video_does_not_leak_raw_error_and_gives_exit(m
         uploader = User(telegram_id=2002, balance=Decimal("0.00"),
                         nickname_set=True, display_name="Uploader")
         viewer = User(telegram_id=2003, balance=Decimal("1000.00"),
-                      nickname_set=True, display_name="Viewer")
+                      nickname_set=True, agreed_to_rules=True, display_name="Viewer")
         session.add_all([uploader, viewer])
         await session.flush()
         video = Video(
@@ -2544,7 +2550,7 @@ async def test_watch_photo_no_content_shows_clear_message_with_exit(monkeypatch)
             telegram_id=2004,
             balance=Decimal("1000.00"),
             nickname_set=True,
-            display_name="Viewer",
+            agreed_to_rules=True, display_name="Viewer",
         )
         session.add(viewer)
         await session.commit()
@@ -2573,7 +2579,7 @@ async def test_watch_photo_broken_photo_does_not_leak_raw_error_and_gives_exit(m
         uploader = User(telegram_id=2005, balance=Decimal("0.00"),
                         nickname_set=True, display_name="Uploader")
         viewer = User(telegram_id=2006, balance=Decimal("1000.00"),
-                      nickname_set=True, display_name="Viewer")
+                      nickname_set=True, agreed_to_rules=True, display_name="Viewer")
         session.add_all([uploader, viewer])
         await session.flush()
         photo = Video(
@@ -2612,7 +2618,7 @@ async def test_watch_photo_daily_limit_shows_exit_to_video(monkeypatch):
             telegram_id=2007,
             balance=Decimal("1000.00"),
             nickname_set=True,
-            display_name="Viewer",
+            agreed_to_rules=True, display_name="Viewer",
             # не VIP → попадает под дневной лимит
         )
         session.add(viewer)
@@ -2876,13 +2882,14 @@ async def test_suite_growth_pack():
         u_old = mk_user(203, created_at=now - timedelta(hours=100))
         s.add(u_old); await s.flush()
         s.add(UserActionLog(user_id=u_old.id, action="watch", details="", created_at=now - timedelta(hours=70)))
+        s.add(mk_user(206, created_at=now - timedelta(hours=121), last_bonus_at=now))
         s.add(mk_user(204, created_at=now - timedelta(minutes=30)))
         s.add(mk_user(205, created_at=now - timedelta(hours=200), last_bonus_at=now))
         await s.commit()
     n0 = len(sent)
     st = await onboarding_retention_pass(BOT)
     tgts = {tid for tid, _ in sent[n0:]}
-    assert st["drip"] == 2 and 201 in tgts and 202 in tgts, f"drip: {st} tgts={tgts}"
+    assert st["drip"] == 3 and {201, 202, 206} <= tgts, f"drip: {st} tgts={tgts}"
     assert st["comeback"] == 1 and 203 in tgts, f"comeback: {st} tgts={tgts}"
     async with async_session() as s:
         bal = (await s.execute(select(User.balance).where(User.telegram_id == 203))).scalar_one()
@@ -2947,7 +2954,7 @@ async def test_suite_hotfix_middleware_and_search():
         lb = (await s.execute(select(User.last_bonus_at).where(User.telegram_id == 11))).scalar_one()
         bal = (await s.execute(select(User.balance).where(User.telegram_id == 11))).scalar_one()
     assert lb is not None and lb.date() == datetime.now().date(), f"last_bonus_at NOT persisted: {lb}"
-    assert float(bal) == 220.0, f"balance: {bal} != 220"
+    assert bal == Decimal("200") + granted1[0]
 
     async with async_session() as s:
         user = await get_user(s, 11)
@@ -4317,3 +4324,119 @@ async def test_poll_reward_100_unanswered_lookup_and_promo_pool():
         assert await get_unanswered_active_poll(session, user.id) is None
 
     await engine.dispose()
+
+
+def test_heatmap_peak_uses_one_cell_and_handles_empty():
+    from app.reports import _build_hour_weekday_heatmap, _heatmap_peak_comment
+    heatmap = _build_hour_weekday_heatmap([])
+    assert "Недостаточно" in _heatmap_peak_comment(heatmap)
+    heatmap["matrix"][0][7] = 800
+    heatmap["matrix"][3][22] = 750
+    heatmap["matrix"][4][22] = 700
+    assert "Пн около 07:00 UTC" in _heatmap_peak_comment(heatmap)
+
+
+@pytest.mark.asyncio
+async def test_view_access_without_nickname_still_requires_rules():
+    from app.user_handlers import require_view_access
+    message = SimpleNamespace(answer=AsyncMock())
+    user = SimpleNamespace(id=1, status="active", agreed_to_rules=True, nickname_set=False)
+    session = SimpleNamespace(scalar=AsyncMock(return_value=0))
+    assert await require_view_access(message, user, session)
+    message.answer.assert_not_awaited()
+    user.agreed_to_rules = False
+    assert not await require_view_access(message, user, session)
+    user.agreed_to_rules = True
+    user.status = "banned"
+    assert not await require_view_access(message, user, session)
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_zero_and_stale_session_cannot_double_claim():
+    from app.services import auto_daily_return_bonus, claim_daily_bonus, set_setting
+    engine, Session = await _make_session()
+    async with Session() as s:
+        user = User(telegram_id=777123, balance=Decimal("0"))
+        s.add(user)
+        await s.commit()
+        uid = user.id
+        await set_setting(s, "daily_bonus_base", "200")
+        await set_setting(s, "daily_bonus_cap", "20")
+        await s.commit()
+    async with Session() as first, Session() as second:
+        u1 = await first.get(User, uid)
+        u2 = await second.get(User, uid)
+        result = await auto_daily_return_bonus(first, u1)
+        assert result[0] == Decimal("20")
+        assert await auto_daily_return_bonus(second, u2) is None
+        await second.rollback()
+    async with Session() as s:
+        assert not (await claim_daily_bonus(s, uid))[0]
+        user = await s.get(User, uid)
+        assert user.balance == Decimal("20")
+        user.last_bonus_at -= timedelta(days=1)
+        await set_setting(s, "daily_bonus_cap", "0")
+        await s.commit()
+        assert await auto_daily_return_bonus(s, user) is None
+        assert user.balance == Decimal("20")
+        await set_setting(s, "daily_bonus_cap", "20")
+        await set_setting(s, "daily_bonus_base", "0")
+        await set_setting(s, "daily_bonus_increase", "0")
+        await s.commit()
+        assert await auto_daily_return_bonus(s, user) is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_nickname_limit_counts_photos_and_videos_together():
+    from app.models import VideoView
+    from app.user_handlers import require_view_access
+    engine, Session = await _make_session()
+    message = SimpleNamespace(answer=AsyncMock())
+    async with Session() as session:
+        user = User(telegram_id=778123, agreed_to_rules=True, nickname_set=False)
+        session.add(user)
+        await session.flush()
+        for index, content_type in enumerate(["photo", "video", "photo"]):
+            assert await require_view_access(message, user, session)
+            content = Video(
+                uploader_user_id=user.id, content_type=content_type,
+                telegram_file_id=f"limit_{index}",
+                telegram_file_unique_id=f"limit_unique_{index}", status="approved",
+            )
+            session.add(content)
+            await session.flush()
+            session.add(VideoView(user_id=user.id, video_id=content.id,
+                                  watched_at=utc_now() - timedelta(days=10)))
+            await session.commit()
+        assert not await require_view_access(message, user, session)
+        assert message.answer.call_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "set_nickname_start"
+        uid = user.id
+    # Перезапуск/новая сессия не сбрасывает лимит.
+    async with Session() as session:
+        user = await session.get(User, uid)
+        assert not await require_view_access(message, user, session)
+        user.nickname_set = True
+        user.display_name = "ValidNickname"
+        assert await require_view_access(message, user, session)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_photo_and_video_requests_share_serialization():
+    import asyncio
+    from app.user_handlers import _serialize_views
+    active = 0
+    peak = 0
+
+    async def handler(callback):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+
+    photo, video = _serialize_views(handler), _serialize_views(handler)
+    callback = SimpleNamespace(from_user=SimpleNamespace(id=778124))
+    await asyncio.gather(photo(callback), video(callback), photo(callback))
+    assert peak == 1

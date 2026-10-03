@@ -2611,6 +2611,10 @@ async def settings_economy(callback: CallbackQuery):
         ri = await get_setting(session, "referral_reward_inviter", "")
         rn = await get_setting(session, "referral_reward_new_user", "")
         fp = await get_setting(session, "first_purchase_daily_bonus", "")
+        from app.services import get_runtime_value
+        daily = {key: await get_runtime_value(session, key) for key in
+                 ("daily_bonus_base", "daily_bonus_increase", "daily_bonus_cap")}
+
         # Реальный курс Stars→Coins теперь выводится из пакетов магазина, а не из
         # отдельной настройки (та больше не влияет на цены, поэтому убрана).
         try:
@@ -2634,6 +2638,7 @@ async def settings_economy(callback: CallbackQuery):
         + f"Реферал (пригласивший): {v(ri, REFERRAL_REWARD_INVITER)}\n"
         f"Реферал (новый): {v(rn, REFERRAL_REWARD_NEW_USER)}\n"
         f"Бонус 1-й покупки: {v(fp, FIRST_PURCHASE_DAILY_BONUS)}\n"
+        f"Ежедневный: база {daily['daily_bonus_base']}, шаг {daily['daily_bonus_increase']}, потолок {daily['daily_bonus_cap']} монет (0 = выключен)\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Стартовый баланс", callback_data="settings_edit:starting_balance")],
@@ -2642,6 +2647,9 @@ async def settings_economy(callback: CallbackQuery):
         [InlineKeyboardButton(text="✏️ Награда за фото", callback_data="settings_edit:photo_upload_reward")],
         [InlineKeyboardButton(text="✏️ Реферал (пригл.)", callback_data="settings_edit:referral_reward_inviter")],
         [InlineKeyboardButton(text="✏️ Реферал (новый)", callback_data="settings_edit:referral_reward_new_user")],
+        [InlineKeyboardButton(text="✏️ База ежедневного бонуса", callback_data="settings_edit:daily_bonus_base")],
+        [InlineKeyboardButton(text="✏️ Шаг ежедневного бонуса", callback_data="settings_edit:daily_bonus_increase")],
+        [InlineKeyboardButton(text="✏️ Потолок ежедневного бонуса", callback_data="settings_edit:daily_bonus_cap")],
         [InlineKeyboardButton(text="✏️ Бонус 1-й покупки", callback_data="settings_edit:first_purchase_daily_bonus")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_bot_settings")],
     ])
@@ -3311,6 +3319,17 @@ async def settings_edit_save(message: Message, state: FSMContext):
     data = await state.get_data()
     key = data.get("settings_key", "")
     value = message.text.strip()
+
+    if value != "-" and key in {"daily_bonus_base", "daily_bonus_increase", "daily_bonus_cap"}:
+        from decimal import Decimal, InvalidOperation
+        try:
+            amount = Decimal(value.replace(",", "."))
+            if not amount.is_finite() or not 0 <= amount <= 100000:
+                raise ValueError
+        except (InvalidOperation, ValueError):
+            await message.answer("❌ Введи число от 0 до 100000. Нулевой потолок отключает бонус.")
+            return
+        value = str(amount)
 
     if value != "-" and _is_numeric_setting_key(key):
         try:

@@ -43,7 +43,7 @@ from app.config import (
     RUB_TO_COINS_RATE, VIP_PRICE_RUB,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     DAILY_BONUS_STREAK_BASE, DAILY_BONUS_STREAK_INCREASE,
-    MAX_BONUS_STREAK,
+    MAX_BONUS_STREAK, DAILY_BONUS_CAP,
     UPSELL_AFTER_VIEWS, DAILY_VIDEO_UPLOAD_LIMIT,
     COMEBACK_BONUS_AMOUNT, ONBOARDING_DRIP_ENABLED,
     DAILY_PHOTO_LIMIT,
@@ -1338,17 +1338,10 @@ async def claim_daily_bonus(session: AsyncSession, user_id: int) -> tuple[bool, 
     user = await get_user_by_id(session, user_id)
     if not user:
         return False, "Пользователь не найден."
-    now = utc_now()
-    if user.last_bonus_at and user.last_bonus_at.date() == now.date():
-        return False, "Бонус за сегодня уже получен."
-    streak = 1
-    if user.last_bonus_at and (now.date() - user.last_bonus_at.date()).days == 1:
-        streak = min(user.bonus_streak + 1, MAX_BONUS_STREAK)
-    reward = DAILY_BONUS_STREAK_BASE + DAILY_BONUS_STREAK_INCREASE * (streak - 1)
-    await change_balance_atomic(session, user.id, to_decimal(reward), "daily_bonus")
-    user.last_bonus_at = now
-    user.bonus_streak = streak
-    await session.commit()
+    result = await auto_daily_return_bonus(session, user)
+    if result is None:
+        return False, "Бонус за сегодня уже получен или отключён."
+    reward, streak = result
     return True, f"Ежедневный бонус: +{reward:.0f} монет! Дней подряд: {streak}"
 
 
@@ -1359,20 +1352,32 @@ async def auto_daily_return_bonus(session: AsyncSession, user: "User") -> tuple[
     """Один раз в день при первой активности начисляет стрик-бонус.
 
     Суммы читаются из настроек (админка): daily_bonus_base / daily_bonus_increase /
-    daily_bonus_streak_max. Возвращает (сумма, стрик) или None, если сегодня уже был.
+    daily_bonus_streak_max / daily_bonus_cap. Нулевой cap отключает выдачу. Возвращает (сумма, стрик) или None, если сегодня уже был.
     """
     if not user:
         return None
     now = utc_now()
     if user.last_bonus_at and user.last_bonus_at.date() == now.date():
         return None
-    streak_max = int(float(await get_config_value(session, "daily_bonus_streak_max", MAX_BONUS_STREAK) or MAX_BONUS_STREAK))
-    base = float(await get_config_value(session, "daily_bonus_base", DAILY_BONUS_STREAK_BASE) or DAILY_BONUS_STREAK_BASE)
-    increase = float(await get_config_value(session, "daily_bonus_increase", DAILY_BONUS_STREAK_INCREASE) or DAILY_BONUS_STREAK_INCREASE)
+    streak_max = max(1, int(float(await get_config_value(session, "daily_bonus_streak_max", MAX_BONUS_STREAK))))
+    base = float(await get_config_value(session, "daily_bonus_base", DAILY_BONUS_STREAK_BASE))
+    increase = float(await get_config_value(session, "daily_bonus_increase", DAILY_BONUS_STREAK_INCREASE))
     streak = 1
     if user.last_bonus_at and (now.date() - user.last_bonus_at.date()).days == 1:
         streak = min(int(user.bonus_streak or 0) + 1, streak_max)
-    reward = to_decimal(base + increase * (streak - 1))
+    cap = max(to_decimal(await get_config_value(session, "daily_bonus_cap", DAILY_BONUS_CAP)), Decimal("0"))
+    reward = min(cap, max(Decimal("0"), to_decimal(base + increase * (streak - 1))))
+    if reward <= 0:
+        return None
+    # Захват дня и начисление — одна транзакция, включая ручной путь получения.
+    claimed = await session.execute(
+        update(User).where(
+            User.id == user.id,
+            or_(User.last_bonus_at.is_(None), User.last_bonus_at < now.replace(hour=0, minute=0, second=0, microsecond=0)),
+        ).values(last_bonus_at=now, bonus_streak=streak)
+    )
+    if claimed.rowcount != 1:
+        return None
     await change_balance_atomic(session, user.id, reward, "daily_return_bonus", details=f"streak={streak}")
     user.last_bonus_at = now
     user.bonus_streak = streak
@@ -4334,6 +4339,7 @@ _SETTINGS_DEFAULTS = {
     "stars_to_coins_rate": STARS_TO_COINS_RATE,
     "referral_reward_inviter": REFERRAL_REWARD_INVITER,
     "referral_reward_new_user": REFERRAL_REWARD_NEW_USER,
+    "daily_bonus_cap": DAILY_BONUS_CAP,
     "daily_bonus_base": DAILY_BONUS_STREAK_BASE,
     "daily_bonus_increase": DAILY_BONUS_STREAK_INCREASE,
     "daily_bonus_streak_max": MAX_BONUS_STREAK,
