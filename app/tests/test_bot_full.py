@@ -4260,3 +4260,60 @@ async def test_lottery_place_bet_api_blocks_negative_bet_and_late_bet(monkeypatc
     assert r.status == 200 and not b.get("ok") and "закрыт" in b.get("error", "")
 
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_poll_reward_100_unanswered_lookup_and_promo_pool():
+    """Награда опроса = 100; непройденный опрос находится и попадает в промо-ротацию;
+    после ответа больше не предлагается."""
+    from app.models import AdminPoll
+    from app.services import (
+        submit_admin_poll_response,
+        get_unanswered_active_poll,
+        get_auto_broadcast_pool,
+    )
+    from app.admin_handlers import _POLL_REWARD
+
+    # Награда повышена до 100 монет
+    assert _POLL_REWARD == Decimal("100.00")
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        user = User(telegram_id=810002, balance=Decimal("0.00"))
+        session.add(user)
+        await session.flush()
+        poll = AdminPoll(
+            question="Вам нравится бот?",
+            poll_type="single",
+            options_json='["Да", "Нет"]',
+            reward=_POLL_REWARD,
+            created_by=user.id,
+        )
+        session.add(poll)
+        await session.commit()
+
+        # Опрос виден как непройденный
+        found = await get_unanswered_active_poll(session, user.id)
+        assert found is not None and found.id == poll.id
+
+        # Опрос попадает в пул промо-ротации с метаданными и наградой 100
+        pool = await get_auto_broadcast_pool(session)
+        poll_items = [it for it in pool if it.get("poll")]
+        assert any(it["poll"]["id"] == poll.id for it in poll_items)
+        assert any("100 монет" in it["text"] for it in poll_items)
+
+        # После ответа награда 100 и опрос больше не предлагается
+        answered, reward, error = await submit_admin_poll_response(
+            session, poll.id, user.id, option_indexes=[0]
+        )
+        assert reward == Decimal("100.00")
+        assert error is None
+        await session.refresh(user)
+        assert user.balance == Decimal("100.00")
+        assert await get_unanswered_active_poll(session, user.id) is None
+
+    await engine.dispose()

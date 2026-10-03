@@ -13,7 +13,7 @@ import json
 from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
-from sqlalchemy import select, func, desc, update, delete, or_, Text
+from sqlalchemy import select, func, desc, update, delete, or_, and_, Text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
@@ -3893,6 +3893,27 @@ async def flush_mod_notifications(bot, session: AsyncSession) -> int:
     return sent
 
 
+async def get_unanswered_active_poll(session: AsyncSession, user_id: int) -> AdminPoll | None:
+    """Возвращает самый свежий активный опрос, который пользователь ещё не проходил.
+
+    Используется, чтобы показывать опрос как рекламу между видео и в промо-ротации.
+    """
+    stmt = (
+        select(AdminPoll)
+        .outerjoin(
+            AdminPollResponse,
+            and_(
+                AdminPollResponse.poll_id == AdminPoll.id,
+                AdminPollResponse.user_id == user_id,
+            ),
+        )
+        .where(AdminPoll.is_active == True, AdminPollResponse.id == None)  # noqa: E712
+        .order_by(AdminPoll.id.desc())
+        .limit(1)
+    )
+    return await session.scalar(stmt)
+
+
 async def submit_admin_poll_response(
     session: AsyncSession,
     poll_id: int,
@@ -3960,7 +3981,7 @@ async def submit_admin_poll_response(
         await session.rollback()
         return poll, None, "Вы уже прошли этот опрос."
 
-    reward = Decimal(str(poll.reward or Decimal("20.00")))
+    reward = Decimal(str(poll.reward or Decimal("100.00")))
     updated_user = await change_balance_atomic(
         session,
         user_id,
@@ -4207,6 +4228,27 @@ async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
         pool.append({
             "text": build_event_promo_text(ev, max_len=max_len),
             "image_file_id": ev.image_file_id,
+        })
+
+    # Активные опросы тоже участвуют в промо-ротации: напоминают о себе
+    # случайным пользователям наравне с промо-сообщениями и событиями.
+    polls = (await session.execute(
+        select(AdminPoll).where(AdminPoll.is_active == True).order_by(AdminPoll.id.asc())  # noqa: E712
+    )).scalars().all()
+    for poll in polls:
+        try:
+            options = json.loads(poll.options_json or "[]")
+        except (TypeError, json.JSONDecodeError):
+            options = []
+        reward = int(Decimal(str(poll.reward or Decimal("100.00"))))
+        pool.append({
+            "text": (
+                "📊 <b>Опрос от администрации</b>\n\n"
+                f"{poll.question}\n\n"
+                f"Пройди опрос один раз и получи <b>{reward} монет</b>."
+            ),
+            "image_file_id": None,
+            "poll": {"id": poll.id, "type": poll.poll_type, "options": options},
         })
     return pool
 

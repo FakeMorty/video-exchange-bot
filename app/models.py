@@ -643,7 +643,7 @@ class AdminPoll(Base):
     poll_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # poll_type: "single", "multiple" или "text"
     options_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("20.00"))
+    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("100.00"))
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

@@ -1819,14 +1819,21 @@ async def auto_broadcast_worker(bot):
             item = random.choice(pool)
             msg_text = item["text"]
             image = item.get("image_file_id")
+            poll_info = item.get("poll")
+            reply_markup = None
+            if poll_info:
+                from app.keyboards import poll_answer_keyboard
+                reply_markup = poll_answer_keyboard(
+                    poll_info["type"], poll_info["id"], poll_info.get("options", [])
+                )
 
             sent = 0
             for tid in users:
                 try:
                     if image:
-                        await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML")
+                        await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
                     else:
-                        await bot.send_message(tid, msg_text, parse_mode="HTML")
+                        await bot.send_message(tid, msg_text, parse_mode="HTML", reply_markup=reply_markup)
                     sent += 1
                     if sent % 30 == 0:
                         await asyncio.sleep(0.5)

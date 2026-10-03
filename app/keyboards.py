@@ -361,3 +361,20 @@ def vip_buy_keyboard(price: int = 450, user_id: int | None = None) -> InlineKeyb
     buttons.append([InlineKeyboardButton(text="🔄 Проверить зачисление", callback_data="da_check_payment")])
     buttons.append([InlineKeyboardButton(text=f"🌐 Резерв: Оформить за {price} Stars", callback_data="buy_vip_stars")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def poll_answer_keyboard(poll_type: str, poll_id: int, options: list[str]) -> InlineKeyboardMarkup:
+    """Единая инлайн-клавиатура для ответа на опрос.
+
+    Используется и в рассылке опроса, и когда опрос показывается как реклама
+    между видео, и в промо-ротации — чтобы кнопки везде были одинаковыми.
+    """
+    if poll_type == "text":
+        rows = [[InlineKeyboardButton(text="✍️ Написать ответ", callback_data=f"poll_text:{poll_id}")]]
+    elif poll_type == "single":
+        rows = [
+            [InlineKeyboardButton(text=option, callback_data=f"poll_single:{poll_id}:{index}")]
+            for index, option in enumerate(options)
+        ]
+    else:  # multiple
+        rows = [[InlineKeyboardButton(text="☑️ Выбрать варианты", callback_data=f"poll_multi_open:{poll_id}")]]
+    return InlineKeyboardMarkup(inline_keyboard=rows)

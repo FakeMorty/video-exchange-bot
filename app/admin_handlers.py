@@ -43,7 +43,7 @@ from app.services import (
 from app.keyboards import (
     admin_main_keyboard, moderation_keyboard,
     rejection_reason_keyboard, admin_after_action_keyboard,
-    admin_db_keyboard,
+    admin_db_keyboard, poll_answer_keyboard,
 )
 from app.logger import get_logger
 from app.reports import build_all_users_report_pdf, build_bot_report_pdf, build_user_report_pdf
@@ -4513,7 +4513,7 @@ async def admin_da_exception_close(callback: CallbackQuery):
 # ====================================================
 # ОПРОСЫ АДМИНИСТРАТОРА С НАГРАДОЙ
 # ====================================================
-_POLL_REWARD = Decimal("20.00")
+_POLL_REWARD = Decimal("100.00")
 _POLL_TYPE_LABELS = {
     "single": "один вариант",
     "multiple": "несколько вариантов",
@@ -4548,8 +4548,8 @@ async def _render_admin_polls_menu(callback: CallbackQuery) -> None:
 
     text = (
         "📊 <b>Опросы с наградой</b>\n\n"
-        "Создавайте опросы с одним вариантом, несколькими вариантами или свободным ответом. "
-        "За одно успешное прохождение активного опроса пользователь получает <b>20 монет</b>.\n\n"
+        "Создавайте опросы с выбором одного варианта, несколькими вариантами или свободным ответом. "
+        f"За одно успешное прохождение активного опроса пользователь получает <b>{_POLL_REWARD:.0f} монет</b>.\n\n"
         f"Активных опросов: <b>{active_count}</b>"
     )
     await _safe_edit(
@@ -4577,14 +4577,14 @@ async def admin_poll_create(callback: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔘 Один вариант", callback_data="admin_poll_type:single")],
+        [InlineKeyboardButton(text="🔘 Выбор одного варианта", callback_data="admin_poll_type:single")],
         [InlineKeyboardButton(text="☑️ Несколько вариантов", callback_data="admin_poll_type:multiple")],
         [InlineKeyboardButton(text="✍️ Свободный ответ", callback_data="admin_poll_type:text")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_polls")],
     ])
     await _safe_edit(
         callback,
-        "➕ <b>Новый опрос</b>\n\nВыбери формат ответа. Награда за прохождение всегда составляет <b>20 монет</b>.",
+        f"➕ <b>Новый опрос</b>\n\nВыбери формат ответа. Награда за прохождение всегда составляет <b>{_POLL_REWARD:.0f} монет</b>.",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -4626,7 +4626,7 @@ async def _show_poll_preview(message: Message, state: FSMContext) -> None:
         f"📋 <b>Предпросмотр опроса</b>\n\n"
         f"<b>Формат:</b> {_POLL_TYPE_LABELS[poll_type]}\n"
         f"<b>Вопрос:</b> {question}{details}\n\n"
-        f"Награда каждому участнику: <b>20 монет</b>.\n\n"
+        f"Награда каждому участнику: <b>{_POLL_REWARD:.0f} монет</b>.\n\n"
         "Разослать опрос всем активным пользователям?",
         parse_mode="HTML",
         reply_markup=keyboard,
@@ -4690,24 +4690,13 @@ async def _broadcast_admin_poll(bot, creator_telegram_id: int, poll_id: int) -> 
     except (TypeError, json.JSONDecodeError):
         options = []
 
+    reward = int(Decimal(str(poll.reward or _POLL_REWARD)))
     header = (
         "📊 <b>Опрос от администрации</b>\n\n"
         f"{escape(poll.question)}\n\n"
-        "Пройди опрос один раз и получи <b>20 монет</b>."
+        f"Пройди опрос один раз и получи <b>{reward} монет</b>."
     )
-    if poll.poll_type == "text":
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✍️ Написать ответ", callback_data=f"poll_text:{poll.id}")
-        ]])
-    elif poll.poll_type == "single":
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=option, callback_data=f"poll_single:{poll.id}:{index}")]
-            for index, option in enumerate(options)
-        ])
-    else:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="☑️ Выбрать варианты", callback_data=f"poll_multi_open:{poll.id}")
-        ]])
+    keyboard = poll_answer_keyboard(poll.poll_type, poll.id, options)
 
     sent = 0
     for telegram_id in targets:
@@ -4802,7 +4791,7 @@ async def admin_poll_view(callback: CallbackQuery):
         f"<b>Вопрос:</b> {escape(poll.question)}\n"
         f"<b>Формат:</b> {_POLL_TYPE_LABELS.get(poll.poll_type, poll.poll_type)}\n"
         f"<b>Ответов:</b> {len(responses)}\n"
-        f"<b>Выдано наград:</b> {len([response for response in responses if response.rewarded_at]) * 20} монет\n\n"
+        f"<b>Выдано наград:</b> {len([response for response in responses if response.rewarded_at]) * int(Decimal(str(poll.reward or _POLL_REWARD)))} монет\n\n"
     )
     if poll.poll_type in {"single", "multiple"}:
         counts = [0 for _ in options]

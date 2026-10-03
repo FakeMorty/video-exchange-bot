@@ -83,6 +83,7 @@ from app.services import (
     calculate_promocode_star_cost, get_runtime_value,
     create_feedback, process_referral_reward,
     ensure_current_lottery_round, buy_lottery_tickets,
+    get_unanswered_active_poll,
     get_latest_lottery_round, get_user_lottery_tickets, get_weekly_lottery_leaderboard, get_lottery_state_dict,
     get_lottery_draw_duration_seconds, get_lottery_max_tickets_for_balance,
     LOTTERY_MAX_TICKETS_PER_PURCHASE,
@@ -111,6 +112,7 @@ from app.keyboards import (
     reaction_menu_keyboard,
     low_balance_offer_keyboard,
     video_error_keyboard, photo_error_keyboard, photo_limit_reached_keyboard,
+    poll_answer_keyboard,
     BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
@@ -1464,7 +1466,30 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
             await log_user_action(session, user.id, "offer_ad_shown", f"offer={offer.id}")
             return
 
-    # Если нет ни событий, ни офферов — просто сбрасываем счётчик
+    # Если нет ни событий, ни офферов — предложим пройти активный опрос за награду
+    try:
+        poll = await get_unanswered_active_poll(session, user.id)
+    except Exception:
+        logger.exception("Poll ad lookup failed (non-critical)")
+        poll = None
+    if poll:
+        try:
+            options = json.loads(poll.options_json or "[]")
+        except (TypeError, json.JSONDecodeError):
+            options = []
+        reward = int(Decimal(str(poll.reward or 100)))
+        ad_text = (
+            "📊 <b>Опрос от администрации</b>\n\n"
+            f"{escape(poll.question)}\n\n"
+            f"Пройди опрос один раз и получи <b>{reward} монет</b>."
+        )
+        kb = poll_answer_keyboard(poll.poll_type, poll.id, options)
+        await callback.message.answer(ad_text, parse_mode="HTML", reply_markup=kb)
+        await reset_ad_counter(session, user.id)
+        await log_user_action(session, user.id, "poll_ad_shown", f"poll={poll.id}")
+        return
+
+    # Если нет ни событий, ни офферов, ни опросов — просто сбрасываем счётчик
     await reset_ad_counter(session, user.id)
 
 
@@ -4827,7 +4852,7 @@ async def _complete_poll_answer(
         )
     if error:
         return False, error
-    reward_text = f"{reward:.0f}" if reward is not None else "20"
+    reward_text = f"{reward:.0f}" if reward is not None else "100"
     return True, f"✅ Спасибо за ответ! Тебе начислено {reward_text} монет."
 
 
