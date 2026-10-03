@@ -2359,6 +2359,30 @@ async def test_offer_stars_price_not_cheaper_than_shop():
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_custom_stars_topup_uses_shop_rate_not_inflated():
+    """Кастомное пополнение Stars выдаёт монеты по курсу магазина (floor), а не
+    по захаркоженным «1 Star = 30 монет» — недоплата закрыта."""
+    from app.services import stars_to_coins_amount, create_custom_payment
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # 1 Star ≈ 2200/1800 = 1.2222 монет (floor): 100 Stars -> 122, не 3000.
+        assert await stars_to_coins_amount(session, 100) == Decimal(122)
+        assert await stars_to_coins_amount(session, 450) == Decimal(550)
+
+        user = User(telegram_id=9601, balance=Decimal("0"), nickname_set=True, display_name="CustomBuyer")
+        session.add(user)
+        await session.flush()
+        pay = await create_custom_payment(session, user.id, 100)
+        assert pay.coins_amount == Decimal(122)
+        assert pay.stars_amount == 100
+    await engine.dispose()
+
+
 # ══════════════════════════════════════════════════════════════
 #  был файл: app/tests/test_watch_error_exit.py
 # ══════════════════════════════════════════════════════════════

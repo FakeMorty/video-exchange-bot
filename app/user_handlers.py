@@ -36,7 +36,7 @@ def is_any_admin(telegram_id: int, user_obj=None) -> bool:
 
 
 from app.config import (
-    ADMINS, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD, STARS_TO_COINS_RATE,
+    ADMINS, WATCH_COST, UPLOAD_REWARD, PHOTO_UPLOAD_REWARD,
     ENABLE_ADMIN_FREE,
     XP_PER_WATCH, XP_PER_UPLOAD, XP_PER_RATING,
     XP_PER_COMMENT, XP_PER_REACTION, XP_PER_GAME,
@@ -79,7 +79,7 @@ from app.services import (
     rate_video, count_referrals,
     create_payment, create_custom_payment, apply_successful_payment,
     ensure_payment_pending, mark_payment_paid_once,
-    get_payment_by_payload,
+    get_payment_by_payload, stars_to_coins_amount,
     get_active_offers, get_offer_by_id,
     start_offer_participation, verify_offer_subscription, is_offer_available,
     normalize_telegram_url,
@@ -2358,6 +2358,7 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         # Используем название пакета, чтобы старт-пак не выглядел как второй
         # «500 монет» по иной цене рядом с обычным пакетом на те же 500 монет.
         buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['title']} ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
+    buttons.append([InlineKeyboardButton(text="✏️ Другая сумма (Stars)", callback_data="buy_custom_stars")])
     buttons.append([InlineKeyboardButton(text="👈 Назад к выгодной оплате", callback_data="btn_buy_callback")])
 
     text = (
@@ -2372,6 +2373,17 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
+
+
+@router.callback_query(F.data == "buy_custom_stars")
+async def cb_buy_custom_stars(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(CustomBuyState.waiting_stars)
+    await callback.message.answer(
+        "✏️ <b>Кастомное пополнение Stars</b>\\n\\n"
+        "Введите количество Stars, на которое хотите пополнить баланс.\\n"
+        "Монеты будут начислены по актуальному курсу магазина."
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "btn_buy_callback")
@@ -2405,7 +2417,7 @@ async def process_custom_stars(message: Message, state: FSMContext):
 
         # Admin free — выдаём монеты без оплаты
         if await is_admin_free_eligible(session, message.from_user.id, user):
-            coins = int(stars * STARS_TO_COINS_RATE)
+            coins = int(await stars_to_coins_amount(session, stars))
             bonus = to_decimal(FIRST_PURCHASE_DAILY_BONUS)
             total = to_decimal(coins) + bonus
 
@@ -2434,7 +2446,7 @@ async def process_custom_stars(message: Message, state: FSMContext):
         discount = await get_stars_discount(session, user.id)
         billed_stars = max(1, int(math.ceil(stars * (1 - discount)))) if discount > 0 else stars
         payment = await create_custom_payment(session, user.id, stars, billed_stars_amount=billed_stars)
-        coins = int(stars * STARS_TO_COINS_RATE)
+        coins = int(await stars_to_coins_amount(session, stars))
 
     await message.answer_invoice(
         title=f"Покупка {coins} монет",

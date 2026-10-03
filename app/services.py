@@ -1643,8 +1643,10 @@ async def create_custom_payment(
     *,
     billed_stars_amount: int | None = None,
 ) -> Payment:
-    rate = float(await get_runtime_value(session, "stars_to_coins_rate") or STARS_TO_COINS_RATE)
-    coins = to_decimal(stars * rate)
+    # Монеты считаем от актуального курса магазина (floor), а не от
+    # захаркоженного «1 Star = 30 монет», чтобы не выдавать монет больше,
+    # чем эти Stars реально стоят.
+    coins = await stars_to_coins_amount(session, stars)
     payload = f"custom_{user_id}_{uuid.uuid4().hex[:6]}"
     payment = Payment(
         user_id=user_id,
@@ -3325,6 +3327,21 @@ async def coins_to_stars_price(session: AsyncSession, coins) -> int:
         rate = Fraction(9, 10)  # страховка: ~курс пакета 450/500
     value = Fraction(str(to_decimal(coins))) * rate
     return max(1, int(-(-value.numerator // value.denominator)))
+
+
+async def stars_to_coins_amount(session: AsyncSession, stars) -> Decimal:
+    """Сколько монет дают `stars` Stars по актуальному курсу магазина.
+
+    Обратная конвертация для кастомного пополнения: округление ВНИЗ (floor),
+    чтобы бот никогда не выдавал больше монет, чем эти Stars стоят в магазине.
+    Раньше здесь был захардкожен курс «1 Star = 30 монет» — в ~25 раз щедрее
+    магазина, то есть прямая недоплата.
+    """
+    rate = await get_shop_best_pack_fraction(session)  # Stars за 1 монету
+    if rate is None or rate == 0:
+        rate = Fraction(9, 10)
+    value = Fraction(str(to_decimal(stars))) / rate
+    return Decimal(int(value.numerator // value.denominator))
 
 
 def _discount_stars_amount(base_stars: int, discount: float) -> int:
