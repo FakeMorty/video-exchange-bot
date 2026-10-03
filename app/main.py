@@ -2319,7 +2319,8 @@ async def weekly_promo_worker(bot: Bot, stop_event: asyncio.Event):
 _ONBOARDING_DRIP_WINDOWS = [
     ("onboard_drip_1", 2, 26),
     ("onboard_drip_2", 26, 50),
-    ("onboard_drip_3", 74, 98),
+    ("onboard_drip_3", 72, 96),
+    ("onboard_drip_5", 120, 144),
 ]
 
 
@@ -2340,6 +2341,12 @@ def _onboarding_drip_text(action_key: str, ref_link: str, ref_reward) -> str:
             "Просто отправь свою ссылку знакомому:\n"
             f"<code>{ref_link}</code>\n\n"
             "Один активный друг ≈ десятки просмотров бесплатно. 🚀"
+        )
+    if action_key == "onboard_drip_5":
+        return (
+            "👀 <b>Продолжим знакомство?</b>\n\n"
+            "Открой 🎬 Смотреть — первые 3 фото или видео доступны без ника. "
+            "В профиле можно настроить его позже. Если что-то непонятно, напиши в поддержку."
         )
     return (
         "👀 <b>Мы тут контент обновили…</b>\n\n"

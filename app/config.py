@@ -165,8 +165,9 @@ GAME_SESSION_COST = 100.0             # монет за продление се�
 # ============================
 # ЕЖЕДНЕВНЫЙ БОНУС (ПРОГРЕССИВНЫЙ)
 # ============================
-DAILY_BONUS_STREAK_BASE = 20.0
-DAILY_BONUS_STREAK_INCREASE = 10.0
+DAILY_BONUS_STREAK_BASE = _get_float("DAILY_BONUS_STREAK_BASE", 5.0)
+DAILY_BONUS_STREAK_INCREASE = _get_float("DAILY_BONUS_STREAK_INCREASE", 1.0)
+DAILY_BONUS_CAP = _get_float("DAILY_BONUS_CAP", 20.0)
 MAX_BONUS_STREAK = 30
 
 # ============================

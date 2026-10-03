@@ -7,6 +7,8 @@ import json
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from collections import defaultdict
+from functools import wraps
+from weakref import WeakValueDictionary
 
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
@@ -210,41 +212,6 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             )
             return
 
-        if not has_valid_nickname(user):
-            needs_fix = bool(user.nickname_set and user.display_name)
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="✏️ Сменить ник" if needs_fix else "✏️ Установить ник",
-                    callback_data="set_nickname_start"
-                )]
-            ])
-            from app.config import NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH
-            if needs_fix:
-                await message.answer(
-                    "👋 С возвращением!\n\n"
-                    "⚠️ У тебя недопустимый ник (например <code>User&lt;id&gt;</code>).\n"
-                    "Нужно поставить <b>нормальный ник</b> — это бесплатно.\n\n"
-                    f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
-                    f"• Только буквы (рус/лат), цифры, _ и -\n"
-                    f"• Без точек, пробелов, ? и спецсимволов\n"
-                    f"• Нельзя User&lt;id&gt;",
-                    parse_mode="HTML",
-                    reply_markup=kb
-                )
-            else:
-                await message.answer(
-                    "👋 Добро пожаловать!\n\n"
-                    "⚠️ Перед началом нужно установить нормальный ник.\n"
-                    f"Первая установка бесплатна!\n"
-                    f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
-                    f"• Только буквы (рус/лат), цифры, _ и -\n"
-                    f"• Без точек, пробелов, ? и спецсимволов\n"
-                    f"• Нельзя User&lt;id&gt;",
-                    parse_mode="HTML",
-                    reply_markup=kb
-                )
-            return
-
         await send_welcome_banner(message, session, user)
 
 
@@ -397,6 +364,29 @@ def calc_level_from_xp(xp: int) -> int:
 
 def is_vip(user) -> bool:
     return bool(user.vip_until and user.vip_until > utc_now())
+
+
+async def require_view_access(message: Message, user, session) -> bool:
+    """Без валидного ника доступны только три просмотра суммарно."""
+    if user.status == "banned":
+        await message.answer("🚫 Доступ к боту для тебя заблокирован.")
+        return False
+    if not user.agreed_to_rules:
+        from app.keyboards import rules_keyboard
+        await message.answer(SHORT_RULES_TEXT, parse_mode="HTML", reply_markup=rules_keyboard())
+        return False
+    if not has_valid_nickname(user):
+        views = await session.scalar(
+            select(func.count(VideoView.id)).where(VideoView.user_id == user.id)
+        )
+        if views >= 3:
+            await message.answer(
+                "👀 Ты уже посмотрел 3 фото или видео без ника. "
+                "Чтобы продолжить, установи ник — первая установка бесплатна."
+            )
+            await require_nickname(message, user)
+            return False
+    return True
 
 
 async def require_nickname(message: Message, user) -> bool:
@@ -605,6 +595,8 @@ async def send_welcome_banner(message_or_callback, session, user):
         f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
         f"💰 Баланс: <b>{user.balance}</b> монет"
     )
+    if not has_valid_nickname(user):
+        msg_text += "\n\n🎬 Без ника можно посмотреть всего 3 фото или видео. Затем установи ник бесплатно в профиле; для загрузок он тоже понадобится."
     custom_welcome = await get_setting(session, "welcome_text", "")
     if custom_welcome:
         msg_text += f"\n\n{custom_welcome}"
@@ -687,34 +679,8 @@ async def accept_rules(callback: CallbackQuery):
             await process_referral_reward(session, user.referred_by_user_id)
         await session.commit()
 
-        # If user already has a valid nickname, show main menu immediately while session is still alive.
-        if has_valid_nickname(user):
-            await send_welcome_banner(callback, session, user)
-            await callback.answer()
-            return
-
-    needs_fix = bool(user.nickname_set and user.display_name)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="✏️ Сменить ник" if needs_fix else "✏️ Установить ник",
-            callback_data="set_nickname_start"
-        )]
-    ])
-    await callback.message.answer(
-        "✅ Правила приняты!\n\n"
-        + (
-            "У тебя недопустимый ник — поставь нормальный. Это бесплатно.\n"
-            if needs_fix else
-            "Теперь установи нормальный ник. Первая установка бесплатна.\n"
-        )
-        + f"• От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов\n"
-        + f"• Только буквы (рус/лат), цифры, _ и -\n"
-        + f"• Без точек, пробелов, ? и спецсимволов\n"
-        + f"• Нельзя User&lt;id&gt;",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-    await callback.answer()
+        await send_welcome_banner(callback, session, user)
+        await callback.answer()
 
 
 # =========================
@@ -1193,13 +1159,28 @@ async def btn_watch(message: Message, state: FSMContext):
         if user.status == "banned":
             await message.answer("🚫 Доступ к боту для тебя заблокирован.")
             return
-        if not await require_nickname(message, user):
+        if not await require_view_access(message, user, session):
             return
         admin_flag = is_admin_or_super(message.from_user.id, user)
     await message.answer("👀 Что смотреть?", reply_markup=watch_choice_keyboard(is_admin=admin_flag))
 
 
+# Общая очередь фото/видео одного пользователя: двойной клик не обходит лимит.
+_view_locks = WeakValueDictionary()
+
+
+def _serialize_views(handler):
+    @wraps(handler)
+    async def wrapped(callback: CallbackQuery):
+        key = callback.from_user.id
+        lock = _view_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            return await handler(callback)
+    return wrapped
+
+
 @router.callback_query(F.data == "watch_video_content")
+@_serialize_views
 async def watch_video_content(callback: CallbackQuery):
     # Stop Telegram "loading" ASAP
     await _safe_callback_answer(callback)
@@ -1207,6 +1188,8 @@ async def watch_video_content(callback: CallbackQuery):
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             if not user:
+                return
+            if not await require_view_access(callback.message, user, session):
                 return
 
             # Получаем цену просмотра динамически из настроек БД
@@ -1499,12 +1482,15 @@ async def watch_next(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "watch_photo_content")
+@_serialize_views
 async def watch_photo_content(callback: CallbackQuery):
     await _safe_callback_answer(callback)
     try:
         async with async_session() as session:
             user = await get_user(session, callback.from_user.id)
             if not user:
+                return
+            if not await require_view_access(callback.message, user, session):
                 return
 
             # Проверка дневного лимита фото для обычных пользователей
