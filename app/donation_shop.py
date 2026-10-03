@@ -4,7 +4,6 @@ from app.models import utc_now
 Включает FSM-флоу для выбора кастомного стиля ника из 50 вариантов.
 """
 
-from datetime import datetime, timezone
 from decimal import Decimal
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -21,7 +20,7 @@ from app.services import (
 from app.nick_styles import (
     CATEGORIES, STYLES, STYLES_BY_CAT,
     format_nick_inline, format_nick_card,
-    validate_style_id, style_label,
+    validate_style_id,
 )
 
 router = Router()

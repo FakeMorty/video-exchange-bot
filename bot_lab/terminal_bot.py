@@ -410,14 +410,11 @@ class BotLab:
                     status="approved",
                     duration_days=30,
                     placement_cost=to_decimal(0),
-                    is_rentable=True,
-                    rent_cost_per_day=to_decimal(25),
-                    max_simultaneous_rentals=2,
                 ))
 
             await session.commit()
 
-        print("✅ Demo data seeded: 1 approved video + 1 active/rentable offer")
+        print("✅ Demo data seeded: 1 approved video + 1 active offer")
 
 
 async def amain() -> int:

@@ -210,7 +210,6 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
 async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_at: datetime):
     from sqlalchemy import select
     from app.models import LotteryTicket, User
-    from datetime import timedelta
     from app.utils.messaging import format_time_for_user
     
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
@@ -1820,14 +1819,21 @@ async def auto_broadcast_worker(bot):
             item = random.choice(pool)
             msg_text = item["text"]
             image = item.get("image_file_id")
+            poll_info = item.get("poll")
+            reply_markup = None
+            if poll_info:
+                from app.keyboards import poll_answer_keyboard
+                reply_markup = poll_answer_keyboard(
+                    poll_info["type"], poll_info["id"], poll_info.get("options", [])
+                )
 
             sent = 0
             for tid in users:
                 try:
                     if image:
-                        await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML")
+                        await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
                     else:
-                        await bot.send_message(tid, msg_text, parse_mode="HTML")
+                        await bot.send_message(tid, msg_text, parse_mode="HTML", reply_markup=reply_markup)
                     sent += 1
                     if sent % 30 == 0:
                         await asyncio.sleep(0.5)
@@ -2865,7 +2871,7 @@ async def api_cases_open(request: web.Request) -> web.Response:
         if not user:
              return web.json_response({"ok": False, "error": "user_not_found"}, status=404)
         
-        from app.services import open_lootbox_for_coins, open_styles_lootbox, _roll_lootbox_reward_coins
+        from app.services import open_lootbox_for_coins, open_styles_lootbox
         
         win_item = None
         if case_id == "styles":

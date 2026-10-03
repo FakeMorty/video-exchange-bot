@@ -1,18 +1,19 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from app.models import OfferRental, VideoReport
+    from app.models import VideoReport
 
 import math
 import asyncio
+from fractions import Fraction
 import uuid
 import random
 import re
 import json
 from urllib.parse import urlsplit, urlunsplit
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
-from sqlalchemy import select, func, desc, update, delete, or_, Text
+from sqlalchemy import select, func, desc, update, delete, or_, and_, Text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.logger import get_logger, log_error
 from app.models import (
@@ -1642,8 +1643,10 @@ async def create_custom_payment(
     *,
     billed_stars_amount: int | None = None,
 ) -> Payment:
-    rate = float(await get_runtime_value(session, "stars_to_coins_rate") or STARS_TO_COINS_RATE)
-    coins = to_decimal(stars * rate)
+    # Монеты считаем от актуального курса магазина (floor), а не от
+    # захаркоженного «1 Star = 30 монет», чтобы не выдавать монет больше,
+    # чем эти Stars реально стоят.
+    coins = await stars_to_coins_amount(session, stars)
     payload = f"custom_{user_id}_{uuid.uuid4().hex[:6]}"
     payment = Payment(
         user_id=user_id,
@@ -1779,10 +1782,6 @@ async def get_active_offers(session: AsyncSession) -> list["Offer"]:
     return [offer for offer in offers if is_offer_available(offer)]
 
 
-async def get_rentable_offers(session: AsyncSession) -> list["Offer"]:
-    return [offer for offer in await get_active_offers(session) if offer.is_rentable]
-
-
 async def get_offer_by_id(session: AsyncSession, offer_id: int) -> "Offer | None":
     return (await session.execute(
         select(Offer).where(Offer.id == offer_id)
@@ -1790,17 +1789,10 @@ async def get_offer_by_id(session: AsyncSession, offer_id: int) -> "Offer | None
 
 
 async def get_offer_moderation_counts(session: AsyncSession) -> dict[str, int]:
-    from app.models import OfferRental
-
     rows = (await session.execute(
         select(Offer.status, func.count(Offer.id)).group_by(Offer.status)
     )).all()
-    counts = {str(status): int(count or 0) for status, count in rows}
-    pending_rentals = (await session.execute(
-        select(func.count(OfferRental.id)).where(OfferRental.status == "pending")
-    )).scalar_one() or 0
-    counts["pending_rentals"] = int(pending_rentals)
-    return counts
+    return {str(status): int(count or 0) for status, count in rows}
 
 
 async def get_offers_for_admin(
@@ -2064,9 +2056,6 @@ async def get_offer_participations_for_subscription_audit(
 async def admin_create_offer(session: AsyncSession, title: str, description: str,
                              channel_url: str, reward_preview: Decimal,
                              reward_final: Decimal, penalty_unsubscribe: Decimal = Decimal("0"),
-                             is_rentable: bool = False,
-                             rent_cost_per_day: Decimal = Decimal("0"),
-                             max_simultaneous_rentals: int = 1,
                              duration_days: int = 30,
                              admin_telegram_id: int | None = None) -> "Offer":
     normalized_url = normalize_telegram_url(channel_url)
@@ -2090,9 +2079,6 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
         is_active=True,
         status="approved",
         duration_days=max(1, int(duration_days)),
-        is_rentable=is_rentable,
-        rent_cost_per_day=rent_cost_per_day,
-        max_simultaneous_rentals=max(1, int(max_simultaneous_rentals)),
         approved_at=now,
         reviewed_at=now,
         reviewed_by_telegram_id=admin_telegram_id,
@@ -2158,8 +2144,6 @@ async def get_admin_extended_stats(session: AsyncSession) -> dict:
     на быстрое принятие решений прямо в Telegram: рост, активность, состояние
     очередей, денежные потоки и качество вовлечения за последние 7 дней.
     """
-    from app.models import OfferRental
-
     now = utc_now()
     day_ago = now - timedelta(days=1)
     week_ago = now - timedelta(days=7)
@@ -2211,15 +2195,6 @@ async def get_admin_extended_stats(session: AsyncSession) -> dict:
     reactions = await _count(select(func.count(ContentReaction.id)))
     games = await _count(select(func.count(GameHistory.id)))
     offers = await _count(select(func.count(Offer.id)))
-    active_rentals = await _count(select(func.count(OfferRental.id)).where(
-        OfferRental.status == "active",
-        OfferRental.expires_at > now,
-    ))
-    total_rent_income = Decimal(str((await session.execute(
-        select(func.sum(OfferRental.cost_paid)).where(
-            OfferRental.status.in_(["pending", "active", "expired"]),
-        )
-    )).scalar_one() or 0))
 
     content_total = await _count(select(func.count(Video.id)))
     content_approved = await _count(select(func.count(Video.id)).where(Video.status == "approved"))
@@ -2293,11 +2268,9 @@ async def get_admin_extended_stats(session: AsyncSession) -> dict:
         "reactions": reactions,
         "games": games,
         "offers": offers,
-        "active_rentals": active_rentals,
         "total_balance_in_system": total_balance,
         "total_admin_given": total_admin_given,
         "total_game_profit": total_game_profit,
-        "total_rent_income": total_rent_income,
         # Оперативные блоки обновлённого экрана.
         "audience": {
             "active_accounts": active_accounts,
@@ -2478,20 +2451,34 @@ async def calculate_promocode_star_cost(
     магазине с наценкой PROMOCODE_STAR_PRICE_MARKUP). Магазинный floor
     пересчитывается от актуальных цен пакетов (настройки бота), поэтому
     промокод не может выйти дешевле магазина — даже с bulk-скидкой.
+
+    Вся арифметика ведётся в точных рациональных числах (Fraction): float-
+    представление курса (напр. 1800/2200*1.1 = 0.9000000000000001) раньше
+    заставляло math.ceil округлять 225.00000000000003 до 226 и систематически
+    переплачивать пользователю +1 Star за каждый платный промокод.
     """
-    total_coins = float(coin_amount) * max_uses
-    flat_rate = float(await get_runtime_value(session, "promocode_creation_star_rate") or PROMOCODE_CREATION_STAR_RATE)
-    base = total_coins * max(0.0, flat_rate)
+    total_coins = Fraction(int(to_decimal(coin_amount) * int(max_uses)))
+    flat_rate = Fraction(str(
+        await get_runtime_value(session, "promocode_creation_star_rate") or PROMOCODE_CREATION_STAR_RATE
+    ))
+    base = total_coins * max(Fraction(0), flat_rate)
     bulk_threshold = int(float(await get_runtime_value(session, "promocode_bulk_discount_threshold") or PROMOCODE_BULK_DISCOUNT_THRESHOLD))
     if max_uses >= bulk_threshold:
-        base *= float(await get_runtime_value(session, "promocode_bulk_discount_rate") or PROMOCODE_BULK_DISCOUNT_RATE)
+        base *= Fraction(str(
+            await get_runtime_value(session, "promocode_bulk_discount_rate") or PROMOCODE_BULK_DISCOUNT_RATE
+        ))
 
-    floor = 0.0
-    shop_rate = await get_shop_effective_star_rate(session)
-    if shop_rate is not None:
-        markup = float(await get_runtime_value(session, "promocode_star_price_markup") or PROMOCODE_STAR_PRICE_MARKUP)
-        floor = total_coins * shop_rate * max(0.0, 1.0 + markup)
-    return max(1, int(math.ceil(max(base, floor))))
+    floor = Fraction(0)
+    rate = await get_shop_best_pack_fraction(session)
+    if rate is not None:
+        markup = Fraction(str(
+            await get_runtime_value(session, "promocode_star_price_markup") or PROMOCODE_STAR_PRICE_MARKUP
+        ))
+        # Точный floor: total_coins * (stars/coins) * (1+markup) без float-ошибки.
+        floor = total_coins * rate * (Fraction(1) + markup)
+
+    result = max(base, floor)
+    return max(1, int(-(-result.numerator // result.denominator)))
 
 
 async def create_promocode(
@@ -3311,6 +3298,52 @@ async def get_shop_effective_star_rate(session: AsyncSession) -> float | None:
     return min(rates) if rates else None
 
 
+async def get_shop_best_pack_fraction(session: AsyncSession) -> Fraction | None:
+    """Точный лучший курс магазина Stars как Fraction (Stars за 1 монету).
+
+    Используется там, где важно не продать монеты дешевле магазина:
+    промокоды, оплата пользовательских офферов и т.п. Старт-пак исключён.
+    """
+    packs = await get_shop_star_packages(session)
+    regular = [
+        (int(p["stars"]), int(p["coins"]))
+        for k, p in packs.items()
+        if k != STARTER_PACK_KEY and int(p["coins"]) > 0
+    ]
+    if not regular:
+        return None
+    best_stars, best_coins = min(regular, key=lambda sc: Fraction(sc[0], sc[1]))
+    return Fraction(best_stars, best_coins)
+
+
+async def coins_to_stars_price(session: AsyncSession, coins) -> int:
+    """Сколько Stars стоят `coins` монет по актуальному курсу магазина.
+
+    Округление вверх (ceil) — цена в Stars никогда не бывает дешевле, чем
+    купить те же монеты напрямую в магазине. Точная арифметика Fraction.
+    """
+    rate = await get_shop_best_pack_fraction(session)
+    if rate is None:
+        rate = Fraction(9, 10)  # страховка: ~курс пакета 450/500
+    value = Fraction(str(to_decimal(coins))) * rate
+    return max(1, int(-(-value.numerator // value.denominator)))
+
+
+async def stars_to_coins_amount(session: AsyncSession, stars) -> Decimal:
+    """Сколько монет дают `stars` Stars по актуальному курсу магазина.
+
+    Обратная конвертация для кастомного пополнения: округление ВНИЗ (floor),
+    чтобы бот никогда не выдавал больше монет, чем эти Stars стоят в магазине.
+    Раньше здесь был захардкожен курс «1 Star = 30 монет» — в ~25 раз щедрее
+    магазина, то есть прямая недоплата.
+    """
+    rate = await get_shop_best_pack_fraction(session)  # Stars за 1 монету
+    if rate is None or rate == 0:
+        rate = Fraction(9, 10)
+    value = Fraction(str(to_decimal(stars))) / rate
+    return Decimal(int(value.numerator // value.denominator))
+
+
 def _discount_stars_amount(base_stars: int, discount: float) -> int:
     return max(1, math.ceil(base_stars * (1.0 - discount)))
 
@@ -3860,6 +3893,27 @@ async def flush_mod_notifications(bot, session: AsyncSession) -> int:
     return sent
 
 
+async def get_unanswered_active_poll(session: AsyncSession, user_id: int) -> AdminPoll | None:
+    """Возвращает самый свежий активный опрос, который пользователь ещё не проходил.
+
+    Используется, чтобы показывать опрос как рекламу между видео и в промо-ротации.
+    """
+    stmt = (
+        select(AdminPoll)
+        .outerjoin(
+            AdminPollResponse,
+            and_(
+                AdminPollResponse.poll_id == AdminPoll.id,
+                AdminPollResponse.user_id == user_id,
+            ),
+        )
+        .where(AdminPoll.is_active == True, AdminPollResponse.id == None)  # noqa: E712
+        .order_by(AdminPoll.id.desc())
+        .limit(1)
+    )
+    return await session.scalar(stmt)
+
+
 async def submit_admin_poll_response(
     session: AsyncSession,
     poll_id: int,
@@ -3927,7 +3981,7 @@ async def submit_admin_poll_response(
         await session.rollback()
         return poll, None, "Вы уже прошли этот опрос."
 
-    reward = Decimal(str(poll.reward or Decimal("20.00")))
+    reward = Decimal(str(poll.reward or Decimal("100.00")))
     updated_user = await change_balance_atomic(
         session,
         user_id,
@@ -4175,6 +4229,27 @@ async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
             "text": build_event_promo_text(ev, max_len=max_len),
             "image_file_id": ev.image_file_id,
         })
+
+    # Активные опросы тоже участвуют в промо-ротации: напоминают о себе
+    # случайным пользователям наравне с промо-сообщениями и событиями.
+    polls = (await session.execute(
+        select(AdminPoll).where(AdminPoll.is_active == True).order_by(AdminPoll.id.asc())  # noqa: E712
+    )).scalars().all()
+    for poll in polls:
+        try:
+            options = json.loads(poll.options_json or "[]")
+        except (TypeError, json.JSONDecodeError):
+            options = []
+        reward = int(Decimal(str(poll.reward or Decimal("100.00"))))
+        pool.append({
+            "text": (
+                "📊 <b>Опрос от администрации</b>\n\n"
+                f"{poll.question}\n\n"
+                f"Пройди опрос один раз и получи <b>{reward} монет</b>."
+            ),
+            "image_file_id": None,
+            "poll": {"id": poll.id, "type": poll.poll_type, "options": options},
+        })
     return pool
 
 
@@ -4213,236 +4288,6 @@ async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
             pass
     
     return sent
-
-
-# ============================
-# АРЕНДА СЛОТОВ (OfferRental)
-# ============================
-async def count_active_rentals(session: AsyncSession, offer_id: int) -> int:
-    """Считает действующие, уже одобренные аренды оффера."""
-    from app.models import OfferRental
-    count = (await session.execute(
-        select(func.count(OfferRental.id)).where(
-            OfferRental.offer_id == offer_id,
-            OfferRental.status == "active",
-            OfferRental.expires_at > utc_now(),
-        )
-    )).scalar_one()
-    return int(count or 0)
-
-
-async def count_reserved_rentals(session: AsyncSession, offer_id: int) -> int:
-    """Pending-заявки тоже резервируют слот, чтобы их нельзя было перепродать."""
-    from app.models import OfferRental
-    now = utc_now()
-    count = (await session.execute(
-        select(func.count(OfferRental.id)).where(
-            OfferRental.offer_id == offer_id,
-            or_(
-                OfferRental.status == "pending",
-                (OfferRental.status == "active") & (OfferRental.expires_at > now),
-            ),
-        )
-    )).scalar_one()
-    return int(count or 0)
-
-
-async def get_active_rentals_for_offer(
-    session: AsyncSession,
-    offer_id: int,
-    *,
-    limit: int = 10,
-) -> list["OfferRental"]:
-    from app.models import OfferRental
-    return (await session.execute(
-        select(OfferRental).where(
-            OfferRental.offer_id == offer_id,
-            OfferRental.status == "active",
-            OfferRental.expires_at > utc_now(),
-        ).order_by(OfferRental.created_at).limit(max(1, limit))
-    )).scalars().all()
-
-
-async def get_pending_rentals(
-    session: AsyncSession,
-    *,
-    offset: int = 0,
-    limit: int = 10,
-) -> list["OfferRental"]:
-    from app.models import OfferRental
-    return (await session.execute(
-        select(OfferRental)
-        .where(OfferRental.status == "pending")
-        .order_by(OfferRental.created_at)
-        .offset(max(0, offset))
-        .limit(max(1, limit))
-    )).scalars().all()
-
-
-async def expire_old_rentals(session: AsyncSession) -> int:
-    """Завершает аренды, срок которых истёк."""
-    from app.models import OfferRental
-    result = await session.execute(
-        update(OfferRental)
-        .where(OfferRental.status == "active", OfferRental.expires_at <= utc_now())
-        .values(status="expired")
-    )
-    await session.commit()
-    return int(result.rowcount or 0)
-
-
-async def create_offer_rental(
-    session: AsyncSession,
-    offer_id: int,
-    user_id: int,
-    channel_title: str,
-    channel_url: str,
-    rent_days: int,
-) -> tuple["OfferRental | None", str | None]:
-    """Создаёт оплаченную заявку и резервирует слот до модерации."""
-    from app.models import OfferRental
-
-    offer = await get_offer_by_id(session, offer_id)
-    if not is_offer_available(offer) or not offer.is_rentable:
-        return None, "Аренда в этом оффере недоступна."
-    try:
-        rent_days = int(rent_days)
-    except (TypeError, ValueError):
-        return None, "Некорректный срок аренды."
-    if rent_days < 1 or rent_days > 365:
-        return None, "Некорректный срок аренды."
-    offer_expires_at = get_offer_expires_at(offer)
-    if offer_expires_at and utc_now() + timedelta(days=rent_days) > offer_expires_at:
-        return None, "Срок аренды не помещается в оставшийся срок работы оффера."
-
-    normalized_url = normalize_telegram_url(channel_url)
-    if not normalized_url:
-        return None, "Некорректная ссылка Telegram."
-
-    duplicate = (await session.execute(
-        select(OfferRental.id).where(
-            OfferRental.offer_id == offer_id,
-            OfferRental.renter_user_id == user_id,
-            OfferRental.renter_channel_url == normalized_url,
-            OfferRental.status.in_(["pending", "active"]),
-        ).limit(1)
-    )).scalar_one_or_none()
-    if duplicate:
-        return None, "Такая заявка уже ожидает проверки или активна."
-
-    reserved_count = await count_reserved_rentals(session, offer_id)
-    if reserved_count >= int(offer.max_simultaneous_rentals or 1):
-        return None, "Все рекламные слоты заняты или уже ожидают модерации."
-
-    user = await get_user_by_id(session, user_id)
-    if not user:
-        return None, "Пользователь не найден."
-
-    cost = to_decimal(offer.rent_cost_per_day) * rent_days
-    if cost < 0:
-        return None, "Некорректная стоимость аренды."
-    if user.balance < cost:
-        return None, f"Недостаточно монет. Нужно {cost:.0f}, у тебя {user.balance:.0f}."
-
-    await change_balance_atomic(
-        session,
-        user.id,
-        -cost,
-        "offer_rental_pay",
-        source_id=offer_id,
-        details=f"days={rent_days}",
-    )
-    rental = OfferRental(
-        offer_id=offer_id,
-        renter_user_id=user_id,
-        renter_channel_title=channel_title.strip()[:255],
-        renter_channel_url=normalized_url,
-        rent_days=rent_days,
-        cost_paid=cost,
-        status="pending",
-    )
-    session.add(rental)
-    await session.commit()
-    return rental, None
-
-
-async def moderate_offer_rental(
-    session: AsyncSession,
-    rental_id: int,
-    *,
-    approve: bool,
-    admin_telegram_id: int,
-    reason: str | None = None,
-) -> tuple["OfferRental | None", str | None]:
-    """Approve a rental or reject it with an automatic coin refund."""
-    from app.models import OfferRental
-
-    rental = await session.get(OfferRental, rental_id)
-    if not rental or rental.status != "pending":
-        return None, "Заявка уже обработана или не найдена."
-
-    now = utc_now()
-    if approve:
-        offer = await get_offer_by_id(session, rental.offer_id)
-        if not is_offer_available(offer) or not offer.is_rentable:
-            return None, "Родительский оффер уже неактивен. Отклоните заявку с возвратом."
-        active_count = await count_active_rentals(session, rental.offer_id)
-        if active_count >= int(offer.max_simultaneous_rentals or 1):
-            return None, "Свободных слотов уже нет. Отклоните заявку с возвратом."
-        offer_expires_at = get_offer_expires_at(offer)
-        rental_expires_at = now + timedelta(days=rental.rent_days)
-        if offer_expires_at and rental_expires_at > offer_expires_at:
-            return None, "Оффер закончится раньше аренды. Отклоните заявку с возвратом."
-        values = {
-            "status": "active",
-            "reviewed_at": now,
-            "reviewed_by_telegram_id": admin_telegram_id,
-            "rejection_reason": None,
-            "expires_at": rental_expires_at,
-        }
-    else:
-        values = {
-            "status": "rejected",
-            "reviewed_at": now,
-            "reviewed_by_telegram_id": admin_telegram_id,
-            "rejection_reason": (reason or "Не прошла модерацию")[:1000],
-            "expires_at": None,
-        }
-
-    result = await session.execute(
-        update(OfferRental)
-        .where(OfferRental.id == rental_id, OfferRental.status == "pending")
-        .values(**values)
-    )
-    if not result.rowcount:
-        await session.rollback()
-        return None, "Заявка уже обработана другим администратором."
-
-    if not approve and to_decimal(rental.cost_paid) > 0:
-        await change_balance_atomic(
-            session,
-            rental.renter_user_id,
-            to_decimal(rental.cost_paid),
-            "offer_rental_refund",
-            source_id=rental.id,
-            admin_id=admin_telegram_id,
-            details=f"reason={values['rejection_reason']}",
-        )
-
-    await session.commit()
-    updated_rental = await session.get(OfferRental, rental_id)
-    if updated_rental:
-        await session.refresh(updated_rental)
-    return updated_rental, None
-
-
-async def get_user_rentals(session: AsyncSession, user_id: int) -> list["OfferRental"]:
-    """Получает все аренды пользователя."""
-    from app.models import OfferRental
-    return (await session.execute(
-        select(OfferRental).where(OfferRental.renter_user_id == user_id)
-        .order_by(desc(OfferRental.created_at))
-    )).scalars().all()
 
 
 # ============================

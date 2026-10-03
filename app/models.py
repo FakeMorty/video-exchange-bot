@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, date
 from decimal import Decimal
 from sqlalchemy import (
     func,
@@ -64,7 +64,7 @@ class User(Base):
     action_logs: Mapped[List["UserActionLog"]] = relationship(back_populates="user")
     balance_logs: Mapped[List["BalanceLog"]] = relationship(back_populates="user")
     user_offers: Mapped[List["Offer"]] = relationship(back_populates="creator")
-    # rentals отключены (система аренды удалена)
+    # связь rentals удалена вместе с механикой аренды рекламных слотов
     ad_state: Mapped["UserAdState"] = relationship(back_populates="user", uselist=False)
     created_promocodes: Mapped[List["Promocode"]] = relationship(back_populates="creator")
     activated_promocodes: Mapped[List["PromocodeActivation"]] = relationship(back_populates="user")
@@ -331,12 +331,9 @@ class Offer(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="approved")
 
-    # Размещение и аренда
+    # Размещение
     duration_days: Mapped[int] = mapped_column(Integer, default=30)
     placement_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
-    is_rentable: Mapped[bool] = mapped_column(Boolean, default=False)
-    rent_cost_per_day: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
-    max_simultaneous_rentals: Mapped[int] = mapped_column(Integer, default=1)
 
     # Результат модерации. Срок пользовательского оффера отсчитывается от
     # approved_at, а не от момента оплаты/отправки в очередь.
@@ -366,24 +363,6 @@ class OfferParticipation(Base):
     unsubscribed_penalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     offer: Mapped["Offer"] = relationship(back_populates="participations")
-
-
-class OfferRental(Base):
-    """Платная заявка на показ рекламы внутри оффера."""
-    __tablename__ = "offer_rentals"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), nullable=False)
-    renter_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    renter_channel_title: Mapped[str] = mapped_column(String(255), nullable=False)
-    renter_channel_url: Mapped[str] = mapped_column(Text, nullable=False)
-    rent_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    cost_paid: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    reviewed_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class GameHistory(Base):
@@ -664,7 +643,7 @@ class AdminPoll(Base):
     poll_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # poll_type: "single", "multiple" или "text"
     options_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("20.00"))
+    reward: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("100.00"))
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

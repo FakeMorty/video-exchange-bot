@@ -45,7 +45,7 @@ from app.arcade import (
     get_active_run,
     start_run,
 )
-from app.models import ArcadeRun, Base, GameHistory, User, utc_now
+from app.models import Base, GameHistory, User, utc_now
 from app.services import get_user
 import random
 from app.arcade import (
@@ -84,14 +84,11 @@ from app.services import (
     is_placeholder_nickname,
     validate_nickname_format,
 )
-from app.models import Base, BalanceLog, Offer, OfferRental, User, utc_now
+from app.models import Base, BalanceLog, Offer, User, utc_now
 from app.services import (
-    create_offer_rental,
     get_active_offers,
-    get_active_rentals_for_offer,
     is_offer_available,
     moderate_offer,
-    moderate_offer_rental,
     normalize_telegram_url,
     start_offer_participation,
 )
@@ -110,7 +107,6 @@ from app.models import utc_now
 from app.models import Base, User, Video, TrustedUploader, UserPerk, BotSetting, utc_now
 from app.services import auto_approve_if_trusted
 from app.services import get_or_create_user
-from app.user_offer_handlers import _calc_offer_stars_price
 from app.models import Base, User, Video, VideoView
 
 
@@ -1701,94 +1697,85 @@ async def test_expired_offer_is_hidden_and_rejects_stale_participation_button():
 
 
 @pytest.mark.asyncio
-async def test_rental_rejection_refunds_once_and_approval_publishes_ad():
+async def test_offer_rental_mechanics_are_removed():
+    """Аренда рекламных слотов обычными пользователями полностью удалена."""
+    import inspect
+
+    import app.admin_handlers as admin_handlers
+    import app.models as models
+    import app.services as services
+    import app.user_handlers as user_handlers
+    from app.keyboards import offer_view_keyboard
+    from app.services import admin_create_offer, get_offer_moderation_counts
+    from app.user_offer_handlers import user_offers_menu
+
+    # Модель и её таблица больше не существуют, у Offer нет полей аренды.
+    assert not hasattr(models, "OfferRental")
+    assert "offer_rentals" not in models.Base.metadata.tables
+    offer_columns = {column.name for column in models.Offer.__table__.columns}
+    assert not offer_columns & {"is_rentable", "rent_cost_per_day", "max_simultaneous_rentals"}
+
+    # Сервисный слой больше не умеет создавать/модерировать аренды.
+    for removed in (
+        "create_offer_rental",
+        "moderate_offer_rental",
+        "get_user_rentals",
+        "get_rentable_offers",
+        "get_active_rentals_for_offer",
+        "get_pending_rentals",
+        "count_reserved_rentals",
+        "expire_old_rentals",
+    ):
+        assert not hasattr(services, removed), removed
+
+    # Хендлеры аренды сняты с роутеров, их callback-литералов в коде не осталось.
+    handler_names = {
+        handler.callback.__name__
+        for router in (user_handlers.router, admin_handlers.router)
+        for handler in router.callback_query.handlers
+    }
+    assert not [name for name in handler_names if "rent" in name], handler_names
+    for module in (user_handlers, admin_handlers):
+        source = inspect.getsource(module)
+        for literal in ("rent_offer:", "rent_days:", "confirm_rent:", "my_rentals",
+                        "offers_rent_list", "admin_rental"):
+            assert literal not in source, f"{module.__name__}: {literal}"
+
+    # В интерфейсе не осталось кнопок аренды.
+    menu_callbacks = [
+        button.callback_data
+        for row in user_offers_menu().inline_keyboard
+        for button in row
+    ]
+    assert menu_callbacks == ["offers_participation", "user_create_offer", "user_my_offers"]
+    offer_callbacks = [
+        button.callback_data
+        for row in offer_view_keyboard(7, "https://t.me/demo").inline_keyboard
+        for button in row
+    ]
+    assert not [cb for cb in offer_callbacks if cb and cb.startswith("rent_offer")]
+
+    # Оффер создаётся без параметров аренды, счётчик аренд из админки исчез.
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     Session = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     async with Session() as session:
-        renter = User(telegram_id=7003, balance=Decimal("100"))
-        offer = Offer(
-            title="Parent",
-            description="Parent offer",
-            channel_url="https://t.me/parent_channel",
+        offer = await admin_create_offer(
+            session,
+            title="Без аренды",
+            description="Обычный оффер без продажи слотов",
+            channel_url="https://t.me/plain_offer",
             reward_preview=Decimal("10"),
             reward_final=Decimal("50"),
+            penalty_unsubscribe=Decimal("5"),
             duration_days=30,
-            status="approved",
-            is_active=True,
-            is_rentable=True,
-            rent_cost_per_day=Decimal("10"),
-            max_simultaneous_rentals=1,
-            approved_at=utc_now(),
-        )
-        session.add_all([renter, offer])
-        await session.commit()
-
-        rental, error = await create_offer_rental(
-            session,
-            offer.id,
-            renter.id,
-            "Renter channel",
-            "@renter_channel",
-            3,
-        )
-        assert error is None
-        assert rental.status == "pending"
-        await session.refresh(renter)
-        assert renter.balance == Decimal("70")
-
-        rejected, error = await moderate_offer_rental(
-            session,
-            rental.id,
-            approve=False,
-            admin_telegram_id=999,
-            reason="bad ad",
-        )
-        assert error is None
-        assert rejected.status == "rejected"
-        await session.refresh(renter)
-        assert renter.balance == Decimal("100")
-
-        repeated, error = await moderate_offer_rental(
-            session,
-            rental.id,
-            approve=False,
-            admin_telegram_id=999,
-            reason="second click",
-        )
-        assert repeated is None
-        assert error
-        refunds = (await session.execute(
-            select(BalanceLog).where(
-                BalanceLog.source == "offer_rental_refund",
-                BalanceLog.source_id == rental.id,
-            )
-        )).scalars().all()
-        assert len(refunds) == 1
-
-        second, error = await create_offer_rental(
-            session,
-            offer.id,
-            renter.id,
-            "Approved ad",
-            "https://t.me/approved_ad",
-            2,
-        )
-        assert error is None
-        active, error = await moderate_offer_rental(
-            session,
-            second.id,
-            approve=True,
             admin_telegram_id=999,
         )
-        assert error is None
-        assert active.status == "active"
-        assert active.expires_at > utc_now()
-
-        ads = await get_active_rentals_for_offer(session, offer.id)
-        assert [ad.id for ad in ads] == [second.id]
+        assert offer.status == "approved"
+        counts = await get_offer_moderation_counts(session)
+        assert counts == {"approved": 1}
 
     await engine.dispose()
 
@@ -2349,15 +2336,51 @@ async def test_referred_user_gets_bonus_and_inviter_counter_increments():
 #  был файл: app/tests/test_user_offer_pricing.py
 # ══════════════════════════════════════════════════════════════
 
-def test_offer_stars_price_rounds_up_instead_of_undercharging():
-    assert _calc_offer_stars_price(Decimal("50")) == 2
-    assert _calc_offer_stars_price(Decimal("55")) == 2
-    assert _calc_offer_stars_price(Decimal("101")) == 4
+@pytest.mark.asyncio
+async def test_offer_stars_price_not_cheaper_than_shop():
+    """Оплата размещения оффера в Stars не может быть дешевле, чем купить те же
+    монеты в магазине: курс берётся из лучшего пакета, округление вверх."""
+    import math as _math
+    from app.services import coins_to_stars_price
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # Лучший курс магазина = 1800/2200 = 9/11 ≈ 0.818 Stars/монету.
+        assert await coins_to_stars_price(session, Decimal("50")) == 41   # 40.9 -> 41
+        assert await coins_to_stars_price(session, Decimal("55")) == 45   # ровно 45
+        assert await coins_to_stars_price(session, Decimal("101")) == 83  # 82.6 -> 83
+
+        # Со скидкой перки цена снижается, но не ниже 1 и округляется вверх.
+        base = await coins_to_stars_price(session, Decimal("55"))
+        assert _math.ceil(base * 0.75) == 34
+    await engine.dispose()
 
 
-def test_offer_stars_price_applies_user_discount_after_round_up():
-    assert _calc_offer_stars_price(Decimal("55"), 0.25) == 2
-    assert _calc_offer_stars_price(Decimal("101"), 0.25) == 3
+@pytest.mark.asyncio
+async def test_custom_stars_topup_uses_shop_rate_not_inflated():
+    """Кастомное пополнение Stars выдаёт монеты по курсу магазина (floor), а не
+    по захаркоженным «1 Star = 30 монет» — недоплата закрыта."""
+    from app.services import stars_to_coins_amount, create_custom_payment
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # 1 Star ≈ 2200/1800 = 1.2222 монет (floor): 100 Stars -> 122, не 3000.
+        assert await stars_to_coins_amount(session, 100) == Decimal(122)
+        assert await stars_to_coins_amount(session, 450) == Decimal(550)
+
+        user = User(telegram_id=9601, balance=Decimal("0"), nickname_set=True, display_name="CustomBuyer")
+        session.add(user)
+        await session.flush()
+        pay = await create_custom_payment(session, user.id, 100)
+        assert pay.coins_amount == Decimal(122)
+        assert pay.stars_amount == 100
+    await engine.dispose()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -3336,7 +3359,7 @@ async def test_promo_otzyv_seed_and_title_management():
 @pytest.mark.asyncio
 async def test_donationalerts_integration():
     from app.services import process_donationalerts_donation, has_active_perk
-    from app.models import User, Payment, Base
+    from app.models import User, Base
     from unittest.mock import AsyncMock
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -3875,6 +3898,27 @@ async def test_promocode_cost_never_cheaper_than_shop():
 
 
 @pytest.mark.asyncio
+async def test_promocode_star_cost_exact_no_float_overcharge():
+    """Цена платного промокода считается точно (Fraction), без систематической
+    переплаты +1 Star из-за float-хвоста курса (в проде было 226 вместо 225,
+    91 вместо 90 и т.д.)."""
+    from app.services import calculate_promocode_star_cost
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # floor = coins * (1800/2200) * 1.10 -> точные целые значения
+        cases = {250: 225, 100: 90, 150: 135, 300: 270, 200: 180}
+        for coins, expected in cases.items():
+            cost = await calculate_promocode_star_cost(session, Decimal(coins), 1)
+            assert cost == expected, f"{coins} монет: {cost} != {expected} (float-переплата)"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_rub_packages_recalculated_from_rate():
     """Рублёвые пакеты пересчитываются от курса 1 RUB = N монет; точечная
     цена (shop_rub_<key>) и цена VIP (vip_price_rub) перекрывают пересчёт."""
@@ -4065,7 +4109,6 @@ async def test_rate_video_self_rating_and_deduplication():
 async def test_offer_creator_cannot_participate_or_verify():
     """Создатель оффера не может участвовать в своём же оффере."""
     from app.services import start_offer_participation, verify_offer_subscription
-    from unittest.mock import AsyncMock
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -4217,3 +4260,60 @@ async def test_lottery_place_bet_api_blocks_negative_bet_and_late_bet(monkeypatc
     assert r.status == 200 and not b.get("ok") and "закрыт" in b.get("error", "")
 
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_poll_reward_100_unanswered_lookup_and_promo_pool():
+    """Награда опроса = 100; непройденный опрос находится и попадает в промо-ротацию;
+    после ответа больше не предлагается."""
+    from app.models import AdminPoll
+    from app.services import (
+        submit_admin_poll_response,
+        get_unanswered_active_poll,
+        get_auto_broadcast_pool,
+    )
+    from app.admin_handlers import _POLL_REWARD
+
+    # Награда повышена до 100 монет
+    assert _POLL_REWARD == Decimal("100.00")
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        user = User(telegram_id=810002, balance=Decimal("0.00"))
+        session.add(user)
+        await session.flush()
+        poll = AdminPoll(
+            question="Вам нравится бот?",
+            poll_type="single",
+            options_json='["Да", "Нет"]',
+            reward=_POLL_REWARD,
+            created_by=user.id,
+        )
+        session.add(poll)
+        await session.commit()
+
+        # Опрос виден как непройденный
+        found = await get_unanswered_active_poll(session, user.id)
+        assert found is not None and found.id == poll.id
+
+        # Опрос попадает в пул промо-ротации с метаданными и наградой 100
+        pool = await get_auto_broadcast_pool(session)
+        poll_items = [it for it in pool if it.get("poll")]
+        assert any(it["poll"]["id"] == poll.id for it in poll_items)
+        assert any("100 монет" in it["text"] for it in poll_items)
+
+        # После ответа награда 100 и опрос больше не предлагается
+        answered, reward, error = await submit_admin_poll_response(
+            session, poll.id, user.id, option_indexes=[0]
+        )
+        assert reward == Decimal("100.00")
+        assert error is None
+        await session.refresh(user)
+        assert user.balance == Decimal("100.00")
+        assert await get_unanswered_active_poll(session, user.id) is None
+
+    await engine.dispose()

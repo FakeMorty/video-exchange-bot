@@ -1,7 +1,8 @@
 """Пользовательское создание офферов и просмотр своих заявок."""
 
+import math
 from html import escape
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -17,22 +18,10 @@ from app.services import (
     get_user, change_balance_atomic,
     ensure_payment_pending, get_stars_discount,
     notify_admins, classify_offer_url, normalize_telegram_url,
+    coins_to_stars_price,
 )
-from app.config import STARS_TO_COINS_RATE
 
 router = Router()
-
-
-def _calc_offer_stars_price(cost: Decimal, discount: float = 0.0) -> int:
-    """Конвертация цены размещения из монет в Stars без занижения стоимости."""
-    if STARS_TO_COINS_RATE <= 0:
-        return 1
-    stars = (Decimal(cost) / Decimal(str(STARS_TO_COINS_RATE))).quantize(Decimal("1"), rounding=ROUND_CEILING)
-    base = max(1, int(stars))
-    if discount > 0:
-        discounted = (Decimal(str(base)) * Decimal(str(1 - discount))).quantize(Decimal("1"), rounding=ROUND_CEILING)
-        return max(1, int(discounted))
-    return base
 
 
 class UserOfferState(StatesGroup):
@@ -54,8 +43,6 @@ def user_offers_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📢 Офферы (участие)", callback_data="offers_participation")],
         [InlineKeyboardButton(text="➕ Создать свой оффер", callback_data="user_create_offer")],
         [InlineKeyboardButton(text="📋 Мои офферы", callback_data="user_my_offers")],
-        [InlineKeyboardButton(text="📣 Арендовать рекламный слот", callback_data="offers_rent_list")],
-        [InlineKeyboardButton(text="🧾 Мои аренды", callback_data="my_rentals")],
     ])
 
 
@@ -305,7 +292,9 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
 
             payload = f"user_offer_{offer.id}"
             discount = await get_stars_discount(session, user.id)
-            stars_price = _calc_offer_stars_price(cost, discount)
+            stars_price = await coins_to_stars_price(session, cost)
+            if discount > 0:
+                stars_price = max(1, math.ceil(stars_price * (1 - discount)))
             await ensure_payment_pending(
                 session,
                 user_id=user.id,

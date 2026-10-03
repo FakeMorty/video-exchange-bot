@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import math
-import os
 import tempfile
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -21,7 +18,7 @@ from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, select
 
 from app.config import ADMINS
 from app.db import async_session
@@ -31,7 +28,6 @@ from app.models import (
     ContentReaction,
     KatyaChat,
     KatyaMessage,
-    LootboxOpen,
     LotteryRound,
     LotteryTicket,
     Payment,

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal
 from html import escape
 
 from aiogram import F, Router

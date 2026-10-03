@@ -60,7 +60,7 @@ python bot_lab/terminal_bot.py --memory-db
 !seed-demo
 ```
 
-Команда создаёт одного demo-uploader, одно approved-видео и один активный rentable-оффер.
+Команда создаёт одного demo-uploader, одно approved-видео и один активный оффер.
 
 ## Проверка сценария Кати
 
