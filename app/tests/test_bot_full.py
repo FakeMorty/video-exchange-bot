@@ -84,14 +84,11 @@ from app.services import (
     is_placeholder_nickname,
     validate_nickname_format,
 )
-from app.models import Base, BalanceLog, Offer, OfferRental, User, utc_now
+from app.models import Base, BalanceLog, Offer, User, utc_now
 from app.services import (
-    create_offer_rental,
     get_active_offers,
-    get_active_rentals_for_offer,
     is_offer_available,
     moderate_offer,
-    moderate_offer_rental,
     normalize_telegram_url,
     start_offer_participation,
 )
@@ -1701,94 +1698,85 @@ async def test_expired_offer_is_hidden_and_rejects_stale_participation_button():
 
 
 @pytest.mark.asyncio
-async def test_rental_rejection_refunds_once_and_approval_publishes_ad():
+async def test_offer_rental_mechanics_are_removed():
+    """Аренда рекламных слотов обычными пользователями полностью удалена."""
+    import inspect
+
+    import app.admin_handlers as admin_handlers
+    import app.models as models
+    import app.services as services
+    import app.user_handlers as user_handlers
+    from app.keyboards import offer_view_keyboard
+    from app.services import admin_create_offer, get_offer_moderation_counts
+    from app.user_offer_handlers import user_offers_menu
+
+    # Модель и её таблица больше не существуют, у Offer нет полей аренды.
+    assert not hasattr(models, "OfferRental")
+    assert "offer_rentals" not in models.Base.metadata.tables
+    offer_columns = {column.name for column in models.Offer.__table__.columns}
+    assert not offer_columns & {"is_rentable", "rent_cost_per_day", "max_simultaneous_rentals"}
+
+    # Сервисный слой больше не умеет создавать/модерировать аренды.
+    for removed in (
+        "create_offer_rental",
+        "moderate_offer_rental",
+        "get_user_rentals",
+        "get_rentable_offers",
+        "get_active_rentals_for_offer",
+        "get_pending_rentals",
+        "count_reserved_rentals",
+        "expire_old_rentals",
+    ):
+        assert not hasattr(services, removed), removed
+
+    # Хендлеры аренды сняты с роутеров, их callback-литералов в коде не осталось.
+    handler_names = {
+        handler.callback.__name__
+        for router in (user_handlers.router, admin_handlers.router)
+        for handler in router.callback_query.handlers
+    }
+    assert not [name for name in handler_names if "rent" in name], handler_names
+    for module in (user_handlers, admin_handlers):
+        source = inspect.getsource(module)
+        for literal in ("rent_offer:", "rent_days:", "confirm_rent:", "my_rentals",
+                        "offers_rent_list", "admin_rental"):
+            assert literal not in source, f"{module.__name__}: {literal}"
+
+    # В интерфейсе не осталось кнопок аренды.
+    menu_callbacks = [
+        button.callback_data
+        for row in user_offers_menu().inline_keyboard
+        for button in row
+    ]
+    assert menu_callbacks == ["offers_participation", "user_create_offer", "user_my_offers"]
+    offer_callbacks = [
+        button.callback_data
+        for row in offer_view_keyboard(7, "https://t.me/demo").inline_keyboard
+        for button in row
+    ]
+    assert not [cb for cb in offer_callbacks if cb and cb.startswith("rent_offer")]
+
+    # Оффер создаётся без параметров аренды, счётчик аренд из админки исчез.
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     Session = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     async with Session() as session:
-        renter = User(telegram_id=7003, balance=Decimal("100"))
-        offer = Offer(
-            title="Parent",
-            description="Parent offer",
-            channel_url="https://t.me/parent_channel",
+        offer = await admin_create_offer(
+            session,
+            title="Без аренды",
+            description="Обычный оффер без продажи слотов",
+            channel_url="https://t.me/plain_offer",
             reward_preview=Decimal("10"),
             reward_final=Decimal("50"),
+            penalty_unsubscribe=Decimal("5"),
             duration_days=30,
-            status="approved",
-            is_active=True,
-            is_rentable=True,
-            rent_cost_per_day=Decimal("10"),
-            max_simultaneous_rentals=1,
-            approved_at=utc_now(),
-        )
-        session.add_all([renter, offer])
-        await session.commit()
-
-        rental, error = await create_offer_rental(
-            session,
-            offer.id,
-            renter.id,
-            "Renter channel",
-            "@renter_channel",
-            3,
-        )
-        assert error is None
-        assert rental.status == "pending"
-        await session.refresh(renter)
-        assert renter.balance == Decimal("70")
-
-        rejected, error = await moderate_offer_rental(
-            session,
-            rental.id,
-            approve=False,
-            admin_telegram_id=999,
-            reason="bad ad",
-        )
-        assert error is None
-        assert rejected.status == "rejected"
-        await session.refresh(renter)
-        assert renter.balance == Decimal("100")
-
-        repeated, error = await moderate_offer_rental(
-            session,
-            rental.id,
-            approve=False,
-            admin_telegram_id=999,
-            reason="second click",
-        )
-        assert repeated is None
-        assert error
-        refunds = (await session.execute(
-            select(BalanceLog).where(
-                BalanceLog.source == "offer_rental_refund",
-                BalanceLog.source_id == rental.id,
-            )
-        )).scalars().all()
-        assert len(refunds) == 1
-
-        second, error = await create_offer_rental(
-            session,
-            offer.id,
-            renter.id,
-            "Approved ad",
-            "https://t.me/approved_ad",
-            2,
-        )
-        assert error is None
-        active, error = await moderate_offer_rental(
-            session,
-            second.id,
-            approve=True,
             admin_telegram_id=999,
         )
-        assert error is None
-        assert active.status == "active"
-        assert active.expires_at > utc_now()
-
-        ads = await get_active_rentals_for_offer(session, offer.id)
-        assert [ad.id for ad in ads] == [second.id]
+        assert offer.status == "approved"
+        counts = await get_offer_moderation_counts(session)
+        assert counts == {"approved": 1}
 
     await engine.dispose()
 
@@ -3870,6 +3858,27 @@ async def test_promocode_cost_never_cheaper_than_shop():
         cost4 = await calculate_promocode_star_cost(session, Decimal(200), 1)
         shop_now = 200 * min(250 / 500, 500 / 1000, 1000 / 2200)
         assert cost4 >= shop_now - 1e-9, f"промокод дешевле магазина при markup=0: {cost4} < {shop_now}"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_promocode_star_cost_exact_no_float_overcharge():
+    """Цена платного промокода считается точно (Fraction), без систематической
+    переплаты +1 Star из-за float-хвоста курса (в проде было 226 вместо 225,
+    91 вместо 90 и т.д.)."""
+    from app.services import calculate_promocode_star_cost
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        # floor = coins * (1800/2200) * 1.10 -> точные целые значения
+        cases = {250: 225, 100: 90, 150: 135, 300: 270, 200: 180}
+        for coins, expected in cases.items():
+            cost = await calculate_promocode_star_cost(session, Decimal(coins), 1)
+            assert cost == expected, f"{coins} монет: {cost} != {expected} (float-переплата)"
 
     await engine.dispose()
 

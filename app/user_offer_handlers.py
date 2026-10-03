@@ -54,8 +54,6 @@ def user_offers_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📢 Офферы (участие)", callback_data="offers_participation")],
         [InlineKeyboardButton(text="➕ Создать свой оффер", callback_data="user_create_offer")],
         [InlineKeyboardButton(text="📋 Мои офферы", callback_data="user_my_offers")],
-        [InlineKeyboardButton(text="📣 Арендовать рекламный слот", callback_data="offers_rent_list")],
-        [InlineKeyboardButton(text="🧾 Мои аренды", callback_data="my_rentals")],
     ])
 
 

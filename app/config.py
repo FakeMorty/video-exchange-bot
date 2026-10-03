@@ -245,13 +245,6 @@ NICKNAME_MIN_LENGTH = 4
 NICKNAME_MAX_LENGTH = 20
 
 # ============================
-# АРЕНДА (ОФФЕРЫ)
-# ============================
-OFFER_DEFAULT_RENT_COST_PER_DAY = _get_float("OFFER_DEFAULT_RENT_COST_PER_DAY", 10.0)
-OFFER_MIN_RENT_DAYS = 1
-OFFER_MAX_RENT_DAYS = 30
-
-# ============================
 # ПРОМОКОДЫ (ЗА STARS)
 # ============================
 PROMOCODE_CREATION_STAR_RATE = 0.5

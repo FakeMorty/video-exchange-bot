@@ -45,7 +45,6 @@ from app.config import (
     DAILY_QUESTS, PREMIUM_DAILY_QUESTS,
     COMMENTS_PER_10_MIN,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
-    OFFER_MIN_RENT_DAYS, OFFER_MAX_RENT_DAYS,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES, DAILY_PHOTO_LIMIT,
     PROMOCODE_MAX_AMOUNT, PROMOCODE_MAX_USES, PROMOCODE_MAX_HOURS,
     VIP_FREE_PROMO_PER_MONTH,
@@ -81,10 +80,9 @@ from app.services import (
     create_payment, create_custom_payment, apply_successful_payment,
     ensure_payment_pending, mark_payment_paid_once,
     get_payment_by_payload,
-    get_active_offers, get_offer_by_id, get_rentable_offers,
+    get_active_offers, get_offer_by_id,
     start_offer_participation, verify_offer_subscription, is_offer_available,
-    create_offer_rental, get_user_rentals, count_reserved_rentals,
-    get_active_rentals_for_offer, normalize_telegram_url,
+    normalize_telegram_url,
     change_balance_atomic, log_user_action, to_decimal,
     set_display_name, get_display_name, get_styled_display_name, log_balance_change,
     has_valid_nickname,
@@ -123,7 +121,6 @@ from app.keyboards import (
     reaction_menu_keyboard,
     low_balance_offer_keyboard,
     video_error_keyboard, photo_error_keyboard, photo_limit_reached_keyboard,
-    rent_days_keyboard,
     BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
     BTN_OFFERS, BTN_REFERRALS, BTN_ADMIN,
     BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
@@ -352,12 +349,6 @@ class CommentState(StatesGroup):
 
 class CustomBuyState(StatesGroup):
     waiting_stars = State()
-
-
-class RentOfferState(StatesGroup):
-    waiting_channel_title = State()
-    waiting_channel_url = State()
-    waiting_days = State()
 
 
 class PromoCreateState(StatesGroup):
@@ -2364,7 +2355,9 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🔥 Купить в 9 раз дешевле через DonationAlerts", callback_data="btn_buy_callback")]
     ]
     for p_id, p_data in packs.items():
-        buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['coins']} монет ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
+        # Используем название пакета, чтобы старт-пак не выглядел как второй
+        # «500 монет» по иной цене рядом с обычным пакетом на те же 500 монет.
+        buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['title']} ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
     buttons.append([InlineKeyboardButton(text="👈 Назад к выгодной оплате", callback_data="btn_buy_callback")])
 
     text = (
@@ -3259,7 +3252,6 @@ async def cb_offer_open(callback: CallbackQuery):
                 OfferParticipation.offer_id == offer_id
             )
         )).scalar_one()
-        rented_ads = await get_active_rentals_for_offer(session, offer_id, limit=10)
 
     target_meta = classify_offer_url(offer.channel_url)
     target_url = normalize_telegram_url(offer.channel_url)
@@ -3280,8 +3272,6 @@ async def cb_offer_open(callback: CallbackQuery):
         f"👥 Участников: {participants}\n\n"
         f"ℹ️ {verify_text}"
     )
-    if rented_ads:
-        text += "\n\n📣 <b>Реклама партнёров:</b>"
 
     kb_rows = [
         [InlineKeyboardButton(
@@ -3297,18 +3287,6 @@ async def cb_offer_open(callback: CallbackQuery):
             callback_data=f"offer_check:{offer_id}"
         )],
     ]
-    for rental in rented_ads:
-        rental_url = normalize_telegram_url(rental.renter_channel_url)
-        if rental_url:
-            kb_rows.append([InlineKeyboardButton(
-                text=f"📣 {rental.renter_channel_title[:45]}",
-                url=rental_url,
-            )])
-    if getattr(offer, "is_rentable", False):
-        kb_rows.append([InlineKeyboardButton(
-            text="📣 Арендовать слот",
-            callback_data=f"rent_offer:{offer_id}"
-        )])
     kb_rows.append([InlineKeyboardButton(
         text="◀️ Назад",
         callback_data="offers_participation"
@@ -3433,55 +3411,6 @@ async def cb_offer_check(callback: CallbackQuery):
             )
 
 
-# =========================
-# АРЕНДА РЕКЛАМНОГО СЛОТА
-# =========================
-@router.callback_query(F.data == "offers_rent_list")
-async def offers_rent_list(callback: CallbackQuery):
-    async with async_session() as session:
-        offers = await get_rentable_offers(session)
-        offer_rows = [
-            (offer, await count_reserved_rentals(session, offer.id))
-            for offer in offers
-        ]
-
-    if not offers:
-        await callback.message.answer(
-            "😔 Нет офферов доступных для аренды."
-        )
-        await callback.answer()
-        return
-
-    text = "📣 <b>Аренда рекламных слотов</b>\n\n"
-    text += (
-        "Арендуйте слот в оффере и рекламируйте свой канал!\n"
-        "Твой канал будет показан всем участникам оффера.\n\n"
-        "Выбери оффер:"
-    )
-    kb_buttons = []
-    for offer, reserved_count in offer_rows:
-        slots_left = max(0, int(offer.max_simultaneous_rentals or 1) - reserved_count)
-        kb_buttons.append([InlineKeyboardButton(
-            text=(
-                f"📣 {offer.title[:30]} | "
-                f"{offer.rent_cost_per_day} монет/день | "
-                f"Слотов: {slots_left}/{offer.max_simultaneous_rentals}"
-            ),
-            callback_data=f"rent_offer:{offer.id}"
-        )])
-
-    kb_buttons.append([InlineKeyboardButton(
-        text="◀️ Назад",
-        callback_data="btn_offers_back"
-    )])
-
-    await callback.message.answer(
-        text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons)
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data == "btn_offers_back")
 async def btn_offers_back(callback: CallbackQuery):
     from app.user_offer_handlers import user_offers_menu
@@ -3492,234 +3421,6 @@ async def btn_offers_back(callback: CallbackQuery):
     )
     await callback.answer()
 
-
-@router.callback_query(F.data.startswith("rent_offer:"))
-async def rent_offer_start(callback: CallbackQuery, state: FSMContext):
-    offer_id = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        offer = await get_offer_by_id(session, offer_id)
-        if not is_offer_available(offer) or not offer.is_rentable:
-            await callback.answer("Аренда недоступна.", show_alert=True)
-            return
-
-        reserved_count = await count_reserved_rentals(session, offer_id)
-        slots_left = int(offer.max_simultaneous_rentals or 1) - reserved_count
-
-    if slots_left <= 0:
-        await callback.answer(
-            "❌ Все слоты заняты. Попробуй позже.",
-            show_alert=True
-        )
-        return
-
-    await state.set_state(RentOfferState.waiting_channel_title)
-    await state.update_data(offer_id=offer_id)
-    await callback.message.answer(
-        f"📣 <b>Аренда слота в: {escape(offer.title)}</b>\n\n"
-        f"💰 Стоимость: {offer.rent_cost_per_day} монет/день\n"
-        f"Свободных слотов: {slots_left}/{offer.max_simultaneous_rentals}\n\n"
-        f"Шаг 1/3: Введи название твоего канала:",
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.message(RentOfferState.waiting_channel_title)
-async def rent_channel_title(message: Message, state: FSMContext):
-    title = (message.text or "").strip()
-    if len(title) < 2 or len(title) > 100:
-        await message.answer("❌ Название от 2 до 100 символов.")
-        return
-    await state.update_data(channel_title=title)
-    await state.set_state(RentOfferState.waiting_channel_url)
-    await message.answer(
-        "Шаг 2/3: Введи ссылку на твой канал (https://t.me/...):"
-    )
-
-
-@router.message(RentOfferState.waiting_channel_url)
-async def rent_channel_url(message: Message, state: FSMContext):
-    url = normalize_telegram_url(message.text or "")
-    if not url:
-        await message.answer("❌ Нужна корректная ссылка t.me/... или @username.")
-        return
-    await state.update_data(channel_url=url)
-    await state.set_state(RentOfferState.waiting_days)
-
-    data = await state.get_data()
-    offer_id = data.get("offer_id")
-
-    await message.answer(
-        f"Шаг 3/3: Выбери количество дней аренды\n"
-        f"(от {OFFER_MIN_RENT_DAYS} до {OFFER_MAX_RENT_DAYS}):",
-        reply_markup=rent_days_keyboard(offer_id)
-    )
-
-
-@router.callback_query(RentOfferState.waiting_days, F.data.startswith("rent_days:"))
-async def rent_days_selected(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":")
-    offer_id = int(parts[1])
-    days = int(parts[2])
-
-    data = await state.get_data()
-    if data.get("offer_id") != offer_id or not (OFFER_MIN_RENT_DAYS <= days <= OFFER_MAX_RENT_DAYS):
-        await callback.answer("Некорректные параметры аренды.", show_alert=True)
-        await state.clear()
-        return
-    channel_title = data.get("channel_title", "")
-    channel_url = data.get("channel_url", "")
-
-    async with async_session() as session:
-        offer = await get_offer_by_id(session, offer_id)
-        if not is_offer_available(offer) or not offer.is_rentable:
-            await callback.answer("Оффер больше не доступен для аренды.", show_alert=True)
-            await state.clear()
-            return
-
-        cost = to_decimal(offer.rent_cost_per_day) * days
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            await state.clear()
-            return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=f"✅ Оплатить {cost} монет",
-                callback_data=f"confirm_rent:{offer_id}:{days}"
-            ),
-            InlineKeyboardButton(
-                text="❌ Отмена",
-                callback_data=f"rent_offer:{offer_id}"
-            ),
-        ]
-    ])
-    await callback.message.answer(
-        f"📣 <b>Подтверждение аренды</b>\n\n"
-        f"Оффер: {escape(offer.title)}\n"
-        f"Твой канал: {escape(channel_title)}\n"
-        f"Ссылка: {escape(channel_url)}\n"
-        f"Дней: {days}\n"
-        f"Стоимость: <b>{cost} монет</b>\n"
-        f"Твой баланс: {user.balance} монет\n\n"
-        f"После оплаты аренда уйдёт на проверку администратору.",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-    await state.update_data(days=days)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("confirm_rent:"))
-async def confirm_rent(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":")
-    offer_id, days = int(parts[1]), int(parts[2])
-
-    data = await state.get_data()
-    if (
-        data.get("offer_id") != offer_id
-        or data.get("days") != days
-        or not (OFFER_MIN_RENT_DAYS <= days <= OFFER_MAX_RENT_DAYS)
-    ):
-        await callback.answer("Сессия аренды устарела. Начните заново.", show_alert=True)
-        await state.clear()
-        return
-    channel_title = data.get("channel_title", "")
-    channel_url = data.get("channel_url", "")
-
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            await state.clear()
-            return
-
-        rental, error = await create_offer_rental(
-            session,
-            offer_id=offer_id,
-            user_id=user.id,
-            channel_title=channel_title,
-            channel_url=channel_url,
-            rent_days=days,
-        )
-        if rental:
-            await schedule_mod_notification(session, "offer")
-
-    if error:
-        await callback.message.answer(error)
-        await state.clear()
-        await callback.answer()
-        return
-
-    try:
-        await notify_admins(
-            callback.bot,
-            f"🧾 <b>Новая аренда на модерации</b>\n"
-            f"Заявка: <b>#{rental.id}</b>\n"
-            f"Канал: <b>{escape(rental.renter_channel_title)}</b>\n"
-            f"Автор: <code>{callback.from_user.id}</code>\n\n"
-            "Открыть очередь: /admin",
-        )
-    except Exception:
-        logger.warning("Failed to notify admins about rental_id=%s", rental.id)
-
-    await callback.message.answer(
-        f"✅ <b>Заявка на аренду отправлена!</b>\n\n"
-        f"Канал: {escape(channel_title)}\n"
-        f"Дней: {days}\n"
-        f"Стоимость: {rental.cost_paid} монет\n\n"
-        f"После одобрения администратором твой канал будет активен в оффере.\n"
-        f"Ты получишь уведомление.",
-        parse_mode="HTML"
-    )
-    await state.clear()
-    await callback.answer()
-
-
-@router.callback_query(F.data == "my_rentals")
-async def my_rentals(callback: CallbackQuery):
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-        rentals = await get_user_rentals(session, user.id)
-
-        if not rentals:
-            await callback.message.answer(
-                "У тебя нет аренд.\n"
-                "Арендуйте рекламный слот в разделе 📣 Офферы!"
-            )
-            await callback.answer()
-            return
-
-        text = "📋 <b>Мои аренды</b>\n\n"
-        for r in rentals:
-            offer = await get_offer_by_id(session, r.offer_id)
-            offer_name = offer.title if offer else f"#{r.offer_id}"
-            status_icon = {
-                "pending": "⏳",
-                "active": "✅",
-                "expired": "⌛",
-                "rejected": "❌",
-            }.get(r.status, "❓")
-            expires = r.expires_at.strftime('%d.%m.%Y') if r.expires_at else "—"
-            text += (
-                f"{status_icon} {escape(offer_name)}\n"
-                f"   Канал: {escape(r.renter_channel_title)}\n"
-                f"   Дней: {r.rent_days} | Стоимость: {r.cost_paid}\n"
-                f"   Статус: {escape(r.status)} | До: {expires}\n"
-            )
-            if r.status == "rejected" and r.rejection_reason:
-                text += f"   Причина: {escape(r.rejection_reason)}\n"
-            text += "\n"
-
-    if len(text) > 4000:
-        text = text[:4000] + "\n..."
-    await callback.message.answer(text, parse_mode="HTML")
-    await callback.answer()
 
 # =========================
 # GAMES (с игровыми сессиями)

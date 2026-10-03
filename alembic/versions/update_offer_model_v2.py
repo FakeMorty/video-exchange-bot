@@ -27,7 +27,8 @@ def upgrade() -> None:
         if 'placement_cost' not in columns:
             op.add_column('offers', sa.Column('placement_cost', sa.Numeric(precision=10, scale=2), nullable=False, server_default='0'))
 
-        # Код приложения всё ещё использует эти поля. Не удаляем их из БД.
+        # Историческая схема аренды: поля создаются для совместимости цепочки,
+        # удаляет их миграция remove_offer_rentals_001.
         rental_columns = [
             ('is_rentable', sa.Boolean(), 'false'),
             ('rent_cost_per_day', sa.Numeric(10, 2), '0'),

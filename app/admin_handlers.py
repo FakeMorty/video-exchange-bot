@@ -22,7 +22,7 @@ from app.db import async_session
 from app.models import (
     Base,
     User, Video, TrustedUploader, Event, ActiveSale,
-    VideoReport, ModNotification, Offer, OfferRental,
+    VideoReport, ModNotification, Offer,
     DonationAlertException,
     AdminPoll, AdminPollResponse, utc_now,
 )
@@ -37,7 +37,7 @@ from app.services import (
     get_pending_reports, dismiss_report, REPORT_REASONS,
     get_offer_moderation_counts, get_offers_for_admin, get_offer_by_id,
     moderate_offer, set_offer_active, get_offer_expires_at,
-    get_pending_rentals, moderate_offer_rental, normalize_telegram_url,
+    normalize_telegram_url,
     adjust_balance_by_admin, AdminBalanceError,
 )
 from app.keyboards import (
@@ -114,9 +114,6 @@ class AdminOfferCreateState(StatesGroup):
     waiting_reward_final = State()
     waiting_penalty = State()
     waiting_duration = State()
-    waiting_rentable = State()
-    waiting_rent_cost = State()
-    waiting_max_rentals = State()
 
 
 class TrustedUploaderState(StatesGroup):
@@ -2274,16 +2271,11 @@ async def admin_offers_menu(callback: CallbackQuery):
     pending = counts.get("pending", 0)
     approved = counts.get("approved", 0)
     rejected = counts.get("rejected", 0)
-    pending_rentals = counts.get("pending_rentals", 0)
-    total_offers = sum(value for key, value in counts.items() if key != "pending_rentals")
+    total_offers = sum(counts.values())
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"⏳ Офферы на модерации ({pending})",
             callback_data="admin_offers_list:pending:0",
-        )],
-        [InlineKeyboardButton(
-            text=f"🧾 Аренды на модерации ({pending_rentals})",
-            callback_data="admin_rentals_list:0",
         )],
         [InlineKeyboardButton(
             text=f"📋 Все офферы ({total_offers})",
@@ -2296,8 +2288,7 @@ async def admin_offers_menu(callback: CallbackQuery):
         "📢 <b>Офферы и реклама</b>\n\n"
         f"⏳ Ожидают модерации: <b>{pending}</b>\n"
         f"✅ Одобрено: <b>{approved}</b>\n"
-        f"❌ Отклонено: <b>{rejected}</b>\n"
-        f"🧾 Аренды на проверке: <b>{pending_rentals}</b>\n\n"
+        f"❌ Отклонено: <b>{rejected}</b>\n\n"
         "Здесь можно открыть заявку, проверить ссылку и одобрить или отклонить её."
     )
     await _safe_edit(callback, text_value, parse_mode="HTML", reply_markup=kb)
@@ -2311,14 +2302,6 @@ _OFFER_REJECTION_REASONS = {
     "description": "Недостаточно информации или вводящее в заблуждение описание",
     "other": "Не соответствует требованиям размещения",
 }
-_RENTAL_REJECTION_REASONS = {
-    "forbidden": "Запрещённый или сомнительный проект",
-    "link": "Ссылка не работает",
-    "content": "Название или содержание рекламы не соответствует требованиям",
-    "other": "Не соответствует требованиям размещения",
-}
-
-
 def _offer_status_text(offer: Offer) -> str:
     labels = {
         "payment_pending": "💳 ожидает оплаты",
@@ -2457,8 +2440,7 @@ async def admin_offer_view(callback: CallbackQuery):
         f"Штраф: <b>{offer.penalty_unsubscribe}</b> монет\n"
         f"Размещение: <b>{offer.placement_cost}</b> монет\n"
         f"Срок: <b>{offer.duration_days}</b> дней, до {expires_text}\n"
-        f"Участников: <b>{participants}</b>\n"
-        f"Аренда: {'да' if offer.is_rentable else 'нет'}"
+        f"Участников: <b>{participants}</b>"
     )
     if offer.rejection_reason:
         text_value += f"\nПричина отказа: {escape(offer.rejection_reason)}"
@@ -2576,187 +2558,6 @@ async def admin_offer_toggle(callback: CallbackQuery):
         return
     await admin_offer_view(callback)
 
-
-@router.callback_query(F.data.startswith("admin_rentals_list:"))
-async def admin_rentals_list(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    try:
-        page = max(0, int(callback.data.rsplit(":", 1)[1]))
-    except (ValueError, AttributeError):
-        await callback.answer("Некорректная страница.", show_alert=True)
-        return
-    async with async_session() as session:
-        rentals = await get_pending_rentals(
-            session,
-            offset=page * _OFFER_PAGE_SIZE,
-            limit=_OFFER_PAGE_SIZE + 1,
-        )
-    has_next_page = len(rentals) > _OFFER_PAGE_SIZE
-    rentals = rentals[:_OFFER_PAGE_SIZE]
-    rows = [[InlineKeyboardButton(
-        text=f"⏳ #{rental.id} {rental.renter_channel_title[:38]}",
-        callback_data=f"admin_rental_view:{rental.id}",
-    )] for rental in rentals]
-    navigation = []
-    if page > 0:
-        navigation.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_rentals_list:{page - 1}"))
-    if has_next_page:
-        navigation.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_rentals_list:{page + 1}"))
-    if navigation:
-        rows.append(navigation)
-    rows.append([InlineKeyboardButton(text="◀ К офферам", callback_data="admin_offers_menu")])
-    text_value = "🧾 <b>Аренды на модерации</b>\n\n"
-    text_value += "Выбери заявку:" if rentals else "Очередь пуста."
-    await _safe_edit(
-        callback,
-        text_value,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("admin_rental_view:"))
-async def admin_rental_view(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    rental_id = int(callback.data.rsplit(":", 1)[1])
-    async with async_session() as session:
-        rental = await session.get(OfferRental, rental_id)
-        offer = await get_offer_by_id(session, rental.offer_id) if rental else None
-        renter = await get_user_by_id(session, rental.renter_user_id) if rental else None
-    if not rental:
-        await callback.answer("Аренда не найдена.", show_alert=True)
-        return
-    text_value = (
-        f"🧾 <b>Аренда #{rental.id}</b>\n\n"
-        f"Канал: <b>{escape(rental.renter_channel_title)}</b>\n"
-        f"Ссылка: {escape(rental.renter_channel_url)}\n"
-        f"Автор: {escape(get_display_name(renter)) if renter else '—'}"
-        f"{f' (<code>{renter.telegram_id}</code>)' if renter else ''}\n"
-        f"Родительский оффер: {escape(offer.title) if offer else f'#{rental.offer_id}'}\n"
-        f"Срок: <b>{rental.rent_days}</b> дней\n"
-        f"Оплачено: <b>{rental.cost_paid}</b> монет\n"
-        f"Статус: <b>{escape(rental.status)}</b>"
-    )
-    if rental.rejection_reason:
-        text_value += f"\nПричина: {escape(rental.rejection_reason)}"
-    rows = []
-    button_url = normalize_telegram_url(rental.renter_channel_url)
-    if button_url:
-        rows.append([InlineKeyboardButton(text="🔗 Открыть канал", url=button_url)])
-    if rental.status == "pending":
-        rows.append([
-            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"admin_rental_approve:{rental.id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin_rental_reject:{rental.id}"),
-        ])
-    rows.extend([
-        [InlineKeyboardButton(text="⏳ К очереди", callback_data="admin_rentals_list:0")],
-        [InlineKeyboardButton(text="◀ К офферам", callback_data="admin_offers_menu")],
-    ])
-    await _safe_edit(
-        callback,
-        text_value,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await callback.answer()
-
-
-async def _notify_rental_review(bot, rental: OfferRental) -> None:
-    async with async_session() as session:
-        renter = await get_user_by_id(session, rental.renter_user_id)
-    if not renter:
-        return
-    try:
-        if rental.status == "active":
-            await bot.send_message(
-                renter.telegram_id,
-                f"✅ Аренда рекламы <b>{escape(rental.renter_channel_title)}</b> одобрена. "
-                f"Срок показа: {rental.rent_days} дней.",
-                parse_mode="HTML",
-            )
-        elif rental.status == "rejected":
-            await bot.send_message(
-                renter.telegram_id,
-                f"❌ Аренда рекламы <b>{escape(rental.renter_channel_title)}</b> отклонена.\n"
-                f"Причина: {escape(rental.rejection_reason or 'Не прошла модерацию')}\n"
-                f"Возвращено: <b>{rental.cost_paid}</b> монет.",
-                parse_mode="HTML",
-            )
-    except Exception:
-        logger.warning("Failed to notify renter for rental_id=%s", rental.id)
-
-
-@router.callback_query(F.data.startswith("admin_rental_approve:"))
-async def admin_rental_approve(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    rental_id = int(callback.data.rsplit(":", 1)[1])
-    async with async_session() as session:
-        rental, error = await moderate_offer_rental(
-            session,
-            rental_id,
-            approve=True,
-            admin_telegram_id=callback.from_user.id,
-        )
-    if error or not rental:
-        await callback.answer(error or "Не удалось обработать заявку.", show_alert=True)
-        return
-    await _notify_rental_review(callback.bot, rental)
-    await admin_rental_view(callback)
-
-
-@router.callback_query(F.data.startswith("admin_rental_reject:"))
-async def admin_rental_reject(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    rental_id = int(callback.data.rsplit(":", 1)[1])
-    rows = [[InlineKeyboardButton(
-        text=label,
-        callback_data=f"admin_rental_reject_reason:{rental_id}:{code}",
-    )] for code, label in _RENTAL_REJECTION_REASONS.items()]
-    rows.append([InlineKeyboardButton(text="◀ Назад", callback_data=f"admin_rental_view:{rental_id}")])
-    await _safe_edit(
-        callback,
-        "❌ <b>Причина отклонения аренды</b>\n\n"
-        "Оплата будет автоматически возвращена пользователю.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("admin_rental_reject_reason:"))
-async def admin_rental_reject_reason(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    try:
-        _, rental_raw, code = callback.data.split(":", 2)
-        rental_id = int(rental_raw)
-        reason = _RENTAL_REJECTION_REASONS[code]
-    except (ValueError, KeyError, AttributeError):
-        await callback.answer("Некорректная причина.", show_alert=True)
-        return
-    async with async_session() as session:
-        rental, error = await moderate_offer_rental(
-            session,
-            rental_id,
-            approve=False,
-            admin_telegram_id=callback.from_user.id,
-            reason=reason,
-        )
-    if error or not rental:
-        await callback.answer(error or "Не удалось обработать заявку.", show_alert=True)
-        return
-    await _notify_rental_review(callback.bot, rental)
-    await admin_rental_view(callback)
 
 # ============================
 # НАСТРОЙКИ БОТА
@@ -4413,7 +4214,7 @@ async def cb_admin_create_offer_start(callback: CallbackQuery, state: FSMContext
     await state.set_state(AdminOfferCreateState.waiting_title)
     
     text = (
-        "📝 <b>Создание оффера (Шаг 1/10)</b>\n\n"
+        "📝 <b>Создание оффера (Шаг 1/7)</b>\n\n"
         "⚠️ <b>Важно:</b> можно рекламировать каналы, группы, чаты и ботов Telegram.\n"
         "• публичные каналы / группы / чаты с username бот может проверять автоматически\n"
         "• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна — там подтверждение будет ручным\n"
@@ -4443,7 +4244,7 @@ async def process_offer_title(message: Message, state: FSMContext):
     await state.update_data(title=title)
     await state.set_state(AdminOfferCreateState.waiting_description)
     await message.answer(
-        "📝 <b>Создание оффера (Шаг 2/10)</b>\n\n"
+        "📝 <b>Создание оффера (Шаг 2/7)</b>\n\n"
         "Введи <b>описание оффера</b> (что нужно сделать пользователю):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -4463,7 +4264,7 @@ async def process_offer_description(message: Message, state: FSMContext):
     await state.update_data(description=description)
     await state.set_state(AdminOfferCreateState.waiting_url)
     await message.answer(
-        "🔗 <b>Создание оффера (Шаг 3/10)</b>\n\n"
+        "🔗 <b>Создание оффера (Шаг 3/7)</b>\n\n"
         "Введи <b>ссылку на Telegram-проект</b> — канал, группу, чат или бота\n"
         "(например, <code>https://t.me/my_channel</code>, <code>https://t.me/MyBot?start=promo</code>, <code>https://t.me/+invite</code>):",
         parse_mode="HTML",
@@ -4484,7 +4285,7 @@ async def process_offer_url(message: Message, state: FSMContext):
     await state.update_data(channel_url=url)
     await state.set_state(AdminOfferCreateState.waiting_reward_preview)
     await message.answer(
-        "💰 <b>Создание оффера (Шаг 4/10)</b>\n\n"
+        "💰 <b>Создание оффера (Шаг 4/7)</b>\n\n"
         "Введи <b>награду за старт</b> (число монет, например, <code>50</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -4507,7 +4308,7 @@ async def process_offer_reward_preview(message: Message, state: FSMContext):
     await state.update_data(reward_preview=str(reward))
     await state.set_state(AdminOfferCreateState.waiting_reward_final)
     await message.answer(
-        "💰 <b>Создание оффера (Шаг 5/10)</b>\n\n"
+        "💰 <b>Создание оффера (Шаг 5/7)</b>\n\n"
         "Введи <b>награду за финальную подписку</b> (число монет, например, <code>350</code>):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -4530,7 +4331,7 @@ async def process_offer_reward_final(message: Message, state: FSMContext):
     await state.update_data(reward_final=str(reward))
     await state.set_state(AdminOfferCreateState.waiting_penalty)
     await message.answer(
-        "💰 <b>Создание оффера (Шаг 6/10)</b>\n\n"
+        "💰 <b>Создание оффера (Шаг 6/7)</b>\n\n"
         "Введи <b>штраф за отписку</b> (сколько монет спишется дополнительно, если пользователь отпишется):\n"
         "<i>Рекомендуется: сумма, превышающая награду, чтобы отписка была невыгодной.</i>",
         parse_mode="HTML",
@@ -4554,7 +4355,7 @@ async def process_offer_penalty(message: Message, state: FSMContext):
     await state.update_data(penalty_unsubscribe=str(penalty))
     await state.set_state(AdminOfferCreateState.waiting_duration)
     await message.answer(
-        "📅 <b>Создание оффера (Шаг 7/10)</b>\n\n"
+        "📅 <b>Создание оффера (Шаг 7/7)</b>\n\n"
         "Сколько дней оффер должен быть активен после публикации? Введи число от 1 до 365:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -4576,42 +4377,7 @@ async def process_offer_duration(message: Message, state: FSMContext):
         return
 
     await state.update_data(duration_days=duration_days)
-    await state.set_state(AdminOfferCreateState.waiting_rentable)
-    await message.answer(
-        "📣 <b>Создание оффера (Шаг 8/10)</b>\n\n"
-        "Будет ли этот оффер доступен для <b>аренды</b> обычными пользователями?\n"
-        "Если да, любой пользователь сможет заплатить, чтобы рекламировать свой канал в этом оффере.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Да", callback_data="offer_rent_yes")],
-            [InlineKeyboardButton(text="❌ Нет", callback_data="offer_rent_no")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
-        ])
-    )
-
-
-@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rent_yes")
-async def process_offer_rentable_yes(callback: CallbackQuery, state: FSMContext):
-    if not await check_admin(callback.from_user.id): return
-    await state.update_data(is_rentable=True)
-    await state.set_state(AdminOfferCreateState.waiting_rent_cost)
-    await callback.message.answer(
-        "💰 <b>Создание оффера (Шаг 9/10)</b>\n\n"
-        "Введи <b>стоимость аренды одного слота в день</b> (монеты):",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
-        ])
-    )
-    await callback.answer()
-
-
-@router.callback_query(AdminOfferCreateState.waiting_rentable, F.data == "offer_rent_no")
-async def process_offer_rentable_no(callback: CallbackQuery, state: FSMContext):
-    if not await check_admin(callback.from_user.id): return
-    await state.update_data(is_rentable=False, rent_cost=0, max_rentals=1)
-    await finalize_admin_offer(callback, state)
-    await callback.answer()
+    await finalize_admin_offer(message, state)
 
 
 async def finalize_admin_offer(callback_or_message, state: FSMContext):
@@ -4626,9 +4392,6 @@ async def finalize_admin_offer(callback_or_message, state: FSMContext):
             reward_preview=Decimal(data["reward_preview"]),
             reward_final=Decimal(data["reward_final"]),
             penalty_unsubscribe=Decimal(data.get("penalty_unsubscribe", 0)),
-            is_rentable=data.get("is_rentable", False),
-            rent_cost_per_day=Decimal(data.get("rent_cost", 0)),
-            max_simultaneous_rentals=int(data.get("max_rentals", 1)),
             duration_days=int(data.get("duration_days", 30)),
             admin_telegram_id=callback_or_message.from_user.id,
         )
@@ -4659,44 +4422,6 @@ async def finalize_admin_offer(callback_or_message, state: FSMContext):
             ])
         )
     await state.clear()
-
-
-@router.message(AdminOfferCreateState.waiting_rent_cost)
-async def process_offer_rent_cost(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id): return
-    val = (message.text or "").strip().replace(",", ".")
-    try:
-        cost = Decimal(val)
-        if not cost.is_finite() or cost < 0: raise ValueError()
-    except Exception:
-        await message.answer("❌ Некорректное число монет. Введи положительное число:")
-        return
-        
-    await state.update_data(rent_cost=str(cost))
-    await state.set_state(AdminOfferCreateState.waiting_max_rentals)
-    await message.answer(
-        "🔢 <b>Создание оффера (Шаг 10/10)</b>\n\n"
-        "Введи <b>максимальное количество рекламных слотов</b> (сколько каналов может рекламироваться одновременно):",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_offers_menu")]
-        ])
-    )
-
-
-@router.message(AdminOfferCreateState.waiting_max_rentals)
-async def process_offer_max_rentals(message: Message, state: FSMContext):
-    if not await check_admin(message.from_user.id): return
-    try:
-        max_rentals = int((message.text or "").strip())
-        if not 1 <= max_rentals <= 100:
-            raise ValueError
-    except ValueError:
-        await message.answer("❌ Введи целое число слотов от 1 до 100:")
-        return
-
-    await state.update_data(max_rentals=max_rentals)
-    await finalize_admin_offer(message, state)
 
 
 # Remove the process_offer_penalty_unsubscribe function completely

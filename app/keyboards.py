@@ -217,23 +217,6 @@ def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup
         [InlineKeyboardButton(text="📢 Перейти в канал", url=channel_url)],
         [InlineKeyboardButton(text="▶️ Начать", callback_data=f"offer_start:{offer_id}")],
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data=f"offer_check:{offer_id}")],
-        [InlineKeyboardButton(text="📣 Арендовать слот", callback_data=f"rent_offer:{offer_id}")],
-    ])
-
-
-def rent_days_keyboard(offer_id: int) -> InlineKeyboardMarkup:
-    """Быстрый выбор срока аренды рекламного слота."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1 день", callback_data=f"rent_days:{offer_id}:1"),
-            InlineKeyboardButton(text="3 дня", callback_data=f"rent_days:{offer_id}:3"),
-        ],
-        [
-            InlineKeyboardButton(text="7 дней", callback_data=f"rent_days:{offer_id}:7"),
-            InlineKeyboardButton(text="14 дней", callback_data=f"rent_days:{offer_id}:14"),
-        ],
-        [InlineKeyboardButton(text="30 дней", callback_data=f"rent_days:{offer_id}:30")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"rent_offer:{offer_id}")],
     ])
 
 
