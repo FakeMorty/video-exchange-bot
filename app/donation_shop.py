@@ -1,3 +1,4 @@
+from app.i18n import t
 from app.models import utc_now
 """
 Донатный магазин — покупка привилегий за монеты.
@@ -20,7 +21,7 @@ from app.services import (
 from app.nick_styles import (
     CATEGORIES, STYLES, STYLES_BY_CAT,
     format_nick_inline, format_nick_card,
-    validate_style_id,
+    style_label, validate_style_id,
 )
 
 router = Router()
@@ -101,8 +102,8 @@ def donation_shop_keyboard() -> InlineKeyboardMarkup:
         buttons.append([
             InlineKeyboardButton(text=label, callback_data=f"donate_buy:{item['id']}")
         ])
-    buttons.append([InlineKeyboardButton(text="📋 Мои привилегии", callback_data="donate_my_perks")])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="btn_profile")])
+    buttons.append([InlineKeyboardButton(text=t('📋 Мои привилегии'), callback_data="donate_my_perks")])
+    buttons.append([InlineKeyboardButton(text=t('◀️ Назад'), callback_data="btn_profile")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -113,7 +114,7 @@ def _category_keyboard() -> InlineKeyboardMarkup:
             text=f"{icon} {name}",
             callback_data=f"cn_cat:{cat_id}",
         )])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="donation_shop")])
+    rows.append([InlineKeyboardButton(text=t('❌ Отмена'), callback_data="donation_shop")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -135,21 +136,21 @@ def _styles_keyboard(cat_id: int, user_name: str, page: int = 0) -> InlineKeyboa
     # Навигация
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"cn_page:{cat_id}:{page-1}"))
+        nav.append(InlineKeyboardButton(text=t('◀️ Назад'), callback_data=f"cn_page:{cat_id}:{page-1}"))
     if end < len(styles):
-        nav.append(InlineKeyboardButton(text="➡️ Ещё", callback_data=f"cn_page:{cat_id}:{page+1}"))
+        nav.append(InlineKeyboardButton(text=t('➡️ Ещё'), callback_data=f"cn_page:{cat_id}:{page+1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text="◀️ К категориям", callback_data="cn_back_cats")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="donation_shop")])
+    rows.append([InlineKeyboardButton(text=t('◀️ К категориям'), callback_data="cn_back_cats")])
+    rows.append([InlineKeyboardButton(text=t('❌ Отмена'), callback_data="donation_shop")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _confirm_keyboard(style_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Выбрать", callback_data=f"cn_confirm:{style_id}"),
-            InlineKeyboardButton(text="❌ Назад", callback_data=f"cn_back_styles:{STYLES[style_id].cat_id}"),
+            InlineKeyboardButton(text=t('✅ Выбрать'), callback_data=f"cn_confirm:{style_id}"),
+            InlineKeyboardButton(text=t('❌ Назад'), callback_data=f"cn_back_styles:{STYLES[style_id].cat_id}"),
         ],
     ])
 
@@ -188,7 +189,7 @@ async def donate_buy(callback: CallbackQuery, state: FSMContext):
 
     item = next((i for i in DONATION_ITEMS if i["id"] == item_id), None)
     if not item:
-        await callback.answer("Товар не найден", show_alert=True)
+        await callback.answer(t('Товар не найден'), show_alert=True)
         return
 
     async with async_session() as session:
@@ -228,8 +229,8 @@ async def donate_buy(callback: CallbackQuery, state: FSMContext):
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Купить", callback_data=f"donate_confirm:{item_id}"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data="donation_shop"),
+                InlineKeyboardButton(text=t('✅ Купить'), callback_data=f"donate_confirm:{item_id}"),
+                InlineKeyboardButton(text=t('❌ Отмена'), callback_data="donation_shop"),
             ]
         ])
 
@@ -248,7 +249,7 @@ async def donate_confirm(callback: CallbackQuery, state: FSMContext):
 
     item = next((i for i in DONATION_ITEMS if i["id"] == item_id), None)
     if not item:
-        await callback.answer("Ошибка", show_alert=True)
+        await callback.answer(t('Ошибка'), show_alert=True)
         return
 
     async with async_session() as session:
@@ -259,7 +260,7 @@ async def donate_confirm(callback: CallbackQuery, state: FSMContext):
 
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
         if not admin_free and user.balance < item["price"]:
-            await callback.answer("Недостаточно монет", show_alert=True)
+            await callback.answer(t('Недостаточно монет'), show_alert=True)
             return
 
         if admin_free:
@@ -281,13 +282,10 @@ async def donate_confirm(callback: CallbackQuery, state: FSMContext):
 
         free_badge = "\n🆓 <b>(Бесплатно для админа)</b>" if admin_free else ""
         await callback.message.edit_text(
-            f"✅ <b>Покупка успешна!</b>{free_badge}\n\n"
-            f"Ты приобрели: <b>{item['name']}</b>\n"
-            f"Действует до: <b>{expires.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
-            f"Спасибо за поддержку! 💙",
+            t('✅ <b>Покупка успешна!</b>{free_badge}\n\nТы приобрели: <b>{arg1}</b>\nДействует до: <b>{arg2}</b>\n\nСпасибо за поддержку! 💙', free_badge=free_badge, arg1=item['name'], arg2=expires.strftime('%d.%m.%Y %H:%M')),
             parse_mode="HTML",
         )
-        await callback.answer("Привилегия активирована!", show_alert=True)
+        await callback.answer(t('Привилегия активирована!'), show_alert=True)
 
 
 # ════════════════════════════════════════════════
@@ -334,7 +332,7 @@ async def _show_styles_in_category(callback: CallbackQuery, state: FSMContext):
     """Шаг 2: показать стили выбранной категории (первая страница)."""
     cat_id = int(callback.data.split(":")[1])
     if cat_id not in CATEGORIES:
-        await callback.answer("Категория не найдена", show_alert=True)
+        await callback.answer(t('Категория не найдена'), show_alert=True)
         return
 
     await state.set_state(CustomNickState.browsing_styles)
@@ -345,6 +343,8 @@ async def _show_styles_in_category(callback: CallbackQuery, state: FSMContext):
         user_name = get_display_name(user) if user else "Ник"
 
     icon, cat_name = CATEGORIES[cat_id]
+
+    cat_name = t(cat_name)
     text = f"{icon} <b>{cat_name}</b>\n\nВыбери стиль (твой ник для предпросмотра):\n"
 
     await callback.message.edit_text(
@@ -366,6 +366,8 @@ async def _styles_page(callback: CallbackQuery, state: FSMContext):
         user_name = get_display_name(user) if user else "Ник"
 
     icon, cat_name = CATEGORIES[cat_id]
+
+    cat_name = t(cat_name)
     total_pages = (len(STYLES_BY_CAT.get(cat_id, [])) + _STYLES_PER_PAGE - 1) // _STYLES_PER_PAGE
     text = f"{icon} <b>{cat_name}</b> (стр. {page+1}/{total_pages})\n\nВыбери стиль:\n"
 
@@ -381,7 +383,7 @@ async def _show_style_preview(callback: CallbackQuery, state: FSMContext):
     """Шаг 3: показать карточку-превью выбранного стиля."""
     style_id = int(callback.data.split(":")[1])
     if not validate_style_id(style_id):
-        await callback.answer("Стиль не найден", show_alert=True)
+        await callback.answer(t('Стиль не найден'), show_alert=True)
         return
 
     await state.set_state(CustomNickState.confirming)
@@ -393,12 +395,13 @@ async def _show_style_preview(callback: CallbackQuery, state: FSMContext):
 
     s = STYLES[style_id]
     icon, cat_name = CATEGORIES[s.cat_id]
+    cat_name = t(cat_name)
 
     inline_preview = format_nick_inline(user_name, style_id)
     card_preview = format_nick_card(user_name, style_id)
 
     text = (
-        f"🎨 <b>Превью стиля «{s.label}»</b>\n"
+        f"🎨 <b>Превью стиля «{t(s.label)}»</b>\n"
         f"📂 {icon} {cat_name}\n\n"
         f"<b>В строке:</b>\n{inline_preview}\n\n"
         f"<b>В профиле:</b>\n{card_preview}\n\n"
@@ -415,7 +418,7 @@ async def _confirm_custom_nick(callback: CallbackQuery, state: FSMContext):
     """Шаг 4: списать монеты, активировать перк со style_id."""
     style_id = int(callback.data.split(":")[1])
     if not validate_style_id(style_id):
-        await callback.answer("Стиль не найден", show_alert=True)
+        await callback.answer(t('Стиль не найден'), show_alert=True)
         return
 
     PRICE = 500
@@ -431,7 +434,7 @@ async def _confirm_custom_nick(callback: CallbackQuery, state: FSMContext):
 
         if not admin_free and user.balance < PRICE:
             await callback.answer(
-                f"❌ Недостаточно монет. Нужно: {PRICE}",
+                t('❌ Недостаточно монет. Нужно: {PRICE}', PRICE=PRICE),
                 show_alert=True,
             )
             return
@@ -473,16 +476,10 @@ async def _confirm_custom_nick(callback: CallbackQuery, state: FSMContext):
 
     free_badge = "\n🆓 <b>(Бесплатно для админа)</b>" if admin_free else ""
     await callback.message.edit_text(
-        f"✅ <b>Кастомный ник активирован!</b>{free_badge}\n\n"
-        f"Стиль: <b>{STYLES[style_id].label}</b>\n"
-        f"Действует до: <b>{expires.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
-        f"Твой ник теперь выглядит так:\n\n"
-        f"В строке: {inline}\n\n"
-        f"В профиле:\n{card}\n\n"
-        f"Спасибо за поддержку! 💙",
+        t('✅ <b>Кастомный ник активирован!</b>{free_badge}\n\nСтиль: <b>{label}</b>\nДействует до: <b>{arg2}</b>\n\nТвой ник теперь выглядит так:\n\nВ строке: {inline}\n\nВ профиле:\n{card}\n\nСпасибо за поддержку! 💙', free_badge=free_badge, label=style_label(style_id), arg2=expires.strftime('%d.%m.%Y %H:%M'), inline=inline, card=card),
         parse_mode="HTML",
     )
-    await callback.answer("Стиль активирован!", show_alert=True)
+    await callback.answer(t('Стиль активирован!'), show_alert=True)
 
 
 # ── Навигация ──────────────────────────────────
@@ -508,6 +505,8 @@ async def _back_to_styles(callback: CallbackQuery, state: FSMContext):
         user_name = get_display_name(user) if user else "Ник"
 
     icon, cat_name = CATEGORIES[cat_id]
+
+    cat_name = t(cat_name)
     text = f"{icon} <b>{cat_name}</b>\n\nВыбери стиль (твой ник для предпросмотра):\n"
 
     await callback.message.edit_text(
@@ -557,7 +556,7 @@ async def donate_my_perks(callback: CallbackQuery):
                 # Название перка
                 if perk.perk_type == "custom_nick" and perk.style_id:
                     s = STYLES.get(perk.style_id)
-                    name = f"🎨 Кастомный ник — «{s.label}»" if s else "🎨 Кастомный ник"
+                    name = f"🎨 Кастомный ник — «{t(s.label)}»" if s else "🎨 Кастомный ник"
                 else:
                     from app.services import PERK_ICONS, PERK_NAMES
                     icon = PERK_ICONS.get(perk.perk_type, "🔹")
@@ -568,8 +567,8 @@ async def donate_my_perks(callback: CallbackQuery):
                 text += f"   ⏰ Осталось: <b>{days_left} дн.</b> (до {perk.active_until.strftime('%d.%m')})\n\n"
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛍 В магазин", callback_data="donation_shop")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="btn_profile")],
+            [InlineKeyboardButton(text=t('🛍 В магазин'), callback_data="donation_shop")],
+            [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="btn_profile")],
         ])
         await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
         await callback.answer()
@@ -582,10 +581,10 @@ async def back_to_profile(callback: CallbackQuery):
     # Simple back: show profile hint
     try:
         await callback.message.edit_text(
-            "👤 Нажми кнопку 👤 Профиль в главном меню, чтобы вернуться.",
+            t('👤 Нажми кнопку 👤 Профиль в главном меню, чтобы вернуться.'),
             reply_markup=None
         )
     except Exception:
-        await callback.message.answer("👤 Нажми кнопку 👤 Профиль в главном меню.")
+        await callback.message.answer(t('👤 Нажми кнопку 👤 Профиль в главном меню.'))
     await callback.answer()
 

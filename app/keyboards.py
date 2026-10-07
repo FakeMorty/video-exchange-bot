@@ -4,7 +4,7 @@ from aiogram.types import (
     KeyboardButton, ReplyKeyboardMarkup
 )
 
-from app.i18n import SUPPORTED_LANGUAGES, language_label, normalize_language, t
+from app.i18n import SUPPORTED_LANGUAGES, current_language, language_label, normalize_language, t
 
 # =========================
 # ТЕКСТОВЫЕ КНОПКИ ГЛАВНОГО МЕНЮ
@@ -262,7 +262,7 @@ def offer_view_keyboard(offer_id: int, channel_url: str) -> InlineKeyboardMarkup
 def games_menu_keyboard() -> InlineKeyboardMarkup:
     from app.config import WEBHOOK_BASE
     base = (WEBHOOK_BASE or "").rstrip("/")
-    cases_url = f"{base}/cases" if base else ""
+    cases_url = f"{base}/cases?lang={current_language()}" if base else ""
     
     kb = []
     if cases_url:

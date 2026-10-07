@@ -11,6 +11,7 @@ from datetime import timedelta
 from decimal import Decimal
 from html import escape
 
+from app.i18n import current_language, t
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -31,7 +32,7 @@ def arcade_webapp_url() -> str:
     """Публичный URL Mini App (как у Live-трансляции Секслото)."""
     from app.config import WEBHOOK_BASE
     base = (WEBHOOK_BASE or "").rstrip("/")
-    return f"{base}/arcade" if base else ""
+    return f"{base}/arcade?lang={current_language()}" if base else ""
 
 
 def _menu_text(cfg) -> str:
@@ -53,13 +54,13 @@ def _menu_keyboard(cfg) -> InlineKeyboardMarkup:
     url = arcade_webapp_url()
     if url:
         from aiogram.types.web_app_info import WebAppInfo
-        buttons.append([InlineKeyboardButton(text="🎮 Играть (Mini App)", web_app=WebAppInfo(url=url))])
+        buttons.append([InlineKeyboardButton(text=t('🎮 Играть (Mini App)'), web_app=WebAppInfo(url=url))])
     else:
-        buttons.append([InlineKeyboardButton(text="🎮 Как открыть игру", callback_data="arcade_howto")])
+        buttons.append([InlineKeyboardButton(text=t('🎮 Как открыть игру'), callback_data="arcade_howto")])
     buttons.extend([
-        [InlineKeyboardButton(text="🏆 Топ аркады", callback_data="arcade_top")],
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data="arcade_menu")],
-        [InlineKeyboardButton(text="◀️ Игровой центр", callback_data="arcade_to_games")],
+        [InlineKeyboardButton(text=t('🏆 Топ аркады'), callback_data="arcade_top")],
+        [InlineKeyboardButton(text=t('🔄 Обновить'), callback_data="arcade_menu")],
+        [InlineKeyboardButton(text=t('◀️ Игровой центр'), callback_data="arcade_to_games")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -74,11 +75,11 @@ async def arcade_menu(callback: CallbackQuery, state: FSMContext):
     async with async_session() as session:
         cfg = await load_arcade_config(session)
         if not cfg.enabled:
-            await callback.answer("⛔ Аркада временно отключена.", show_alert=True)
+            await callback.answer(t('⛔ Аркада временно отключена.'), show_alert=True)
             return
         user = await get_user(session, callback.from_user.id)
         if user and not has_valid_nickname(user):
-            await callback.answer("⚠️ Сначала установи нормальный ник в Профиле!", show_alert=True)
+            await callback.answer(t('⚠️ Сначала установи нормальный ник в Профиле!'), show_alert=True)
             return
     try:
         await callback.message.edit_text(
@@ -112,7 +113,7 @@ async def arcade_howto(callback: CallbackQuery):
 async def arcade_to_games(callback: CallbackQuery):
     from app.keyboards import games_menu_keyboard
     await callback.message.answer(
-        "🎮 <b>Игровой центр</b>\n\nВыбери раздел:",
+        t('🎮 <b>Игровой центр</b>\n\nВыбери раздел:'),
         parse_mode="HTML",
         reply_markup=games_menu_keyboard(),
     )
@@ -159,7 +160,7 @@ async def arcade_top(callback: CallbackQuery):
         text = "\n".join(lines)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Меню аркады", callback_data="arcade_menu")],
+        [InlineKeyboardButton(text=t('◀️ Меню аркады'), callback_data="arcade_menu")],
     ])
     try:
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)

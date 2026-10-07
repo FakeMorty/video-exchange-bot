@@ -120,10 +120,10 @@ from app.keyboards import (
     # поэтому их константы здесь не нужны. Оставлены только кнопки вне меню.
     BTN_VIP, BTN_LEVEL, BTN_LOTTERY,
 )
-from app.i18n import get_user_language, normalize_language, t
+from app.i18n import current_language, get_user_language, normalize_language, t
 from app.logger import get_logger
 from app.release_notes import build_version_text
-from app.rules_text import FULL_RULES_TEXT, SHORT_RULES_TEXT
+from app.rules_text import get_full_rules_text, get_short_rules_text
 from app.utils.messaging import format_time_for_user
 
 logger = get_logger(__name__)
@@ -172,7 +172,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             if not user.agreed_to_rules:
                 from app.keyboards import rules_keyboard
                 await message.answer(
-                    SHORT_RULES_TEXT,
+                    get_short_rules_text(),
                     parse_mode="HTML",
                     reply_markup=rules_keyboard()
                 )
@@ -208,7 +208,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         if not user.agreed_to_rules:
             from app.keyboards import rules_keyboard
             await message.answer(
-                SHORT_RULES_TEXT,
+                get_short_rules_text(),
                 parse_mode="HTML",
                 reply_markup=rules_keyboard()
             )
@@ -375,7 +375,7 @@ async def require_view_access(message: Message, user, session) -> bool:
         return False
     if not user.agreed_to_rules:
         from app.keyboards import rules_keyboard
-        await message.answer(SHORT_RULES_TEXT, parse_mode="HTML", reply_markup=rules_keyboard())
+        await message.answer(get_short_rules_text(), parse_mode="HTML", reply_markup=rules_keyboard())
         return False
     if not has_valid_nickname(user):
         views = await session.scalar(
@@ -644,7 +644,7 @@ async def send_welcome_banner(message_or_callback, session, user):
 
 @router.callback_query(F.data == "show_full_rules")
 async def show_full_rules_callback(callback: CallbackQuery):
-    await callback.message.answer(FULL_RULES_TEXT, parse_mode="HTML")
+    await callback.message.answer(get_full_rules_text(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -757,7 +757,7 @@ async def cmd_admin_redirect(message: Message):
 @router.message(F.text.in_(menu_button_variants("rules")))
 async def show_rules(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(FULL_RULES_TEXT, parse_mode="HTML")
+    await message.answer(get_full_rules_text(), parse_mode="HTML")
 
 
 @router.message(F.text.in_(menu_button_variants("profile")))
@@ -2703,7 +2703,7 @@ async def successful_payment(message: Message):
 def _lootbox_kb(coin_price: Decimal | None = None, star_price: int | None = None, user_level: int = 1) -> InlineKeyboardMarkup:
     from app.config import WEBHOOK_BASE
     base = (WEBHOOK_BASE or "").rstrip("/")
-    cases_url = f"{base}/cases" if base else ""
+    cases_url = f"{base}/cases?lang={current_language()}" if base else ""
     
     coin_price = to_decimal(coin_price if coin_price is not None else LOOTBOX_COIN_PRICE)
     star_price = int(star_price if star_price is not None else LOOTBOX_STAR_PRICE)
@@ -2955,7 +2955,7 @@ def _styles_list_kb(cat_id: int, excluded_ids: list[int]) -> InlineKeyboardMarku
     for s in cat_styles:
         status = "❌" if s.id in excluded_ids else "✅"
         row.append(InlineKeyboardButton(
-            text=f"{status} {s.label}", 
+            text=f"{status} {t(s.label)}", 
             callback_data=f"styles_case_toggle_style:{s.id}"
         ))
         if len(row) == 2:
@@ -3030,6 +3030,7 @@ async def styles_case_view_cat(callback: CallbackQuery, state: FSMContext):
     
     from app.nick_styles import CATEGORIES
     icon, name = CATEGORIES[cat_id]
+    name = t(name)
     
     text = (
         f"{icon} <b>Категория: {name}</b>\n\n"
@@ -3613,7 +3614,7 @@ def _lottery_menu_kb() -> InlineKeyboardMarkup:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     from app.config import WEBHOOK_BASE
     base = (WEBHOOK_BASE or "").rstrip("/")
-    live_url = f"{base}/lottery/live" if base else ""
+    live_url = f"{base}/lottery/live?lang={current_language()}" if base else ""
 
     buttons = []
     if live_url:
@@ -3658,17 +3659,20 @@ async def _send_lottery_menu(message_or_callback_message: Message, telegram_user
         user = await get_user(session, telegram_user_id) if telegram_user_id else None
 
     base = (WEBHOOK_BASE or "").rstrip("/")
-    live_url = f"{base}/lottery/live" if base else ""
+    live_url = f"{base}/lottery/live?lang={current_language()}" if base else ""
 
     try:
-        draw_line = f"Следующий розыгрыш: <b>{format_time_for_user(round_obj.draw_starts_at, getattr(user, 'timezone', None))}</b>"
+        draw_line = t(
+            "Следующий розыгрыш: <b>{time_str}</b>",
+            time_str=format_time_for_user(round_obj.draw_starts_at, getattr(user, 'timezone', None)),
+        )
     except Exception:
-        draw_line = "Следующий розыгрыш скоро стартует в live-режиме."
+        draw_line = t("Следующий розыгрыш скоро стартует в live-режиме.")
 
     status_map = {
-        "open": "приём билетов открыт",
-        "drawing": "идёт розыгрыш",
-        "completed": "розыгрыш завершён",
+        "open": t("приём билетов открыт"),
+        "drawing": t("идёт розыгрыш"),
+        "completed": t("розыгрыш завершён"),
     }
     status_text = status_map.get(state_data.get("status"), str(state_data.get("status")))
 
@@ -3676,20 +3680,24 @@ async def _send_lottery_menu(message_or_callback_message: Message, telegram_user
     duration_seconds = get_lottery_draw_duration_seconds(round_obj.numbers_per_ticket)
     minutes = duration_seconds // 60
     seconds = duration_seconds % 60
-    duration_text = f"{minutes} мин {seconds} сек" if minutes else f"{seconds} сек"
-    drawn_text = ", ".join(map(str, state_data.get("drawn_numbers", []))) or "пока ничего"
+    duration_text = (
+        t("{minutes} мин {seconds} сек", minutes=minutes, seconds=seconds)
+        if minutes
+        else t("{seconds} сек", seconds=seconds)
+    )
+    drawn_text = ", ".join(map(str, state_data.get("drawn_numbers", []))) or t("пока ничего")
 
-    text = (
+    text = t(
         "🎰 <b>Секслото</b>\n\n"
-        f"📅 <b>Розыгрыш:</b> {draw_date_msk}\n"
-        f"📌 <b>Статус:</b> {status_text}\n"
-        f"🎟 <b>Цена билета:</b> {_fmt_coins(state_data.get('ticket_price'))} монет\n"
-        f"💰 <b>Призовой фонд:</b> {_fmt_coins(state_data.get('prize_pool'))} монет\n"
-        f"🔵 <b>Уже выпало:</b> {drawn_text}\n\n"
+        "📅 <b>Розыгрыш:</b> {draw_date}\n"
+        "📌 <b>Статус:</b> {status_text}\n"
+        "🎟 <b>Цена билета:</b> {ticket_price} монет\n"
+        "💰 <b>Призовой фонд:</b> {prize_pool} монет\n"
+        "🔵 <b>Уже выпало:</b> {drawn_text}\n\n"
         "<b>Как это работает:</b>\n"
-        f"• в одном билете — <b>{round_obj.numbers_per_ticket} чисел из {round_obj.numbers_pool}</b>\n"
-        f"• каждый день в <b>{LOTTERY_DRAW_HOUR_MSK}:00 по МСК</b> начинается розыгрыш\n"
-        f"• на каждый бочонок уходит около <b>{LOTTERY_SECONDS_PER_BALL} секунд</b>, весь розыгрыш длится примерно <b>{duration_text}</b>\n"
+        "• в одном билете — <b>{per_ticket} чисел из {pool}</b>\n"
+        "• каждый день в <b>{hour}:00 по МСК</b> начинается розыгрыш\n"
+        "• на каждый бочонок уходит около <b>{ball_seconds} секунд</b>, весь розыгрыш длится примерно <b>{duration_text}</b>\n"
         "• <b>1 совпадение — не выигрыш</b>\n"
         "• <b>2 совпадения — 10 монет</b>\n"
         "• <b>3 совпадения — 20 монет</b>\n"
@@ -3697,9 +3705,25 @@ async def _send_lottery_menu(message_or_callback_message: Message, telegram_user
         "• призовой фонд делится так: <b>6 совпадений — 70%</b>, <b>5 совпадений — 20%</b>, <b>4 совпадения — 10%</b>\n"
         "• если в одной категории несколько выигрышных билетов, её доля делится между ними поровну\n"
         "• каждую неделю действует <b>рейтинг активности</b> с дополнительными призами для топ-3 игроков\n\n"
-        + (f"🔴 <b>Live:</b> <a href=\"{live_url}\">открыть трансляцию</a>\n" if live_url else "")
-        + f"{draw_line}\n\n"
-        "Нажми «🎫 Купить билеты», чтобы выбрать количество билетов, или открой Live и следи за розыгрышем в реальном времени."
+        "{live_line}"
+        "{draw_line}\n\n"
+        "Нажми «🎫 Купить билеты», чтобы выбрать количество билетов, или открой Live и следи за розыгрышем в реальном времени.",
+        draw_date=draw_date_msk,
+        status_text=status_text,
+        ticket_price=_fmt_coins(state_data.get('ticket_price')),
+        prize_pool=_fmt_coins(state_data.get('prize_pool')),
+        drawn_text=drawn_text,
+        per_ticket=round_obj.numbers_per_ticket,
+        pool=round_obj.numbers_pool,
+        hour=LOTTERY_DRAW_HOUR_MSK,
+        ball_seconds=LOTTERY_SECONDS_PER_BALL,
+        duration_text=duration_text,
+        live_line=(
+            t("🔴 <b>Live:</b> <a href=\"{live_url}\">открыть трансляцию</a>\n", live_url=live_url)
+            if live_url
+            else ""
+        ),
+        draw_line=draw_line,
     )
 
     await message_or_callback_message.answer(
@@ -3898,16 +3922,17 @@ async def lottery_weekly_leaderboard(callback: CallbackQuery):
 async def lottery_live_info(callback: CallbackQuery):
     base = (WEBHOOK_BASE or "").rstrip("/")
     if not base:
-        text = (
+        text = t(
             "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
             "Live пока недоступен: владелец бота ещё не настроил публичный адрес Mini App."
         )
     else:
-        live_url = f"{base}/lottery/live"
-        text = (
+        live_url = f"{base}/lottery/live?lang={current_language()}"
+        text = t(
             "🔴 <b>Live-розыгрыш Секслото</b>\n\n"
             "В прямом эфире ты увидишь, как лототрон по очереди вытягивает все бочонки.\n"
-            f"Открыть Live: {live_url}"
+            "Открыть Live: {live_url}",
+            live_url=live_url,
         )
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()

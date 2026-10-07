@@ -9,7 +9,7 @@ from pathlib import Path
 # поэтому будущим агентам достаточно:
 # 1) обновить CURRENT_VERSION при релизе,
 # 2) добавить записи в CHANGELOG.md.
-CURRENT_VERSION = "v3.24.0-language-switch"
+CURRENT_VERSION = "v3.25.0-full-i18n"
 CURRENT_STATUS = "Актуальная боевая сборка"
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
