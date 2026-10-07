@@ -1,18 +1,43 @@
 """Мультиязычность интерфейса бота (i18n).
 
-Русский — канонический язык бота: тексты по умолчанию русские, переводы
-лежат в `TRANSLATIONS`. Язык пользователя хранится в `users.language`
-(по умолчанию `ru`) и выбирается кнопкой «🌐 Язык» в главном меню.
+Русский — канонический язык бота. Английский — первый дополнительный язык.
+Язык пользователя хранится в `users.language` (по умолчанию `ru`) и выбирается
+кнопкой «🌐 Язык» в главном меню.
+
+Два способа перевода:
+
+1. По исходному русскому тексту (ключ = сам русский текст) — для основного
+   массива сообщений: `t("Привет!")` → вернёт «Hello!» для английского языка.
+   Удобно: видно исходник прямо в коде, фолбэк — сам ключ (русский текст).
+2. По семантическому ключу — для коротких подписей, общих для многих экранов:
+   `t("menu.watch")` (см. `TRANSLATIONS` ниже).
+
+Язык текущего апдейта берётся из `ContextVar` (`current_language()`), который
+выставляет `BanCheckMiddleware` для каждого message/callback-апдейта. Поэтому
+`lang` не нужно протаскивать через хендлеры, сервисы и сборщики клавиатур —
+достаточно обернуть текст в `t(...)`. Вне апдейта (воркеры, рассылки) язык
+задаётся явно: `set_current_language(...)` или контекст-менеджер
+`language_scope(...)`.
+
+Плейсхолдеры в шаблонах — именные, через `str.format`:
+`t("Баланс: {balance} монет", balance=user.balance)`.
 
 Как добавить новый язык:
 1. Добавь код в `SUPPORTED_LANGUAGES` (флаг + название языка на этом языке).
-2. Добавь словарь переводов в `TRANSLATIONS` (можно частичный — нет перевода
-   = автоматический фолбэк на русский, а для неизвестного ключа вернётся сам ключ).
+2. Добавь словарь переводов (можно частичный — нет перевода = фолбэк на русский,
+   а для неизвестного ключа вернётся сам ключ).
 3. Главное меню и обработчики подхватят новый язык сами: меню собирается через
-   `t(lang, "menu.<ключ>")`, а обработчики матчат текст кнопок по
-   `menu_button_variants()` из `app/keyboards.py`.
+   `t("menu.<ключ>")`, а обработчики матчат `F.text` по `menu_button_variants()`
+   из `app/keyboards.py`.
 """
 from __future__ import annotations
+
+import contextlib
+from contextvars import ContextVar
+
+# Массовые переводы «по исходному русскому тексту» вынесены в отдельный модуль,
+# чтобы файл ядра оставался обозримым (тысячи пар «русский → английский»).
+from app.i18n_en import EN_SOURCE
 
 DEFAULT_LANGUAGE = "ru"
 
@@ -22,6 +47,7 @@ SUPPORTED_LANGUAGES: dict[str, tuple[str, str]] = {
     "en": ("🇬🇧", "English"),
 }
 
+# Семантические переводы (короткие подписи меню, профиля, приветствия и т.п.).
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "ru": {
         # Кнопки главного меню
@@ -141,6 +167,33 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
 }
 
+# Английские переводы основного массива — по исходному русскому тексту.
+TRANSLATIONS["en"] = {**TRANSLATIONS["en"], **EN_SOURCE}
+
+# Язык текущего апдейта (выставляется BanCheckMiddleware для каждого
+# message/callback; в воркерах/рассылках задаётся явно через set_current_language).
+_current_lang: ContextVar[str] = ContextVar("bot_user_language", default=DEFAULT_LANGUAGE)
+
+
+def set_current_language(lang: str | None) -> None:
+    """Задать язык для текущего контекста (воркеры, рассылки, aiohttp-хендлеры)."""
+    _current_lang.set(normalize_language(lang))
+
+
+def current_language() -> str:
+    """Язык текущего апдейта/контекста (по умолчанию русский)."""
+    return _current_lang.get()
+
+
+@contextlib.contextmanager
+def language_scope(lang: str | None):
+    """Временно переключить язык текущего контекста (например, на получателя рассылки)."""
+    token = _current_lang.set(normalize_language(lang))
+    try:
+        yield
+    finally:
+        _current_lang.reset(token)
+
 
 def normalize_language(code: str | None) -> str:
     """Приводит код языка к поддерживаемому виду.
@@ -170,18 +223,30 @@ def language_label(code: str) -> str:
     return f"{flag} {name}".strip()
 
 
-def t(lang: str | None, key: str, **kwargs) -> str:
-    """Перевод строки `key` на язык `lang`.
+def t(lang: str | None = None, key: str | None = None, **kwargs) -> str:
+    """Перевод текста.
 
-    Порядок фолбэков: запрошенный язык -> русский -> сам ключ.
-    Именованные плейсхолдеры `{name}` подставляются через `str.format`.
+    Две формы вызова:
+    * `t("Привет!")` / `t("menu.watch")` — язык берётся из контекста апдейта
+      (см. `current_language()`);
+    * `t("en", "Привет!")` — язык задан явно.
+
+    Порядок фолбэков: запрошенный язык -> русский -> сам ключ (исходный текст).
+    Именные плейсхолдеры `{name}` подставляются через `str.format`.
     """
-    lang = normalize_language(lang)
+    if key is None:
+        # Форма t("ключ") — первый аргумент это ключ, язык из контекста.
+        key, lang = lang, None
+    if lang:
+        lang = normalize_language(lang)
+    else:
+        lang = current_language()
     text = TRANSLATIONS.get(lang, {}).get(key)
     if text is None:
         text = TRANSLATIONS.get(DEFAULT_LANGUAGE, {}).get(key)
     if text is None:
-        return key
+        # фолбэк — исходный русский текст (сам ключ), его тоже надо отформатировать
+        text = key
     if kwargs:
         try:
             return text.format(**kwargs)

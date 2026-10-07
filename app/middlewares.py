@@ -5,7 +5,10 @@ from aiogram.types import Message, CallbackQuery
 
 from app.db import async_session, is_db_unavailable_error
 from app.services import get_user
-from app.i18n import DEFAULT_LANGUAGE, get_user_language, normalize_language, t
+from app.i18n import (
+    DEFAULT_LANGUAGE, current_language, get_user_language,
+    normalize_language, set_current_language, t,
+)
 from app.logger import get_logger, log_warning, log_error
 
 logger = get_logger(__name__)
@@ -64,7 +67,9 @@ class BanCheckMiddleware(BaseMiddleware):
                     # БД недоступна — пользователя в базе нет, поэтому берём язык
                     # из language_code самого Telegram (фолбэк — русский).
                     tg_lang = getattr(event.from_user, "language_code", None) if event.from_user else None
-                    down_text = _db_down_text(normalize_language(tg_lang))
+                    tg_lang = normalize_language(tg_lang)
+                    set_current_language(tg_lang)
+                    down_text = _db_down_text(tg_lang)
                     try:
                         if isinstance(event, Message):
                             await event.answer(down_text)
@@ -74,7 +79,9 @@ class BanCheckMiddleware(BaseMiddleware):
                         pass
                 return
 
+            # Язык текущего апдейта — для всей цепочки обработчиков (i18n.t()).
             lang = get_user_language(user) if user else DEFAULT_LANGUAGE
+            set_current_language(lang)
 
             if user_banned:
                 if isinstance(event, Message):
