@@ -98,7 +98,7 @@ DONATION_ITEMS = [
 def donation_shop_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for item in DONATION_ITEMS:
-        label = f"{item['name']} — {item['price']:,} 🪙".replace(',', ' ')
+        label = t("{name} — {price} 🪙", name=t(item['name']), price=f"{item['price']:,}").replace(',', ' ')
         buttons.append([
             InlineKeyboardButton(text=label, callback_data=f"donate_buy:{item['id']}")
         ])
@@ -161,12 +161,7 @@ def _confirm_keyboard(style_id: int) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "donation_shop")
 async def show_donation_shop(callback: CallbackQuery):
-    text = (
-        "🛍 <b>Магазин привилегий</b>\n\n"
-        "Здесь ты можешь приобрести крутые привилегии за монеты.\n"
-        "Все цены указаны в монетах.\n\n"
-        "Выбери, что хочешь купить:"
-    )
+    text = t("🛍 <b>Магазин привилегий</b>\n\nЗдесь ты можешь приобрести крутые привилегии за монеты.\nВсе цены указаны в монетах.\n\nВыбери, что хочешь купить:")
     try:
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=donation_shop_keyboard())
     except Exception:
@@ -202,28 +197,24 @@ async def donate_buy(callback: CallbackQuery, state: FSMContext):
         has_perk = await has_active_perk(session, user.id, item["id"])
         extra_info = ""
         if has_perk:
-            extra_info = "\n⚠️ У тебя уже активна эта привилегия!\nПокупка <b>продлит</b> действие."
+            extra_info = t('\n⚠️ У тебя уже активна эта привилегия!\nПокупка <b>продлит</b> действие.')
 
         if not admin_free and user.balance < item["price"]:
             await callback.answer(
-                f"❌ Недостаточно монет. Нужно: {item['price']:,}".replace(',', ' '),
+                t('❌ Недостаточно монет. Нужно: {arg0:,}', arg0=item['price']).replace(',', ' '),
                 show_alert=True,
             )
             return
 
         if admin_free:
-            price_line = f"💰 Цена: <b>{item['price']:,} монет</b> <i>(🆓 бесплатно для админа)</i>\n".replace(',', ' ')
-            balance_line = f"💳 Твой баланс: {user.balance:,.0f}".replace(',', ' ')
+            price_line = t('💰 Цена: <b>{arg0:,} монет</b> <i>(🆓 бесплатно для админа)</i>\n', arg0=item['price']).replace(',', ' ')
+            balance_line = t('💳 Твой баланс: {balance:,.0f}', balance=user.balance).replace(',', ' ')
         else:
-            price_line = f"💰 Цена: <b>{item['price']:,} монет</b>\n".replace(',', ' ')
-            balance_line = f"💳 Твой баланс: {user.balance:,.0f} → {user.balance - item['price']:,.0f}".replace(',', ' ')
+            price_line = t('💰 Цена: <b>{arg0:,} монет</b>\n', arg0=item['price']).replace(',', ' ')
+            balance_line = t('💳 Твой баланс: {balance:,.0f} → {arg1:,.0f}', balance=user.balance, arg1=user.balance - item['price']).replace(',', ' ')
 
         text = (
-            f"🛍 <b>Покупка: {item['name']}</b>\n\n"
-            f"{item['description']}\n\n"
-            f"{price_line}"
-            f"⏳ Длительность: <b>{item['duration_days']} дней</b>\n"
-            f"{balance_line}" +
+            t('🛍 <b>Покупка: {arg0}</b>\n\n{arg1}\n\n{price_line}⏳ Длительность: <b>{arg3} дней</b>\n{balance_line}', arg0=t(item['name']), arg1=t(item['description']), price_line=price_line, arg3=item['duration_days'], balance_line=balance_line) +
             extra_info
         )
 
@@ -280,9 +271,9 @@ async def donate_confirm(callback: CallbackQuery, state: FSMContext):
 
         await state.clear()
 
-        free_badge = "\n🆓 <b>(Бесплатно для админа)</b>" if admin_free else ""
+        free_badge = t('\n🆓 <b>(Бесплатно для админа)</b>') if admin_free else ""
         await callback.message.edit_text(
-            t('✅ <b>Покупка успешна!</b>{free_badge}\n\nТы приобрели: <b>{arg1}</b>\nДействует до: <b>{arg2}</b>\n\nСпасибо за поддержку! 💙', free_badge=free_badge, arg1=item['name'], arg2=expires.strftime('%d.%m.%Y %H:%M')),
+            t('✅ <b>Покупка успешна!</b>{free_badge}\n\nТы приобрели: <b>{arg1}</b>\nДействует до: <b>{arg2}</b>\n\nСпасибо за поддержку! 💙', free_badge=free_badge, arg1=t(item['name']), arg2=expires.strftime('%d.%m.%Y %H:%M')),
             parse_mode="HTML",
         )
         await callback.answer(t('Привилегия активирована!'), show_alert=True)
@@ -306,13 +297,12 @@ async def _start_custom_nick_flow(callback: CallbackQuery, state: FSMContext):
         renew_note = ""
         if has_existing:
             renew_note = (
-                "\n⚠️ У тебя уже есть кастомный ник. "
-                "Покупка <b>продлит</b> его и даст возможность <b>выбрать новый стиль</b>.\n"
+                t('\n⚠️ У тебя уже есть кастомный ник. Покупка <b>продлит</b> его и даст возможность <b>выбрать новый стиль</b>.\n')
             )
 
         admin_free = await is_admin_free_eligible(session, callback.from_user.id, user)
 
-    price_note = "🆓 Бесплатно для админа" if admin_free else "💰 Цена: <b>500 монет</b>"
+    price_note = t("🆓 Бесплатно для админа") if admin_free else t("💰 Цена: <b>500 монет</b>")
 
     text = (
         "🎨 <b>Кастомный ник</b>\n\n"
@@ -340,7 +330,7 @@ async def _show_styles_in_category(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else "Ник"
+        user_name = get_display_name(user) if user else t('Ник')
 
     icon, cat_name = CATEGORIES[cat_id]
 
@@ -363,7 +353,7 @@ async def _styles_page(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else "Ник"
+        user_name = get_display_name(user) if user else t('Ник')
 
     icon, cat_name = CATEGORIES[cat_id]
 
@@ -391,7 +381,7 @@ async def _show_style_preview(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else "Ник"
+        user_name = get_display_name(user) if user else t('Ник')
 
     s = STYLES[style_id]
     icon, cat_name = CATEGORIES[s.cat_id]
@@ -502,7 +492,7 @@ async def _back_to_styles(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else "Ник"
+        user_name = get_display_name(user) if user else t('Ник')
 
     icon, cat_name = CATEGORIES[cat_id]
 
@@ -549,22 +539,22 @@ async def donate_my_perks(callback: CallbackQuery):
         perks = await get_active_perks(session, user.id)
 
         if not perks:
-            text = "🎖 <b>Мои привилегии</b>\n\nУ тебя пока нет активных привилегий.\nЗагляни в магазин!"
+            text = t('🎖 <b>Мои привилегии</b>\n\nУ тебя пока нет активных привилегий.\nЗагляни в магазин!')
         else:
-            text = "🎖 <b>Мои привилегии</b>\n\n"
+            text = t('🎖 <b>Мои привилегии</b>\n\n')
             for perk in perks:
                 # Название перка
                 if perk.perk_type == "custom_nick" and perk.style_id:
                     s = STYLES.get(perk.style_id)
-                    name = f"🎨 Кастомный ник — «{t(s.label)}»" if s else "🎨 Кастомный ник"
+                    name = t('🎨 Кастомный ник — «{arg0}»', arg0=t(s.label)) if s else t('🎨 Кастомный ник')
                 else:
                     from app.services import PERK_ICONS, PERK_NAMES
                     icon = PERK_ICONS.get(perk.perk_type, "🔹")
-                    name = PERK_NAMES.get(perk.perk_type, perk.perk_type)
+                    name = t(PERK_NAMES.get(perk.perk_type, perk.perk_type))
 
                 days_left = (perk.active_until - utc_now()).days
                 text += f"{name}\n"
-                text += f"   ⏰ Осталось: <b>{days_left} дн.</b> (до {perk.active_until.strftime('%d.%m')})\n\n"
+                text += t('   ⏰ Осталось: <b>{days_left} дн.</b> (до {arg1})\n\n', days_left=days_left, arg1=perk.active_until.strftime('%d.%m'))
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t('🛍 В магазин'), callback_data="donation_shop")],

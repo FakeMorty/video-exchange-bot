@@ -3689,7 +3689,7 @@ async def test_admin_poll_reward_is_idempotent_and_respects_closure():
         session.add(poll)
         await session.commit()
 
-        answered_poll, reward, error = await submit_admin_poll_response(
+        answered_poll, reward, error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[0]
         )
         assert answered_poll is not None
@@ -3701,7 +3701,7 @@ async def test_admin_poll_reward_is_idempotent_and_respects_closure():
         assert len(logs) == 1
         assert logs[0].source == "admin_poll_reward"
 
-        _poll, duplicate_reward, duplicate_error = await submit_admin_poll_response(
+        _poll, duplicate_reward, duplicate_error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[1]
         )
         assert duplicate_reward is None
@@ -3712,7 +3712,7 @@ async def test_admin_poll_reward_is_idempotent_and_respects_closure():
 
         poll.is_active = False
         await session.commit()
-        blocked_poll, blocked_reward, blocked_error = await submit_admin_poll_response(
+        blocked_poll, blocked_reward, blocked_error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[0]
         )
         assert blocked_poll is None
@@ -4314,7 +4314,7 @@ async def test_poll_reward_100_unanswered_lookup_and_promo_pool():
         assert any("100 монет" in it["text"] for it in poll_items)
 
         # После ответа награда 100 и опрос больше не предлагается
-        answered, reward, error = await submit_admin_poll_response(
+        answered, reward, error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[0]
         )
         assert reward == Decimal("100.00")

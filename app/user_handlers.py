@@ -228,9 +228,9 @@ async def _send_upload_notification(bot, chat_id, user_id):
         
         msg = ""
         if count > 0:
-            msg += f"✅ Отправлено на модерацию: <b>{count}</b> файлов!\n"
+            msg += t('✅ Отправлено на модерацию: <b>{count}</b> файлов!\n', count=count)
         if dup > 0:
-            msg += f"⚠️ Пропущено дубликатов: <b>{dup}</b>."
+            msg += t('⚠️ Пропущено дубликатов: <b>{dup}</b>.', dup=dup)
             
         if msg:
             try:
@@ -396,18 +396,18 @@ async def require_nickname(message: Message, user) -> bool:
         return True
     needs_fix = bool(user.nickname_set and user.display_name)
     title = (
-        "⚠️ <b>Нужно сменить ник на нормальный!</b>"
+        t('⚠️ <b>Нужно сменить ник на нормальный!</b>')
         if needs_fix
-        else "⚠️ <b>Необходимо установить ник!</b>"
+        else t('⚠️ <b>Необходимо установить ник!</b>')
     )
     extra = (
-        "\nНик вида <code>User&lt;id&gt;</code>, точки, ? и слишком короткие ники запрещены."
+        t('\nНик вида <code>User&lt;id&gt;</code>, точки, ? и слишком короткие ники запрещены.')
         if needs_fix
         else ""
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✏️ Сменить ник" if needs_fix else "✏️ Установить ник",
+            text=t('✏️ Сменить ник') if needs_fix else t('✏️ Установить ник'),
             callback_data="set_nickname_start"
         )]
     ])
@@ -432,18 +432,16 @@ def _build_referral_milestone_text(refs: int) -> str:
     next_goal = None
     for level, cfg in milestones:
         if refs >= level:
-            completed.append(f"• {level} друзей — {_fmt_coins(cfg.get('amount', 0))} монет")
+            completed.append(t('• {level} друзей — {arg1} монет', level=level, arg1=_fmt_coins(cfg.get('amount', 0))))
         elif next_goal is None:
             next_goal = (level, cfg)
     text = ""
     if completed:
-        text += "\n\n🏁 <b>Открытые этапы:</b>\n" + "\n".join(completed[-3:])
+        text += t('\n\n🏁 <b>Открытые этапы:</b>\n') + "\n".join(completed[-3:])
     if next_goal:
         need_more = max(0, next_goal[0] - refs)
         text += (
-            f"\n\n🎯 <b>Следующая цель:</b> {next_goal[0]} друзей\n"
-            f"Награда: <b>{_fmt_coins(next_goal[1].get('amount', 0))}</b> монет\n"
-            f"Осталось пригласить: <b>{need_more}</b>"
+            t('\n\n🎯 <b>Следующая цель:</b> {arg0} друзей\nНаграда: <b>{arg1}</b> монет\nОсталось пригласить: <b>{need_more}</b>', arg0=next_goal[0], arg1=_fmt_coins(next_goal[1].get('amount', 0)), need_more=need_more)
         )
     return text
 
@@ -494,7 +492,7 @@ def _best_event_badge(events: list, target: str) -> str:
         return ""
 
     best_ev = max(relevant, key=lambda e: e.discount_percent)
-    return f"\n🔥 <b>АКЦИЯ: {escape(best_ev.name)} — скидка {best_ev.discount_percent}%!</b>"
+    return t('\n🔥 <b>АКЦИЯ: {arg0} — скидка {discount_percent}%!</b>', arg0=escape(best_ev.name), discount_percent=best_ev.discount_percent)
 
 
 async def _level_up_check(session, user, message_or_callback):
@@ -526,7 +524,7 @@ async def set_nickname_start(callback: CallbackQuery, state: FSMContext):
             return
         # Первая установка или замена placeholder/невалидного ника — бесплатно
         is_free = (not user.nickname_set) or (not has_valid_nickname(user))
-        cost_text = "бесплатно" if is_free else f"{NICKNAME_CHANGE_COST} монет"
+        cost_text = t('бесплатно') if is_free else t('{NICKNAME_CHANGE_COST} монет', NICKNAME_CHANGE_COST=NICKNAME_CHANGE_COST)
 
     await state.set_state(NicknameState.waiting_nickname)
     await callback.message.answer(
@@ -852,7 +850,7 @@ async def _show_blocked_authors(
     buttons = []
     for author, reason in entries:
         author_name = " ".join(get_display_name(author).split())[:42] or f"ID {author.telegram_id}"
-        reason_label = BLOCK_AUTHOR_REASONS.get(reason or "other", "Другое")
+        reason_label = t(BLOCK_AUTHOR_REASONS.get(reason or "other", "Другое"))
         buttons.append([
             InlineKeyboardButton(
                 text=f"✅ {author_name} · {reason_label}",
@@ -860,23 +858,21 @@ async def _show_blocked_authors(
             )
         ])
 
-    search_note = f"\n🔎 Поиск: <code>{escape(search)}</code>" if search else ""
+    search_note = t('\n🔎 Поиск: <code>{arg0}</code>', arg0=escape(search)) if search else ""
     if not entries:
         text = (
-            "🚫 <b>Заблокированные авторы</b>\n\n"
+            t('🚫 <b>Заблокированные авторы</b>\n\n')
             + (
-                "По этому запросу авторов не найдено."
+                t('По этому запросу авторов не найдено.')
                 if search else
-                "Ты ещё никого не заблокировал. Здесь появятся авторы, скрытые тобой из ленты."
+                t('Ты ещё никого не заблокировал. Здесь появятся авторы, скрытые тобой из ленты.')
             )
         )
     else:
         first = page * _BLOCKED_AUTHORS_PAGE_SIZE + 1
         last = first + len(entries) - 1
         text = (
-            "🚫 <b>Заблокированные авторы</b>\n\n"
-            "Нажми на автора, чтобы снова видеть его контент в ленте.\n\n"
-            f"Показано: <b>{first}–{last}</b> из <b>{total}</b>."
+            t('🚫 <b>Заблокированные авторы</b>\n\nНажми на автора, чтобы снова видеть его контент в ленте.\n\nПоказано: <b>{first}–{last}</b> из <b>{total}</b>.', first=first, last=last, total=total)
         )
     text += search_note
 
@@ -976,7 +972,7 @@ async def cb_unblock_author(callback: CallbackQuery, state: FSMContext):
         success = await unblock_user(session, user.id, author_id)
 
     await callback.answer(
-        "Автор разблокирован." if success else "Этот автор уже разблокирован.",
+        t('Автор разблокирован.') if success else t('Этот автор уже разблокирован.'),
         show_alert=True,
     )
     await _show_blocked_authors(callback, state, page)
@@ -1040,16 +1036,7 @@ async def show_level(message: Message, state: FSMContext):
         bar = "█" * progress + "░" * (10 - progress)
 
         text = (
-            f"🏆 <b>Уровень: {level}</b>\n\n"
-            f"XP: {xp_current}/{xp_needed}\n"
-            f"[{bar}]\n\n"
-            f"📈 Как получить XP:\n"
-            f"• Просмотр видео: +{XP_PER_WATCH} XP\n"
-            f"• Загрузка контента: +{XP_PER_UPLOAD} XP\n"
-            f"• Оценка видео: +{XP_PER_RATING} XP\n"
-            f"• Комментарий: +{XP_PER_COMMENT} XP\n"
-            f"• Реакция: +{XP_PER_REACTION} XP\n"
-            f"• Игра: +{XP_PER_GAME} XP"
+            t('🏆 <b>Уровень: {level}</b>\n\nXP: {xp_current}/{xp_needed}\n[{bar}]\n\n📈 Как получить XP:\n• Просмотр видео: +{XP_PER_WATCH} XP\n• Загрузка контента: +{XP_PER_UPLOAD} XP\n• Оценка видео: +{XP_PER_RATING} XP\n• Комментарий: +{XP_PER_COMMENT} XP\n• Реакция: +{XP_PER_REACTION} XP\n• Игра: +{XP_PER_GAME} XP', level=level, xp_current=xp_current, xp_needed=xp_needed, bar=bar, XP_PER_WATCH=XP_PER_WATCH, XP_PER_UPLOAD=XP_PER_UPLOAD, XP_PER_RATING=XP_PER_RATING, XP_PER_COMMENT=XP_PER_COMMENT, XP_PER_REACTION=XP_PER_REACTION, XP_PER_GAME=XP_PER_GAME)
         )
         await message.answer(text, parse_mode="HTML")
 
@@ -1089,11 +1076,11 @@ async def show_vip(message: Message, state: FSMContext):
                 # Admin free badge должен учитывать runtime-настройку из БД
                 admin_free_badge = ""
                 if await is_admin_free_eligible(session, message.from_user.id, user):
-                    admin_free_badge = "\n🆓 <b>ADMIN FREE — бесплатно!</b>"
+                    admin_free_badge = t('\n🆓 <b>ADMIN FREE — бесплатно!</b>')
 
                 sale_badge = _best_event_badge(events, "vip") if events else ""
                 if not sale_badge and sale and sale.applies_to in ("all", "vip"):
-                    sale_badge = f"\n🔥 <b>АКЦИЯ: скидка {sale.discount_percent}%!</b>"
+                    sale_badge = t('\n🔥 <b>АКЦИЯ: скидка {discount_percent}%!</b>', discount_percent=sale.discount_percent)
                 
                 from app.services import get_runtime_value
                 from app.config import VIP_PRICE_RUB
@@ -1142,8 +1129,8 @@ async def buy_vip(callback: CallbackQuery):
             )
             await session.commit()
             await callback.message.answer_invoice(
-                title="VIP статус",
-                description=f"VIP на {VIP_DURATION_DAYS} дней",
+                title=t('VIP статус'),
+                description=t('VIP на {VIP_DURATION_DAYS} дней', VIP_DURATION_DAYS=VIP_DURATION_DAYS),
                 payload=payload,
                 currency="XTR",
                 prices=[LabeledPrice(label="VIP", amount=vip_price_final)]
@@ -1252,14 +1239,12 @@ async def watch_video_content(callback: CallbackQuery):
                 if starter_ok and "starterpack" in packs:
                     sp = packs["starterpack"]
                     suggested_text = (
-                        f"\n🎁 <b>Первое пополнение — старт-пак:</b> {sp['coins']} монет "
-                        f"всего за {sp['stars']} Stars! <i>(один раз и только для тебя)</i>"
+                        t('\n🎁 <b>Первое пополнение — старт-пак:</b> {arg0} монет всего за {arg1} Stars! <i>(один раз и только для тебя)</i>', arg0=sp['coins'], arg1=sp['stars'])
                     )
                 elif suggested_pack:
                     approx_views = int(float(suggested_pack.get("coins", 0)) // max(float(cost), 1.0))
                     suggested_text = (
-                        f"\n⚡ <b>Быстрый вариант:</b> {suggested_pack['coins']} монет за {suggested_pack['stars']} Stars"
-                        f" — хватит примерно на <b>{approx_views}</b> просмотров."
+                        t('\n⚡ <b>Быстрый вариант:</b> {arg0} монет за {arg1} Stars — хватит примерно на <b>{approx_views}</b> просмотров.', arg0=suggested_pack['coins'], arg1=suggested_pack['stars'], approx_views=approx_views)
                     )
                 if await should_show_low_balance_hint(session, user):
                     await mark_low_balance_hint_shown(session, user.id)
@@ -1299,7 +1284,7 @@ async def watch_video_content(callback: CallbackQuery):
 
                 try:
                     uploader = await get_user_by_id(session, video.uploader_user_id)
-                    uploader_name = await get_styled_display_name(session, uploader) if uploader else "Автор"
+                    uploader_name = await get_styled_display_name(session, uploader) if uploader else t('Автор')
 
                     await callback.message.answer_video(
                         video.telegram_file_id,
@@ -1362,7 +1347,7 @@ async def watch_video_content(callback: CallbackQuery):
             # текст и ВСЕГДА — кнопки продолжения.
             if last_send_error:
                 logger.warning(
-                    "watch_video_content: %d видео не отправилось, last_error=%s",
+                    t('watch_video_content: %d видео не отправилось, last_error=%s'),
                     videos_tried, last_send_error,
                 )
                 await callback.message.answer(
@@ -1402,20 +1387,16 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
         if event.applies_vip:
             applies.append("VIP")
         if event.applies_coins:
-            applies.append("монеты")
+            applies.append(t('монеты'))
         if event.applies_lootbox:
-            applies.append("лутбоксы")
+            applies.append(t('лутбоксы'))
         if event.applies_cases:
-            applies.append("кейсы")
-        applies_text = ", ".join(applies) if applies else "всё"
+            applies.append(t('кейсы'))
+        applies_text = ", ".join(applies) if applies else t('всё')
         end_text = event.end_date.strftime("%d.%m")
         
         ad_text = (
-            f"🎉 <b>Акция: {event.name}</b>\n\n"
-            f"{event.description}\n\n"
-            f"🔥 Скидка <b>{event.discount_percent}%</b> на {applies_text}!\n"
-            f"⏰ До {end_text}\n\n"
-            f"Скорее в магазин, пока действует акция!"
+            t('🎉 <b>Акция: {name}</b>\n\n{description}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ До {end_text}\n\nСкорее в магазин, пока действует акция!', name=event.name, description=event.description, discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
         )
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1438,10 +1419,7 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
         if offer:
             await mark_offer_shown(session, user.id, offer.id, forced=True)
             ad_text = (
-                f"📢 <b>Рекомендация</b>\n\n"
-                f"<b>{offer.title}</b>\n"
-                f"{offer.description}\n\n"
-                f"💰 За подписку получи <b>{offer.reward_preview} монет</b>!"
+                t('📢 <b>Рекомендация</b>\n\n<b>{title}</b>\n{description}\n\n💰 За подписку получи <b>{reward_preview} монет</b>!', title=offer.title, description=offer.description, reward_preview=offer.reward_preview)
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('👉 Подписаться'), url=offer.channel_url)],
@@ -1465,9 +1443,7 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
             options = []
         reward = int(Decimal(str(poll.reward or 100)))
         ad_text = (
-            "📊 <b>Опрос от администрации</b>\n\n"
-            f"{escape(poll.question)}\n\n"
-            f"Пройди опрос один раз и получи <b>{reward} монет</b>."
+            t('📊 <b>Опрос от администрации</b>\n\n{arg0}\n\nПройди опрос один раз и получи <b>{reward} монет</b>.', arg0=escape(poll.question), reward=reward)
         )
         kb = poll_answer_keyboard(poll.poll_type, poll.id, options)
         await callback.message.answer(ad_text, parse_mode="HTML", reply_markup=kb)
@@ -1516,7 +1492,7 @@ async def watch_photo_content(callback: CallbackQuery):
                 photos_tried += 1
                 try:
                     uploader = await get_user_by_id(session, photo.uploader_user_id)
-                    uploader_name = await get_styled_display_name(session, uploader) if uploader else "Автор"
+                    uploader_name = await get_styled_display_name(session, uploader) if uploader else t('Автор')
 
                     await callback.message.answer_photo(
                         photo.telegram_file_id,
@@ -1546,7 +1522,7 @@ async def watch_photo_content(callback: CallbackQuery):
             # Цикл завершился без удачной отправки: понятный текст + кнопки выхода.
             if last_send_error:
                 logger.warning(
-                    "watch_photo_content: %d фото не отправилось, last_error=%s",
+                    t('watch_photo_content: %d фото не отправилось, last_error=%s'),
                     photos_tried, last_send_error,
                 )
                 await callback.message.answer(
@@ -1665,7 +1641,7 @@ async def cb_rate(callback: CallbackQuery):
             return
         ok, is_new, err = await rate_video(session, user.id, video_id, rating)
         if not ok:
-            await callback.answer(err or "Не удалось оценить видео.", show_alert=True)
+            await callback.answer(err or t('Не удалось оценить видео.'), show_alert=True)
             return
         if is_new:
             xp_mult = await get_xp_multiplier(session, user.id)
@@ -1691,9 +1667,9 @@ async def cb_comments(callback: CallbackQuery):
             .limit(10)
         )).scalars().all()
 
-        text = f"💬 <b>Комментарии к видео #{video_id}</b>\n\n"
+        text = t('💬 <b>Комментарии к видео #{video_id}</b>\n\n', video_id=video_id)
         if not comments:
-            text += "Комментариев пока нет. Будьте первым!"
+            text += t('Комментариев пока нет. Будьте первым!')
         else:
             for c in comments:
                 u = await get_user_by_id(session, c.user_id)
@@ -2014,15 +1990,12 @@ async def btn_referrals(message: Message, state: FSMContext):
 async def _show_store(target: Message, user: User) -> None:
     """Единая витрина: пополнение, VIP и покупка привилегий за монеты."""
     vip_status = (
-        f"активен до {user.vip_until.strftime('%d.%m.%Y')}"
+        t('активен до {arg0}', arg0=user.vip_until.strftime('%d.%m.%Y'))
         if is_vip(user) else
-        "не активен"
+        t('не активен')
     )
     text = (
-        "🛍 <b>Магазин</b>\n\n"
-        f"💰 Баланс: <b>{_fmt_coins(user.balance)}</b> монет\n"
-        f"👑 VIP: <b>{vip_status}</b>\n\n"
-        "Выберите нужный раздел: пополнение монет, VIP или оформление профиля."
+        t('🛍 <b>Магазин</b>\n\n💰 Баланс: <b>{arg0}</b> монет\n👑 VIP: <b>{vip_status}</b>\n\nВыберите нужный раздел: пополнение монет, VIP или оформление профиля.', arg0=_fmt_coins(user.balance), vip_status=vip_status)
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t('⭐ Пополнить монеты'), callback_data="show_stars_menu")],
@@ -2073,21 +2046,14 @@ async def cb_store_vip(callback: CallbackQuery):
         discount_percent = max(0, min(100, round((1 - discount) * 100)))
         if is_vip(user):
             text = (
-                f"👑 <b>VIP активен до {user.vip_until.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
-                f"• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n"
-                "• Фото без дневного лимита\n"
-                f"• Скидка {discount_percent}% на просмотр"
+                t('👑 <b>VIP активен до {arg0}</b>\n\n• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n• Фото без дневного лимита\n• Скидка {discount_percent}% на просмотр', arg0=user.vip_until.strftime('%d.%m.%Y %H:%M'), VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, discount_percent=discount_percent)
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('🛍 В магазин'), callback_data="store_menu")],
             ])
         else:
             text = (
-                "👑 <b>VIP на 30 дней</b>\n\n"
-                f"Стоимость: <b>{vip_price} Stars</b>\n\n"
-                f"• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n"
-                "• Фото без дневного лимита\n"
-                f"• Скидка {discount_percent}% на просмотр"
+                t('👑 <b>VIP на 30 дней</b>\n\nСтоимость: <b>{vip_price} Stars</b>\n\n• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n• Фото без дневного лимита\n• Скидка {discount_percent}% на просмотр', vip_price=vip_price, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, discount_percent=discount_percent)
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('👑 Оформить за {vip_price} Stars', vip_price=vip_price), callback_data="buy_vip")],
@@ -2116,14 +2082,10 @@ async def _show_legacy_donationalerts(message: Message, state: FSMContext):
         return
 
     text = (
-        "💳 <b>Пополнение через DonationAlerts</b>\n\n"
-        "Выберите фиксированный пакет. После выбора бот создаст одноразовый "
-        "код заказа: вставьте <b>только этот код</b> в поле «Сообщение» на странице оплаты. "
-        "Так платёж автоматически и безопасно привяжется к вашему аккаунту.\n\n"
-        "⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом."
+        t('💳 <b>Пополнение через DonationAlerts</b>\n\nВыберите фиксированный пакет. После выбора бот создаст одноразовый код заказа: вставьте <b>только этот код</b> в поле «Сообщение» на странице оплаты. Так платёж автоматически и безопасно привяжется к вашему аккаунту.\n\n⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом.')
     )
     rows = [
-        [InlineKeyboardButton(text=f"{p_data['amount']} ₽ — {p_data['title']}", callback_data=f"da_order:{p_id}")]
+        [InlineKeyboardButton(text=t("{amount} ₽ — {title}", amount=p_data['amount'], title=t(p_data['title'])), callback_data=f"da_order:{p_id}")]
         for p_id, p_data in rub_packages.items()
     ]
     rows.append([InlineKeyboardButton(text=t('🌐 Telegram Stars (резерв)'), callback_data="show_stars_menu")])
@@ -2153,7 +2115,7 @@ async def cb_create_donationalerts_order(callback: CallbackQuery):
 
     expires_at = order.expires_at.strftime("%H:%M")
     await callback.message.answer(
-        t('✅ <b>Заказ создан: {arg0}</b>\n\nСумма: <b>{arg1} ₽</b>\nКод заказа: <code>{order_code}</code>\n\n1️⃣ Нажмите «Перейти к оплате».\n2️⃣ Укажите точную сумму заказа.\n3️⃣ Вставьте код в поле «Сообщение» DonationAlerts.\n\nКод действует до <b>{expires_at}</b>. После подтверждённой оплаты награда зачислится автоматически.', arg0=package['title'], arg1=int(package['amount']), order_code=order.order_code, expires_at=expires_at),
+        t('✅ <b>Заказ создан: {arg0}</b>\n\nСумма: <b>{arg1} ₽</b>\nКод заказа: <code>{order_code}</code>\n\n1️⃣ Нажмите «Перейти к оплате».\n2️⃣ Укажите точную сумму заказа.\n3️⃣ Вставьте код в поле «Сообщение» DonationAlerts.\n\nКод действует до <b>{expires_at}</b>. После подтверждённой оплаты награда зачислится автоматически.', arg0=t(package['title']), arg1=int(package['amount']), order_code=order.order_code, expires_at=expires_at),
         parse_mode="HTML",
         reply_markup=donationalerts_order_keyboard(order.order_code),
     )
@@ -2228,11 +2190,11 @@ async def cb_buy_pack(callback: CallbackQuery):
         )
 
     await callback.message.answer_invoice(
-        title=f"Покупка {pack['title']}",
-        description=f"{pack['coins']} монет за {current_pack['stars']} Stars",
+        title=t('Покупка {arg0}', arg0=t(pack['title'])),
+        description=t('{arg0} монет за {arg1} Stars', arg0=pack['coins'], arg1=current_pack['stars']),
         payload=payment.payload,
         currency="XTR",
-        prices=[LabeledPrice(label=pack['title'], amount=current_pack['stars'])]
+        prices=[LabeledPrice(label=t(pack['title']), amount=current_pack['stars'])]
     )
     await callback.answer()
 
@@ -2320,16 +2282,12 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
     for p_id, p_data in packs.items():
         # Используем название пакета, чтобы старт-пак не выглядел как второй
         # «500 монет» по иной цене рядом с обычным пакетом на те же 500 монет.
-        buttons.append([InlineKeyboardButton(text=f"⭐️ {p_data['title']} ({p_data['stars']} Stars)", callback_data=f"buy:{p_id}")])
+        buttons.append([InlineKeyboardButton(text=t("⭐️ {title} ({stars} Stars)", title=t(p_data['title']), stars=p_data['stars']), callback_data=f"buy:{p_id}")])
     buttons.append([InlineKeyboardButton(text=t('✏️ Другая сумма (Stars)'), callback_data="buy_custom_stars")])
     buttons.append([InlineKeyboardButton(text=t('👈 Назад к выгодной оплате'), callback_data="btn_buy_callback")])
 
     text = (
-        "⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n"
-        "⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, "
-        "цена при оплате через Stars <b>в 9 раз выше</b>, чем через DonationAlerts.\n\n"
-        "💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 9 раз дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\n"
-        "Выберите пакет Stars:"
+        t('⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, цена при оплате через Stars <b>в 9 раз выше</b>, чем через DonationAlerts.\n\n💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 9 раз дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\nВыберите пакет Stars:')
     )
     await callback.message.answer(
         text,
@@ -2406,8 +2364,8 @@ async def process_custom_stars(message: Message, state: FSMContext):
         coins = int(await stars_to_coins_amount(session, stars))
 
     await message.answer_invoice(
-        title=f"Покупка {coins} монет",
-        description=f"{coins} монет за {billed_stars} Stars",
+        title=t('Покупка {coins} монет', coins=coins),
+        description=t('{coins} монет за {billed_stars} Stars', coins=coins, billed_stars=billed_stars),
         payload=payment.payload,
         currency="XTR",
         prices=[LabeledPrice(label=t('{coins} монет', coins=coins), amount=billed_stars)]
@@ -2614,9 +2572,7 @@ async def successful_payment(message: Message):
             rarity = rarity_or_err
             icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
             await message.answer(
-                f"{icon} <b>Лутбокс открыт!</b>\n\n"
-                f"Выигрыш: <b>+{reward:,.0f}</b> монет\n"
-                f"До гарантированного Редкого+: <b>{new_pity}</b>".replace(',', ' '),
+                t('{icon} <b>Лутбокс открыт!</b>\n\nВыигрыш: <b>+{reward:,.0f}</b> монет\nДо гарантированного Редкого+: <b>{new_pity}</b>', icon=icon, reward=reward, new_pity=new_pity).replace(',', ' '),
                 parse_mode="HTML",
             )
     elif payload.startswith("user_offer_"):
@@ -2715,7 +2671,7 @@ def _lootbox_kb(coin_price: Decimal | None = None, star_price: int | None = None
         
     kb.extend([
         [InlineKeyboardButton(
-            text=f"🪙 Обычный кейс ({coin_price:,.0f} монет)".replace(',', ' '),
+            text=t('🪙 Обычный кейс ({coin_price:,.0f} монет)', coin_price=coin_price).replace(',', ' '),
             callback_data="lootbox_buy:coins:common"
         )],
         [InlineKeyboardButton(
@@ -2759,20 +2715,18 @@ async def lootbox_menu(callback: CallbackQuery):
     base_star_price = int(LOOTBOX_STAR_PRICE)
     star_price = max(1, int(math.ceil(base_star_price * (1 - discount)))) if discount > 0 else base_star_price
     
-    pity_text = f"\n✨ До гарантированного <b>Редкого+</b>: <b>{pity}</b> прокрутов."
+    pity_text = t('\n✨ До гарантированного <b>Редкого+</b>: <b>{pity}</b> прокрутов.', pity=pity)
     
     text = (
-        "🎁 <b>Лутбоксы</b>\n\n"
-        f"Обычный кейс: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n".replace(',', ' ') +
-        "Внутри — случайный выигрыш монет.\n" +
-        pity_text + "\n\n"
-        "🎨 <b>Кейс ников</b>: шанс 50% получить кастомный стиль или 50% вернуть монеты.\n"
+        t('🎁 <b>Лутбоксы</b>\n\nОбычный кейс: <b>{coin_price:,.0f}</b> монет или <b>{star_price}</b> Stars.\n', coin_price=coin_price, star_price=star_price).replace(',', ' ') +
+        t('Внутри — случайный выигрыш монет.\n') +
+        pity_text + t('\n\n🎨 <b>Кейс ников</b>: шанс 50% получить кастомный стиль или 50% вернуть монеты.\n')
     )
     
     if level < 10:
-        text += "\n🔓 <i>Элитный кейс откроется на 10 уровне.</i>"
+        text += t('\n🔓 <i>Элитный кейс откроется на 10 уровне.</i>')
     if level < 20:
-        text += "\n🔓 <i>Легендарный кейс откроется на 20 уровне.</i>"
+        text += t('\n🔓 <i>Легендарный кейс откроется на 20 уровне.</i>')
     
     await callback.message.answer(
         text,
@@ -2826,9 +2780,7 @@ async def lootbox_buy(callback: CallbackQuery):
                 await session.commit()
                 icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
                 await callback.message.answer(
-                    f"{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\n"
-                    f"Выигрыш: <b>+{reward:,.0f}</b> монет\n"
-                    f"До гарантированного Редкого+: <b>{10 - new_pity}</b>".replace(',', ' '),
+                    t('{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\nВыигрыш: <b>+{reward:,.0f}</b> монет\nДо гарантированного Редкого+: <b>{arg2}</b>', icon=icon, reward=reward, arg2=10 - new_pity).replace(',', ' '),
                     parse_mode="HTML",
                     reply_markup=_lootbox_kb(coin_price, display_star_price, user.level),
                 )
@@ -2842,9 +2794,7 @@ async def lootbox_buy(callback: CallbackQuery):
         rarity = rarity_or_err
         icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
         await callback.message.answer(
-            f"{icon} <b>Лутбокс открыт!</b>\n\n"
-            f"Выигрыш: <b>+{reward:,.0f}</b> монет\n"
-            f"До гарантированного Редкого+: <b>{new_pity}</b>".replace(',', ' '),
+            t('{icon} <b>Лутбокс открыт!</b>\n\nВыигрыш: <b>+{reward:,.0f}</b> монет\nДо гарантированного Редкого+: <b>{new_pity}</b>', icon=icon, reward=reward, new_pity=new_pity).replace(',', ' '),
             parse_mode="HTML",
             reply_markup=_lootbox_kb(coin_price, display_star_price, user.level),
         )
@@ -2880,8 +2830,7 @@ async def lootbox_buy(callback: CallbackQuery):
                 await session.commit()
                 icon = {"common": "⚪", "rare": "🔵", "epic": "🟣", "jackpot": "🟡"}.get(rarity, "🎁")
                 await callback.message.answer(
-                    f"{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\n"
-                    f"Выигрыш: <b>+{reward:,.0f}</b> монет".replace(',', ' '),
+                    t('{icon} <b>Лутбокс открыт!</b> (🆓 ADMIN FREE)\n\nВыигрыш: <b>+{reward:,.0f}</b> монет', icon=icon, reward=reward).replace(',', ' '),
                     parse_mode="HTML",
                     reply_markup=_lootbox_kb(to_decimal(LOOTBOX_COIN_PRICE), base_star_price),
                 )
@@ -2898,8 +2847,8 @@ async def lootbox_buy(callback: CallbackQuery):
             )
             await session.commit()
         await callback.message.answer_invoice(
-            title="Лутбокс",
-            description=f"Открытие лутбокса за {star_price} Stars",
+            title=t('Лутбокс'),
+            description=t('Открытие лутбокса за {star_price} Stars', star_price=star_price),
             payload=payload,
             currency="XTR",
             prices=[LabeledPrice(label=t('Лутбокс'), amount=star_price)],
@@ -2967,7 +2916,7 @@ def _styles_list_kb(cat_id: int, excluded_ids: list[int]) -> InlineKeyboardMarku
     # Управление всей категорией
     cat_ids = [s.id for s in cat_styles]
     all_excluded = all(sid in excluded_ids for sid in cat_ids)
-    cat_toggle_text = "✅ Включить все" if all_excluded else "❌ Исключить все"
+    cat_toggle_text = t('✅ Включить все') if all_excluded else t('❌ Исключить все')
     
     kb.append([InlineKeyboardButton(text=cat_toggle_text, callback_data=f"styles_case_toggle_cat_all:{cat_id}")])
     kb.append([InlineKeyboardButton(text=t('◀️ К категориям'), callback_data="styles_lootbox_menu_refresh")])
@@ -2986,14 +2935,7 @@ async def styles_lootbox_menu(callback: CallbackQuery, state: FSMContext):
     price = (Decimal("250") * Decimal(total) / Decimal(remaining)).quantize(Decimal("1"), rounding=ROUND_DOWN)
     
     text = (
-        "🎨 <b>Кейс ников</b>\n\n"
-        "В этом кейсе ты можешь выбить кастомный стиль для ника на 7 дней.\n"
-        "• Шанс 50%: Рандомный стиль\n"
-        "• Шанс 50%: Утешительный приз 10-250 монет\n\n"
-        f"<b>Текущая цена:</b> {price:.0f} монет\n"
-        f"<b>Доступно стилей:</b> {remaining}/{total}\n\n"
-        "Выбери категорию ниже, чтобы настроить доступные стили точечно. "
-        "Удаление стилей повышает шанс на остальные, но <b>увеличивает цену</b>."
+        t('🎨 <b>Кейс ников</b>\n\nВ этом кейсе ты можешь выбить кастомный стиль для ника на 7 дней.\n• Шанс 50%: Рандомный стиль\n• Шанс 50%: Утешительный приз 10-250 монет\n\n<b>Текущая цена:</b> {price:.0f} монет\n<b>Доступно стилей:</b> {remaining}/{total}\n\nВыбери категорию ниже, чтобы настроить доступные стили точечно. Удаление стилей повышает шанс на остальные, но <b>увеличивает цену</b>.', price=price, remaining=remaining, total=total)
     )
     
     await callback.message.answer(text, parse_mode="HTML", reply_markup=_styles_case_kb(excluded_ids, price))
@@ -3012,10 +2954,7 @@ async def styles_lootbox_menu_refresh(callback: CallbackQuery, state: FSMContext
     price = (Decimal("250") * Decimal(total) / Decimal(remaining)).quantize(Decimal("1"), rounding=ROUND_DOWN)
     
     text = (
-        "🎨 <b>Кейс ников</b>\n\n"
-        f"<b>Текущая цена:</b> {price:.0f} монет\n"
-        f"<b>Доступно стилей:</b> {remaining}/{total}\n\n"
-        "Выбери категорию для точечной настройки:"
+        t('🎨 <b>Кейс ников</b>\n\n<b>Текущая цена:</b> {price:.0f} монет\n<b>Доступно стилей:</b> {remaining}/{total}\n\nВыбери категорию для точечной настройки:', price=price, remaining=remaining, total=total)
     )
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_styles_case_kb(excluded_ids, price))
@@ -3033,8 +2972,7 @@ async def styles_case_view_cat(callback: CallbackQuery, state: FSMContext):
     name = t(name)
     
     text = (
-        f"{icon} <b>Категория: {name}</b>\n\n"
-        "Нажми на стиль, чтобы включить или исключить его из кейса."
+        t('{icon} <b>Категория: {name}</b>\n\nНажми на стиль, чтобы включить или исключить его из кейса.', icon=icon, name=name)
     )
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_styles_list_kb(cat_id, excluded_ids))
@@ -3124,15 +3062,11 @@ async def styles_case_open(callback: CallbackQuery, state: FSMContext):
         preview = style_inline_preview(reward)
         label = style_label(reward)
         msg = (
-            f"✨ <b>ВЫ ВЫИГРАЛИ СТИЛЬ!</b>\n\n"
-            f"Название: <b>{label}</b>\n"
-            f"Вид: <code>{preview}</code>\n\n"
-            f"Стиль активирован на 7 дней! Ты можешь увидеть его в профиле."
+            t('✨ <b>ВЫ ВЫИГРАЛИ СТИЛЬ!</b>\n\nНазвание: <b>{label}</b>\nВид: <code>{preview}</code>\n\nСтиль активирован на 7 дней! Ты можешь увидеть его в профиле.', label=label, preview=preview)
         )
     else:
         msg = (
-            f"🪙 <b>Утешительный приз!</b>\n\n"
-            f"Тебе начислено <b>{reward:.0f} монет</b>."
+            t('🪙 <b>Утешительный приз!</b>\n\nТебе начислено <b>{reward:.0f} монет</b>.', reward=reward)
         )
         
     await callback.message.answer(msg, parse_mode="HTML")
@@ -3214,18 +3148,12 @@ async def cb_offer_open(callback: CallbackQuery):
         await callback.answer(t('У оффера некорректная ссылка. Сообщи администратору.'), show_alert=True)
         return
     verify_text = (
-        "Финальная награда выдаётся после автоматической проверки участия."
+        t('Финальная награда выдаётся после автоматической проверки участия.')
         if target_meta["auto_verify"]
-        else "Финальная награда выдаётся по кнопке подтверждения: для ботов, приватных инвайтов и некоторых чатов авто-проверка недоступна."
+        else t('Финальная награда выдаётся по кнопке подтверждения: для ботов, приватных инвайтов и некоторых чатов авто-проверка недоступна.')
     )
     text = (
-        f"📢 <b>{escape(offer.title)}</b>\n\n"
-        f"{escape(offer.description)}\n\n"
-        f"🔗 <b>Тип цели:</b> {target_meta['label']}\n"
-        f"💰 Предварительно: <b>{offer.reward_preview}</b> монет\n"
-        f"🎁 После подтверждения: <b>{offer.reward_final}</b> монет\n"
-        f"👥 Участников: {participants}\n\n"
-        f"ℹ️ {verify_text}"
+        t('📢 <b>{arg0}</b>\n\n{arg1}\n\n🔗 <b>Тип цели:</b> {arg2}\n💰 Предварительно: <b>{reward_preview}</b> монет\n🎁 После подтверждения: <b>{reward_final}</b> монет\n👥 Участников: {participants}\n\nℹ️ {verify_text}', arg0=escape(offer.title), arg1=escape(offer.description), arg2=target_meta['label'], reward_preview=offer.reward_preview, reward_final=offer.reward_final, participants=participants, verify_text=verify_text)
     )
 
     kb_rows = [
@@ -3264,22 +3192,12 @@ async def cb_offer_start_confirm(callback: CallbackQuery):
             return
     target_meta = classify_offer_url(offer.channel_url)
     verification_block = (
-        "• после участия бот сам проверит подписку и выдаст финальную награду\n"
+        t('• после участия бот сам проверит подписку и выдаст финальную награду\n')
         if target_meta["auto_verify"]
-        else "• для этого типа цели авто-проверка недоступна, поэтому финальная награда выдаётся по кнопке подтверждения\n"
+        else t('• для этого типа цели авто-проверка недоступна, поэтому финальная награда выдаётся по кнопке подтверждения\n')
     )
     text = (
-        "⚠️ <b>Важно перед участием</b>\n\n"
-        "Ты получишь монеты за участие в оффере.\n"
-        "Если после получения награды ты отпишешься:\n"
-        "• награда будет забрана назад\n"
-        "• при повторных нарушениях может быть дополнительный штраф\n"
-        "• первые 15 минут после входа считаются grace period без доп. штрафа\n"
-        f"{verification_block}\n"
-        f"Оффер: <b>{escape(offer.title)}</b>\n"
-        f"Тип цели: <b>{target_meta['label']}</b>\n"
-        f"Предварительная награда: <b>{_fmt_coins(offer.reward_preview)}</b> монет\n"
-        f"Финальная награда: <b>{_fmt_coins(offer.reward_final)}</b> монет"
+        t('⚠️ <b>Важно перед участием</b>\n\nТы получишь монеты за участие в оффере.\nЕсли после получения награды ты отпишешься:\n• награда будет забрана назад\n• при повторных нарушениях может быть дополнительный штраф\n• первые 15 минут после входа считаются grace period без доп. штрафа\n{verification_block}\nОффер: <b>{arg1}</b>\nТип цели: <b>{arg2}</b>\nПредварительная награда: <b>{arg3}</b> монет\nФинальная награда: <b>{arg4}</b> монет', verification_block=verification_block, arg1=escape(offer.title), arg2=target_meta['label'], arg3=_fmt_coins(offer.reward_preview), arg4=_fmt_coins(offer.reward_final))
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t('✅ Понятно, участвовать'), callback_data=f"offer_start:{offer_id}")],
@@ -3315,8 +3233,8 @@ async def cb_offer_start(callback: CallbackQuery):
 
     paid = to_decimal(part.reward_given)
     target_meta = classify_offer_url(offer.channel_url)
-    cap_note = "" if paid == to_decimal(offer.reward_preview) else "\n⚠️ Сработал дневной лимит наград."
-    next_step = "Открой проект и потом нажми кнопку подтверждения." if not target_meta["auto_verify"] else "Подпишитесь и нажми кнопку проверки."
+    cap_note = "" if paid == to_decimal(offer.reward_preview) else t('\n⚠️ Сработал дневной лимит наград.')
+    next_step = t('Открой проект и потом нажми кнопку подтверждения.') if not target_meta["auto_verify"] else t('Подпишитесь и нажми кнопку проверки.')
     await callback.answer(
         t('✅ Получено {paid} монет!\n{next_step}{cap_note}', paid=paid, next_step=next_step, cap_note=cap_note),
         show_alert=True
@@ -3353,10 +3271,10 @@ async def cb_offer_check(callback: CallbackQuery):
         ok, paid = await verify_offer_subscription(session, user.id, offer_id)
         if ok:
             if paid > 0:
-                success_text = "✅ Подтверждено! Получено {paid} монет!" if target_meta["auto_verify"] else "✅ Подтверждение принято! Получено {paid} монет!"
-                await callback.answer(success_text.format(paid=paid), show_alert=True)
+                success_text = t('✅ Подтверждено! Получено {paid} монет!', paid=paid) if target_meta["auto_verify"] else t('✅ Подтверждение принято! Получено {paid} монет!', paid=paid)
+                await callback.answer(success_text, show_alert=True)
             else:
-                neutral_text = "✅ Подписка подтверждена. Награда уже выдана или дневной лимит исчерпан." if target_meta["auto_verify"] else "✅ Участие уже подтверждено или дневной лимит исчерпан."
+                neutral_text = t('✅ Подписка подтверждена. Награда уже выдана или дневной лимит исчерпан.') if target_meta["auto_verify"] else t('✅ Участие уже подтверждено или дневной лимит исчерпан.')
                 await callback.answer(neutral_text, show_alert=True)
         else:
             await callback.answer(
@@ -3440,7 +3358,7 @@ async def top_uploaders(callback: CallbackQuery):
             .limit(10)
         )).all()
 
-        text = "🎬 <b>Топ загрузчиков</b>\n\n"
+        text = t('🎬 <b>Топ загрузчиков</b>\n\n')
         medals = ["🥇", "🥈", "🥉"]
         seen, rank = set(), 0
         for u, cnt in rows:
@@ -3450,9 +3368,9 @@ async def top_uploaders(callback: CallbackQuery):
             rank += 1
             icon = medals[rank - 1] if rank <= 3 else f"{rank}."
             name = await get_styled_display_name(session, u)
-            text += f"{icon} {name} — {cnt} видео\n"
+            text += t('{icon} {name} — {cnt} видео\n', icon=icon, name=name, cnt=cnt)
         if not rows:
-            text += "Пусто"
+            text += t('Пусто')
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3468,7 +3386,7 @@ async def top_viewers(callback: CallbackQuery):
             .limit(10)
         )).all()
 
-        text = "👁 <b>Топ зрителей</b>\n\n"
+        text = t('👁 <b>Топ зрителей</b>\n\n')
         medals = ["🥇", "🥈", "🥉"]
         seen, rank = set(), 0
         for u, cnt in rows:
@@ -3478,9 +3396,9 @@ async def top_viewers(callback: CallbackQuery):
             rank += 1
             icon = medals[rank - 1] if rank <= 3 else f"{rank}."
             name = await get_styled_display_name(session, u)
-            text += f"{icon} {name} — {cnt} просмотров\n"
+            text += t('{icon} {name} — {cnt} просмотров\n', icon=icon, name=name, cnt=cnt)
         if not rows:
-            text += "Пусто"
+            text += t('Пусто')
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3492,7 +3410,7 @@ async def top_levels(callback: CallbackQuery):
             select(User).order_by(desc(User.xp)).limit(10)
         )).scalars().all()
 
-        text = "⭐ <b>Топ по XP</b>\n\n"
+        text = t('⭐ <b>Топ по XP</b>\n\n')
         medals = ["🥇", "🥈", "🥉"]
         seen, rank = set(), 0
         for u in users:
@@ -3502,9 +3420,9 @@ async def top_levels(callback: CallbackQuery):
             rank += 1
             icon = medals[rank - 1] if rank <= 3 else f"{rank}."
             name = await get_styled_display_name(session, u)
-            text += f"{icon} {name} — Ур.{u.level} ({u.xp} XP)\n"
+            text += t('{icon} {name} — Ур.{level} ({xp} XP)\n', icon=icon, name=name, level=u.level, xp=u.xp)
         if not users:
-            text += "Пусто"
+            text += t('Пусто')
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3516,7 +3434,7 @@ async def top_richest(callback: CallbackQuery):
             select(User).order_by(desc(User.balance)).limit(10)
         )).scalars().all()
 
-        text = "💰 <b>Топ богатых</b>\n\n"
+        text = t('💰 <b>Топ богатых</b>\n\n')
         medals = ["🥇", "🥈", "🥉"]
         seen, rank = set(), 0
         for u in users:
@@ -3526,9 +3444,9 @@ async def top_richest(callback: CallbackQuery):
             rank += 1
             icon = medals[rank - 1] if rank <= 3 else f"{rank}."
             name = await get_styled_display_name(session, u)
-            text += f"{icon} {name} — {u.balance:.2f} монет\n"
+            text += t('{icon} {name} — {balance:.2f} монет\n', icon=icon, name=name, balance=u.balance)
         if not users:
-            text += "Пусто"
+            text += t('Пусто')
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3758,21 +3676,21 @@ async def lottery_menu(callback: CallbackQuery):
 def _format_lottery_purchase_summary(tickets: list[LotteryTicket], total_cost: Decimal, balance_after: Decimal, *, admin_free: bool) -> str:
     qty = len(tickets)
     lines = [
-        f"🎫 <b>Куплено билетов:</b> {qty}",
+        t('🎫 <b>Куплено билетов:</b> {qty}', qty=qty),
     ]
     if admin_free:
-        lines.append("🆓 <b>ADMIN FREE</b> — без списания монет")
+        lines.append(t('🆓 <b>ADMIN FREE</b> — без списания монет'))
     else:
-        lines.append(f"💸 <b>Списано:</b> {_fmt_coins(total_cost)} монет")
-        lines.append(f"💰 <b>Баланс:</b> {_fmt_coins(balance_after)} монет")
+        lines.append(t('💸 <b>Списано:</b> {arg0} монет', arg0=_fmt_coins(total_cost)))
+        lines.append(t('💰 <b>Баланс:</b> {arg0} монет', arg0=_fmt_coins(balance_after)))
 
     preview_limit = 5
     lines.append("")
-    lines.append("<b>Твои билеты:</b>")
+    lines.append(t('<b>Твои билеты:</b>'))
     for ticket in tickets[:preview_limit]:
         lines.append(f"• #{ticket.id}: <code>{ticket.numbers}</code>")
     if qty > preview_limit:
-        lines.append(f"• … и ещё {qty - preview_limit} билет(ов)")
+        lines.append(t('• … и ещё {arg0} билет(ов)', arg0=qty - preview_limit))
     return "\n".join(lines)
 
 
@@ -3780,7 +3698,7 @@ async def _lottery_buy_execute(target, telegram_user_id: int, quantity: int, *, 
     async with async_session() as session:
         user = await get_user(session, telegram_user_id)
         if not user:
-            return False, "Пользователь не найден."
+            return False, t('Пользователь не найден.')
 
         admin_free = await is_admin_free_eligible(session, telegram_user_id, user)
         tickets, total_cost, error = await buy_lottery_tickets(session, user, quantity, is_admin_free=admin_free)
@@ -3790,7 +3708,7 @@ async def _lottery_buy_execute(target, telegram_user_id: int, quantity: int, *, 
         text = _format_lottery_purchase_summary(tickets, total_cost, user.balance, admin_free=admin_free)
 
     await target.answer(text, parse_mode="HTML")
-    return True, f"Куплено {len(tickets)} билет(ов)!"
+    return True, t('Куплено {arg0} билет(ов)!', arg0=len(tickets))
 
 
 @router.callback_query(F.data == "lottery_buy")
@@ -3891,9 +3809,9 @@ async def lottery_my_tickets(callback: CallbackQuery):
         await callback.message.answer(t('😔 У тебя пока нет билетов в текущем раунде.'))
         await callback.answer()
         return
-    text = "📋 <b>Твои билеты</b>\n\n"
+    text = t('📋 <b>Твои билеты</b>\n\n')
     for t in tickets:
-        text += f"#{t.id}: {t.numbers} | совпадений: {t.matched_count}\n"
+        text += t('#{id}: {numbers} | совпадений: {matched_count}\n', id=t.id, numbers=t.numbers, matched_count=t.matched_count)
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3907,13 +3825,13 @@ async def lottery_weekly_leaderboard(callback: CallbackQuery):
         await callback.answer()
         return
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    text = "🏆 <b>Рейтинг недели в Секслото</b>\n\n"
-    text += "Топ формируется по количеству купленных билетов за текущую неделю. При равенстве выше тот, у кого лучшее совпадение.\n\n"
+    text = t('🏆 <b>Рейтинг недели в Секслото</b>\n\n')
+    text += t('Топ формируется по количеству купленных билетов за текущую неделю. При равенстве выше тот, у кого лучшее совпадение.\n\n')
     for row in rows:
         icon = medals.get(row["place"], f"{row['place']}.")
         name = row["user"].display_name or row["user"].username or str(row["user"].telegram_id)
-        reward_text = f" | приз: { _fmt_coins(row['reward']) }" if row["reward"] else ""
-        text += f"{icon} <b>{escape(str(name))}</b> — {row['tickets']} бил. | лучший матч: {row['best_match']}{reward_text}\n"
+        reward_text = t(' | приз: {arg0}', arg0=_fmt_coins(row['reward'])) if row["reward"] else ""
+        text += t('{icon} <b>{arg1}</b> — {arg2} бил. | лучший матч: {arg3}{reward_text}\n', icon=icon, arg1=escape(str(name)), arg2=row['tickets'], arg3=row['best_match'], reward_text=reward_text)
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3961,9 +3879,9 @@ async def feedback_start(message: Message, state: FSMContext):
 async def feedback_pick_kind(callback: CallbackQuery, state: FSMContext):
     kind = callback.data.split(":", 1)[1]
     kind_title = {
-        "bug": "Баг",
-        "suggestion": "Идея",
-        "praise": "Благодарность",
+        "bug": t('Баг'),
+        "suggestion": t('Идея'),
+        "praise": t('Благодарность'),
     }.get(kind)
     if not kind_title:
         await callback.answer(t('Неизвестный тип обращения.'), show_alert=True)
@@ -3990,9 +3908,9 @@ async def feedback_submit(message: Message, state: FSMContext):
     data = await state.get_data()
     kind = data.get("feedback_kind", "suggestion")
     kind_title = {
-        "bug": "Баг",
-        "suggestion": "Идея",
-        "praise": "Благодарность",
+        "bug": t('Баг'),
+        "suggestion": t('Идея'),
+        "praise": t('Благодарность'),
     }.get(kind, kind)
 
     async with async_session() as session:
@@ -4166,8 +4084,8 @@ async def promo_hours(message: Message, state: FSMContext):
         )
         await session.commit()
         await message.answer_invoice(
-            title="Создание промокода",
-            description=f"{amount} монет × {uses} исп. на {hours}ч",
+            title=t('Создание промокода'),
+            description=t('{amount} монет × {uses} исп. на {hours}ч', amount=amount, uses=uses, hours=hours),
             payload=payload,
             currency="XTR",
             prices=[LabeledPrice(label=t('Промокод'), amount=star_cost)]
@@ -4295,13 +4213,11 @@ async def promo_my(callback: CallbackQuery):
             await callback.message.answer(t('📭 У тебя пока нет промокодов.'))
             await callback.answer()
             return
-        text = "🎟 <b>Твои промокоды:</b>\n\n"
+        text = t('🎟 <b>Твои промокоды:</b>\n\n')
         for p in promos:
             status = "✅" if p.is_active else "❌"
             text += (
-                f"{status} <code>{p.code}</code>\n"
-                f"Сумма: {p.coin_amount} | Исп: {p.used_count}/{p.max_uses}\n"
-                f"До: {p.expires_at.strftime('%d.%m %H:%M') if p.expires_at else '∞'}\n\n"
+                t('{status} <code>{code}</code>\nСумма: {coin_amount} | Исп: {used_count}/{max_uses}\nДо: {arg5}\n\n', status=status, code=p.code, coin_amount=p.coin_amount, used_count=p.used_count, max_uses=p.max_uses, arg5=p.expires_at.strftime('%d.%m %H:%M') if p.expires_at else '∞')
             )
         await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -4358,7 +4274,7 @@ async def report_video_start(callback: CallbackQuery, state: FSMContext):
 
     kb_rows = []
     for key, label in REPORT_REASONS.items():
-        kb_rows.append([InlineKeyboardButton(text=label, callback_data=f"report_reason:{key}")])
+        kb_rows.append([InlineKeyboardButton(text=t(label), callback_data=f"report_reason:{key}")])
     kb_rows.append([InlineKeyboardButton(text=t('❌ Отмена'), callback_data="report_cancel")])
 
     await callback.message.answer(
@@ -4438,7 +4354,7 @@ async def cb_block_author(callback: CallbackQuery):
             await callback.answer(t('Нельзя заблокировать самого себя.'), show_alert=True)
             return
         author = await get_user_by_id(session, video.uploader_user_id)
-        author_name = escape(get_display_name(author)) if author else "этого автора"
+        author_name = escape(get_display_name(author)) if author else t('этого автора')
 
     await callback.message.answer(
         t('🚫 <b>Скрыть {author_name} из ленты?</b>\n\nВыбери причину — она нужна только для твоего управления списком блокировок.', author_name=author_name),
@@ -4537,7 +4453,7 @@ async def cb_undo_block_author(callback: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
         )
     await callback.answer(
-        "Блокировка отменена." if success else "Автор уже разблокирован.",
+        t('Блокировка отменена.') if success else t('Автор уже разблокирован.'),
         show_alert=True,
     )
 
@@ -4559,40 +4475,7 @@ async def btn_faq(message: Message, state: FSMContext):
     await state.clear()
     
     faq_text = (
-        "ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "<b>1. Как зарабатывать монеты?</b>\n"
-        "Загружайте видео и фото, выполняй офферы и приглашайте друзей по реферальной ссылке. А ещё просто заходи каждый день — бот сам начислит бонус за серию дней подряд! Точные награды зависят от текущих настроек бота.\n\n"
-        "<b>2. Как смотреть контент других авторов?</b>\n"
-        "Нажми кнопку 🎬 Смотреть и выбери интересующий формат.\n\n"
-        "<b>3. Что дает подписка VIP?</b>\n"
-        "Множитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. VIP оформляется в разделе 🛍 Магазин.\n\n"
-        "<b>4. Что такое Секслото?</b>\n"
-        "Это ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n"
-        "<b>5. Где пополнить баланс, оформить VIP или выбрать стиль?</b>\n"
-        "Всё находится в разделе 🛍 Магазин: монеты, VIP и стили профиля собраны в одном месте.\n\n"
-        "<b>6. Как работают промокоды?</b>\n"
-        "Ты можешь создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n"
-        "<b>7. Как работает реферальная система?</b>\n"
-        f"Открой раздел 👥 Рефералы, скопируй свою ссылку и отправь друзьям. За активного приглашённого ты получаешь <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n"
-        "<b>8. Как работает еженедельная халява?</b>\n"
-        "Каждую неделю выпадает новое секретное слово (в течение года слова не повторяются). Введи его в разделе 🎁 <b>Еженедельная Халява</b> (меню 🎟 Промокоды) и получи случайно от 200 до 1500 монет. Секретное слово бот присылает сам — следи за еженедельной рассылкой!\n\n"
-        "<b>9. Есть ли квесты?</b>\n"
-        "Нет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n"
-        "<b>10. Где посмотреть топы игроков?</b>\n"
-        "В меню 🏆 Топы собраны текущие рейтинги загрузчиков, зрителей, XP и баланса. Рейтинг загрузчиков и зрителей считается за всё время.\n\n"
-        "<b>11. Что находится внутри лутбоксов?</b>\n"
-        "Случайный выигрыш монет разной степени редкости.\n\n"
-        "<b>12. Как сменить никнейм?</b>\n"
-        "В твоем Профиле. Первая установка ника бесплатна, последующие изменения — за монеты.\n\n"
-        "<b>13. Что такое Уровень и XP?</b>\n"
-        "За активность ты получаешь XP. Повышение уровня открывает приятную косметику и прогресс профиля.\n\n"
-        "<b>14. Безопасны ли мои данные?</b>\n"
-        "Бот не просит лишние персональные данные: используется в основном Telegram ID и сервисная информация профиля.\n\n"
-        "<b>15. Что такое Космическая аркада?</b>\n"
-        "Это мини-игра (Mini App) в разделе 🎮 Игры: делаете ставку, отбиваете волны инопланетного флота, и каждая волна увеличивает множитель ставки. Забрать выигрыш можно в любой момент, но рано или поздно флот прорвётся — и ставка сгорит. Есть дневной кап чистой прибыли.\n\n"
-        "<b>16. Как связаться с техподдержкой?</b>\n"
-        "Нажми кнопку 💬 Жалобы и предложения и отправь сообщение команде."
+        t('ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n<b>1. Как зарабатывать монеты?</b>\nЗагружайте видео и фото, выполняй офферы и приглашайте друзей по реферальной ссылке. А ещё просто заходи каждый день — бот сам начислит бонус за серию дней подряд! Точные награды зависят от текущих настроек бота.\n\n<b>2. Как смотреть контент других авторов?</b>\nНажми кнопку 🎬 Смотреть и выбери интересующий формат.\n\n<b>3. Что дает подписка VIP?</b>\nМножитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. VIP оформляется в разделе 🛍 Магазин.\n\n<b>4. Что такое Секслото?</b>\nЭто ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n<b>5. Где пополнить баланс, оформить VIP или выбрать стиль?</b>\nВсё находится в разделе 🛍 Магазин: монеты, VIP и стили профиля собраны в одном месте.\n\n<b>6. Как работают промокоды?</b>\nТы можешь создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n<b>7. Как работает реферальная система?</b>\nОткрой раздел 👥 Рефералы, скопируй свою ссылку и отправь друзьям. За активного приглашённого ты получаешь <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n<b>8. Как работает еженедельная халява?</b>\nКаждую неделю выпадает новое секретное слово (в течение года слова не повторяются). Введи его в разделе 🎁 <b>Еженедельная Халява</b> (меню 🎟 Промокоды) и получи случайно от 200 до 1500 монет. Секретное слово бот присылает сам — следи за еженедельной рассылкой!\n\n<b>9. Есть ли квесты?</b>\nНет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n<b>10. Где посмотреть топы игроков?</b>\nВ меню 🏆 Топы собраны текущие рейтинги загрузчиков, зрителей, XP и баланса. Рейтинг загрузчиков и зрителей считается за всё время.\n\n<b>11. Что находится внутри лутбоксов?</b>\nСлучайный выигрыш монет разной степени редкости.\n\n<b>12. Как сменить никнейм?</b>\nВ твоем Профиле. Первая установка ника бесплатна, последующие изменения — за монеты.\n\n<b>13. Что такое Уровень и XP?</b>\nЗа активность ты получаешь XP. Повышение уровня открывает приятную косметику и прогресс профиля.\n\n<b>14. Безопасны ли мои данные?</b>\nБот не просит лишние персональные данные: используется в основном Telegram ID и сервисная информация профиля.\n\n<b>15. Что такое Космическая аркада?</b>\nЭто мини-игра (Mini App) в разделе 🎮 Игры: делаете ставку, отбиваете волны инопланетного флота, и каждая волна увеличивает множитель ставки. Забрать выигрыш можно в любой момент, но рано или поздно флот прорвётся — и ставка сгорит. Есть дневной кап чистой прибыли.\n\n<b>16. Как связаться с техподдержкой?</b>\nНажми кнопку 💬 Жалобы и предложения и отправь сообщение команде.', REFERRAL_REWARD_INVITER=REFERRAL_REWARD_INVITER)
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -4712,7 +4595,7 @@ async def welcome_lootbox_claim(callback: CallbackQuery):
             session.add(log)
             await session.commit()
             await session.refresh(user)
-            msg_cap = "🎁 <b>СТАРТОВЫЙ ЛУТБОКС ОТКРЫТ!</b>\n\nТебе выпало <b>+" + str(reward) + " монет</b>! 🤑\nТеперь твой баланс: <b>" + str(user.balance) + "</b>.\n\nЭтого хватит, чтобы насладиться контентом — скорее жми '🎬 Смотреть'!"
+            msg_cap = t('🎁 <b>СТАРТОВЫЙ ЛУТБОКС ОТКРЫТ!</b>\n\nТебе выпало <b>+') + str(reward) + t(' монет</b>! 🤑\nТеперь твой баланс: <b>') + str(user.balance) + t("</b>.\n\nЭтого хватит, чтобы насладиться контентом — скорее жми '🎬 Смотреть'!")
             try:
                 if getattr(callback.message, "caption", None):
                     await callback.message.edit_caption(caption=msg_cap, parse_mode="HTML")
@@ -4756,12 +4639,12 @@ async def _complete_poll_answer(
     poll_id: int,
     answer_text: str | None = None,
     option_indexes: list[int] | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str | None]:
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         if not user:
-            return False, "Сначала открой бота командой /start."
-        _poll, reward, error = await submit_admin_poll_response(
+            return False, t('Сначала открой бота командой /start.'), "closed"
+        _poll, reward, error, error_code = await submit_admin_poll_response(
             session,
             poll_id,
             user.id,
@@ -4769,9 +4652,9 @@ async def _complete_poll_answer(
             option_indexes=option_indexes,
         )
     if error:
-        return False, error
+        return False, error, error_code
     reward_text = f"{reward:.0f}" if reward is not None else "100"
-    return True, f"✅ Спасибо за ответ! Тебе начислено {reward_text} монет."
+    return True, t('✅ Спасибо за ответ! Тебе начислено {reward_text} монет.', reward_text=reward_text), None
 
 
 @router.callback_query(F.data.startswith("poll_single:"))
@@ -4783,7 +4666,7 @@ async def poll_single_answer(callback: CallbackQuery):
     except (AttributeError, ValueError):
         await callback.answer(t('Некорректный вариант ответа.'), show_alert=True)
         return
-    ok, text = await _complete_poll_answer(
+    ok, text, _err_code = await _complete_poll_answer(
         callback,
         poll_id=poll_id,
         option_indexes=[option_index],
@@ -4846,7 +4729,7 @@ async def poll_text_submit(message: Message, state: FSMContext):
             await state.clear()
             await message.answer(t('Сначала открой бота командой /start.'))
             return
-        _poll, reward, error = await submit_admin_poll_response(
+        _poll, reward, error, error_code = await submit_admin_poll_response(
             session,
             int(poll_id),
             user.id,
@@ -4854,7 +4737,7 @@ async def poll_text_submit(message: Message, state: FSMContext):
         )
     if error:
         await message.answer(f"❌ {error}")
-        if "уже" in error or "недоступен" in error:
+        if error_code in ("closed", "already"):
             await state.clear()
         return
     await state.clear()
@@ -4952,7 +4835,7 @@ async def poll_multi_submit(callback: CallbackQuery, state: FSMContext):
     if not selected:
         await callback.answer(t('Выберите хотя бы один вариант.'), show_alert=True)
         return
-    ok, text = await _complete_poll_answer(callback, poll_id=poll_id, option_indexes=selected)
+    ok, text, err_code = await _complete_poll_answer(callback, poll_id=poll_id, option_indexes=selected)
     if ok:
         await state.clear()
         try:
@@ -4962,7 +4845,7 @@ async def poll_multi_submit(callback: CallbackQuery, state: FSMContext):
         await callback.answer(t('Награда начислена.'))
         await callback.message.answer(text)
     else:
-        if "уже" in text or "недоступен" in text:
+        if err_code in ("closed", "already"):
             await state.clear()
         await callback.answer(text, show_alert=True)
 

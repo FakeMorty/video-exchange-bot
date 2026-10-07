@@ -146,25 +146,25 @@ def classify_offer_url(target_url: str) -> dict:
     if first_segment.startswith("+") or first_segment == "joinchat":
         return {
             "kind": "invite",
-            "label": "Группа / чат / приватный инвайт",
+            "label": t('Группа / чат / приватный инвайт'),
             "auto_verify": False,
-            "cta": "🚀 Открыть проект",
-            "claim_text": "✅ Получить награду",
+            "cta": t('🚀 Открыть проект'),
+            "claim_text": t('✅ Получить награду'),
         }
     if first_segment.endswith("bot") or "start=" in lowered or "startapp=" in lowered:
         return {
             "kind": "bot",
-            "label": "Telegram-бот",
+            "label": t('Telegram-бот'),
             "auto_verify": False,
-            "cta": "🤖 Открыть бота",
-            "claim_text": "✅ Я выполнил условие",
+            "cta": t('🤖 Открыть бота'),
+            "claim_text": t('✅ Я выполнил условие'),
         }
     return {
         "kind": "channel_like",
-        "label": "Канал / группа / чат",
+        "label": t('Канал / группа / чат'),
         "auto_verify": True,
-        "cta": "📢 Открыть проект",
-        "claim_text": "✅ Проверить подписку",
+        "cta": t('📢 Открыть проект'),
+        "claim_text": t('✅ Проверить подписку'),
     }
 
 
@@ -419,7 +419,7 @@ def validate_nickname_format(name: str) -> tuple[bool, str]:
         return False, t('Ник слишком короткий. Минимум {NICKNAME_MIN_LENGTH} символов.', NICKNAME_MIN_LENGTH=NICKNAME_MIN_LENGTH)
     if len(name) > NICKNAME_MAX_LENGTH:
         return False, t('Ник слишком длинный. Максимум {NICKNAME_MAX_LENGTH} символов.', NICKNAME_MAX_LENGTH=NICKNAME_MAX_LENGTH)
-    if not re.fullmatch(r"[a-zA-Zа-яА-ЯёЁ0-9_\-]+", name):
+    if not re.fullmatch(r"[a-zA-Zа-яА-ЯёЁ0-9_\\-]+", name):
         return False, t('Ник может содержать только буквы (рус/лат), цифры, _ и -. Без точек, пробелов, ? и спецсимволов.')
     if re.fullmatch(r"[\d_\-]+", name):
         return False, t('Ник не может состоять только из цифр, _ или -. Добавьте буквы.')
@@ -978,7 +978,7 @@ async def reject_video(
     v.status = "rejected"
     full_reason = reason.strip()
     if admin_comment:
-        full_reason = f"{full_reason}. Комментарий модератора: {admin_comment.strip()}"
+        full_reason = t('{full_reason}. Комментарий модератора: {arg1}', full_reason=full_reason, arg1=admin_comment.strip())
     v.rejection_reason = full_reason
     await session.commit()
     await log_user_action(
@@ -1270,26 +1270,26 @@ async def adjust_balance_by_admin(
     try:
         amount = Decimal(str(amount)).quantize(Decimal("0.01"))
     except Exception as exc:
-        raise AdminBalanceError("Некорректная сумма.") from exc
+        raise AdminBalanceError(t('Некорректная сумма.')) from exc
     if not amount.is_finite() or amount == 0:
-        raise AdminBalanceError("Сумма должна быть ненулевым числом.")
+        raise AdminBalanceError(t('Сумма должна быть ненулевым числом.'))
     if abs(amount) > Decimal("99999999.99"):
-        raise AdminBalanceError("Сумма слишком большая.")
+        raise AdminBalanceError(t('Сумма слишком большая.'))
 
     user = (await session.execute(
         select(User).where(User.id == user_id).with_for_update()
     )).scalar_one_or_none()
     if not user:
-        raise AdminBalanceError("Пользователь не найден.")
+        raise AdminBalanceError(t('Пользователь не найден.'))
 
     before = Decimal(user.balance or 0)
     after = before + amount
     if after < 0:
         raise AdminBalanceError(
-            f"Нельзя списать {abs(amount)}: на балансе только {before} монет."
+            t('Нельзя списать {arg0}: на балансе только {before} монет.', arg0=abs(amount), before=before)
         )
     if after > Decimal("99999999.99"):
-        raise AdminBalanceError("Итоговый баланс превышает допустимый лимит.")
+        raise AdminBalanceError(t('Итоговый баланс превышает допустимый лимит.'))
 
     user.balance = after
     session.add(BalanceLog(
@@ -1449,10 +1449,7 @@ async def maybe_send_zalip_upsell(session: AsyncSession, bot, user: "User", *,
         return False
     starter = (await get_shop_star_packages(session)).get(STARTER_PACK_KEY) or {}
     text = (
-        "🔥 <b>Залип? Тогда тебе сюда.</b>\n\n"
-        f"Специально для первого платежа — старт-пак: <b>{starter.get('coins', '?')} монет "
-        f"всего за {starter.get('stars', '?')} Stars</b>. Доступен один раз!\n\n"
-        "Пополни баланс и смотри дальше без остановок. 💸"
+        t('🔥 <b>Залип? Тогда тебе сюда.</b>\n\nСпециально для первого платежа — старт-пак: <b>{arg0} монет всего за {arg1} Stars</b>. Доступен один раз!\n\nПополни баланс и смотри дальше без остановок. 💸', arg0=starter.get('coins', '?'), arg1=starter.get('stars', '?'))
     )
     try:
         await bot.send_message(user.telegram_id, text, parse_mode="HTML", reply_markup=reply_markup)
@@ -1835,7 +1832,7 @@ async def moderate_offer(
         "is_active": bool(approve),
         "reviewed_at": now,
         "reviewed_by_telegram_id": admin_telegram_id,
-        "rejection_reason": None if approve else (reason or "Не прошёл модерацию")[:1000],
+        "rejection_reason": None if approve else (reason or t('Не прошёл модерацию'))[:1000],
     }
     if approve:
         values["approved_at"] = now
@@ -2066,12 +2063,12 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
                              admin_telegram_id: int | None = None) -> "Offer":
     normalized_url = normalize_telegram_url(channel_url)
     if not normalized_url:
-        raise ValueError("Некорректная ссылка Telegram")
+        raise ValueError(t('Некорректная ссылка Telegram'))
     # Штраф за отписку не должен превышать итоговую награду:
     # иначе пользователя штрафуют больше, чем он мог заработать.
     if to_decimal(penalty_unsubscribe) > to_decimal(reward_final):
         raise ValueError(
-            "Штраф за отписку не может превышать итоговую награду за оффер."
+            t('Штраф за отписку не может превышать итоговую награду за оффер.')
         )
     now = utc_now()
     offer = Offer(
@@ -2403,7 +2400,7 @@ async def get_user_dossier(session: AsyncSession, user_id: int) -> dict | None:
     )).scalar_one() or Decimal("0")
     is_super_admin = user.telegram_id in ADMINS
     is_admin = is_super_admin or bool(user.is_admin)
-    role_label = "Супер-админ" if is_super_admin else ("Админ" if is_admin else "Обычный пользователь")
+    role_label = t('Супер-админ') if is_super_admin else (t('Админ') if is_admin else t('Обычный пользователь'))
     return {
         "user": user, "games_count": games_count,
         "game_profit": game_profit, "suspicious_games": suspicious_games,
@@ -3863,17 +3860,17 @@ async def flush_mod_notifications(bot, session: AsyncSession) -> int:
         by_kind[n.kind] = by_kind.get(n.kind, 0) + n.count
 
     kind_labels = {
-        "video": "📹 Видео/фото на модерации",
-        "offer": "📢 Офферы на модерации",
-        "report": "🚨 Жалобы на контент",
+        "video": t('📹 Видео/фото на модерации'),
+        "offer": t('📢 Офферы на модерации'),
+        "report": t('🚨 Жалобы на контент'),
     }
 
-    lines = ["🔔 <b>Модерация: сводка</b>\n"]
+    lines = [t('🔔 <b>Модерация: сводка</b>\n')]
     for kind, count in by_kind.items():
         label = kind_labels.get(kind, kind)
         lines.append(f"  {label}: <b>{count}</b>")
 
-    lines.append("\n/admin — панель модерации")
+    lines.append(t('\n/admin — панель модерации'))
     text = "\n".join(lines)
 
     reply_markup = None
@@ -3927,7 +3924,7 @@ async def submit_admin_poll_response(
     *,
     answer_text: str | None = None,
     option_indexes: list[int] | None = None,
-) -> tuple[AdminPoll | None, Decimal | None, str | None]:
+) -> tuple[AdminPoll | None, Decimal | None, str | None, str | None]:
     """Сохраняет ответ на активный опрос и один раз начисляет его награду.
 
     Уникальность пары ``poll_id/user_id`` дополнительно защищается ограничением
@@ -3938,7 +3935,7 @@ async def submit_admin_poll_response(
         select(AdminPoll).where(AdminPoll.id == poll_id, AdminPoll.is_active == True)
     )
     if not poll:
-        return None, None, t('Опрос уже завершён или недоступен.')
+        return None, None, t('Опрос уже завершён или недоступен.'), "closed"
 
     exists = await session.scalar(
         select(AdminPollResponse.id).where(
@@ -3947,7 +3944,7 @@ async def submit_admin_poll_response(
         )
     )
     if exists:
-        return poll, None, t('Вы уже прошли этот опрос.')
+        return poll, None, t('Вы уже прошли этот опрос.'), "already"
 
     try:
         options = json.loads(poll.options_json or "[]")
@@ -3959,19 +3956,19 @@ async def submit_admin_poll_response(
     if poll.poll_type == "text":
         normalized_text = (answer_text or "").strip()
         if not normalized_text:
-            return poll, None, t('Ответ не может быть пустым.')
+            return poll, None, t('Ответ не может быть пустым.'), "invalid"
         if len(normalized_text) > 1000:
-            return poll, None, t('Ответ слишком длинный: максимум 1000 символов.')
+            return poll, None, t('Ответ слишком длинный: максимум 1000 символов.'), "invalid"
     elif poll.poll_type in {"single", "multiple"}:
         normalized_indexes = sorted({int(idx) for idx in (option_indexes or [])})
         if not normalized_indexes:
-            return poll, None, t('Выберите хотя бы один вариант.')
+            return poll, None, t('Выберите хотя бы один вариант.'), "invalid"
         if poll.poll_type == "single" and len(normalized_indexes) != 1:
-            return poll, None, t('Для этого опроса можно выбрать только один вариант.')
+            return poll, None, t('Для этого опроса можно выбрать только один вариант.'), "invalid"
         if any(idx < 0 or idx >= len(options) for idx in normalized_indexes):
-            return poll, None, t('Выбран недопустимый вариант ответа.')
+            return poll, None, t('Выбран недопустимый вариант ответа.'), "invalid"
     else:
-        return poll, None, t('Неизвестный тип опроса.')
+        return poll, None, t('Неизвестный тип опроса.'), "invalid"
 
     response = AdminPollResponse(
         poll_id=poll.id,
@@ -3985,7 +3982,7 @@ async def submit_admin_poll_response(
         await session.flush()
     except Exception:
         await session.rollback()
-        return poll, None, t('Вы уже прошли этот опрос.')
+        return poll, None, t('Вы уже прошли этот опрос.'), "already"
 
     reward = Decimal(str(poll.reward or Decimal("100.00")))
     updated_user = await change_balance_atomic(
@@ -3998,11 +3995,11 @@ async def submit_admin_poll_response(
     )
     if not updated_user:
         await session.rollback()
-        return poll, None, t('Пользователь не найден.')
+        return poll, None, t('Пользователь не найден.'), "closed"
 
     response.rewarded_at = utc_now()
     await session.commit()
-    return poll, reward, None
+    return poll, reward, None, None
 
 
 async def should_flush_notifications(session: AsyncSession) -> bool:
@@ -4186,12 +4183,12 @@ def build_event_promo_text(event: Event, max_len: int | None = None) -> str:
     if event.applies_vip:
         applies.append("VIP")
     if event.applies_coins:
-        applies.append("монеты")
+        applies.append(t('монеты'))
     if event.applies_lootbox:
-        applies.append("лутбоксы")
+        applies.append(t('лутбоксы'))
     if event.applies_cases:
-        applies.append("кейсы")
-    applies_text = ", ".join(applies) if applies else "всё"
+        applies.append(t('кейсы'))
+    applies_text = ", ".join(applies) if applies else t('всё')
     end_text = event.end_date.strftime("%d.%m.%Y")
 
     def _render(descr: str) -> str:
@@ -4245,9 +4242,7 @@ async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
         reward = int(Decimal(str(poll.reward or Decimal("100.00"))))
         pool.append({
             "text": (
-                "📊 <b>Опрос от администрации</b>\n\n"
-                f"{poll.question}\n\n"
-                f"Пройди опрос один раз и получи <b>{reward} монет</b>."
+                t('📊 <b>Опрос от администрации</b>\n\n{question}\n\nПройди опрос один раз и получи <b>{reward} монет</b>.', question=poll.question, reward=reward)
             ),
             "image_file_id": None,
             "poll": {"id": poll.id, "type": poll.poll_type, "options": options},
@@ -4266,17 +4261,13 @@ async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
             select(User.telegram_id).where(User.status == "active")
         )).scalars().all()
     
-    applies_map = {"all": "всё", "vip": "VIP", "coins": "монеты"}
+    applies_map = {"all": t('всё'), "vip": "VIP", "coins": t('монеты')}
     applies_text = applies_map.get(sale.applies_to, sale.applies_to)
     end_text = sale.end_date.strftime("%d.%m.%Y %H:%M")
-    announcement = sale.announcement or f"Скидка {sale.discount_percent}% на {applies_text}!"
+    announcement = sale.announcement or t('Скидка {discount_percent}% на {applies_text}!', discount_percent=sale.discount_percent, applies_text=applies_text)
     
     text = (
-        f"🛍 <b>Акция!</b>\n\n"
-        f"{announcement}\n\n"
-        f"🔥 Скидка <b>{sale.discount_percent}%</b> на {applies_text}\n"
-        f"⏰ До {end_text}\n\n"
-        f"Успей воспользоваться!"
+        t('🛍 <b>Акция!</b>\n\n{announcement}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}\n⏰ До {end_text}\n\nУспей воспользоваться!', announcement=announcement, discount_percent=sale.discount_percent, applies_text=applies_text, end_text=end_text)
     )
     
     sent = 0
@@ -4693,7 +4684,7 @@ async def process_donationalerts_donation(
     coins_reward = Decimal("0")
     if is_vip:
         perk = await activate_perk(session, user.id, "vip", duration_days=30)
-        reward_desc = "👑 VIP-подписка на 30 дней"
+        reward_desc = t('👑 VIP-подписка на 30 дней')
         await log_user_action(session, user.id, "vip_purchased_da", f"amount_rub={amount_rub}, da_id={donation_id}")
     else:
         coins_reward = Decimal(str(amount_rub * Decimal(str(rub_rate))))
@@ -4701,7 +4692,7 @@ async def process_donationalerts_donation(
             session, user.id, coins_reward, "donationalerts_deposit",
             details=f"rub={amount_rub}, da_id={donation_id}"
         )
-        reward_desc = f"+{coins_reward:,.0f} монет 🪙".replace(',', ' ')
+        reward_desc = t('+{coins_reward:,.0f} монет 🪙', coins_reward=coins_reward).replace(',', ' ')
         await log_user_action(session, user.id, "coins_purchased_da", f"amount_rub={amount_rub}, coins={coins_reward}, da_id={donation_id}")
 
     payment = Payment(
@@ -4718,10 +4709,7 @@ async def process_donationalerts_donation(
         try:
             from html import escape
             msg_text = (
-                f"🎉 <b>Спасибо за подношение / поддержку!</b>\n\n"
-                f"Получен платёж через DonationAlerts на сумму: <b>{amount_rub} руб.</b>\n"
-                f"Вам зачислено: <b>{reward_desc}</b>\n\n"
-                f"Приятного пользования ботом! 💙"
+                t('🎉 <b>Спасибо за подношение / поддержку!</b>\n\nПолучен платёж через DonationAlerts на сумму: <b>{amount_rub} руб.</b>\nВам зачислено: <b>{reward_desc}</b>\n\nПриятного пользования ботом! 💙', amount_rub=amount_rub, reward_desc=reward_desc)
             )
             await bot.send_message(user.telegram_id, msg_text, parse_mode="HTML")
         except Exception as e:
@@ -4731,11 +4719,7 @@ async def process_donationalerts_donation(
             from html import escape
             disp_name = get_display_name(user)
             admin_msg = (
-                f"💳 <b>Новый платёж DonationAlerts!</b>\n\n"
-                f"👤 Пользователь: {disp_name} (ID: <code>{user.telegram_id}</code>)\n"
-                f"💰 Сумма: <b>{amount_rub} руб.</b>\n"
-                f"💬 Сообщение: <i>{escape(comment or '—')}</i>\n"
-                f"🎁 Начислено: <b>{reward_desc}</b>"
+                t('💳 <b>Новый платёж DonationAlerts!</b>\n\n👤 Пользователь: {disp_name} (ID: <code>{telegram_id}</code>)\n💰 Сумма: <b>{amount_rub} руб.</b>\n💬 Сообщение: <i>{arg3}</i>\n🎁 Начислено: <b>{reward_desc}</b>', disp_name=disp_name, telegram_id=user.telegram_id, amount_rub=amount_rub, arg3=escape(comment or '—'), reward_desc=reward_desc)
             )
             for admin_id in ADMINS:
                 try:

@@ -55,13 +55,7 @@ async def user_create_offer_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserOfferState.waiting_title)
     
     text = (
-        "➕ <b>Создание своего оффера</b>\n\n"
-        "Можно рекламировать каналы, группы, чаты и ботов Telegram.\n\n"
-        "⚠️ <b>Важно:</b>\n"
-        "• публичные каналы/группы/чаты с username бот может проверять автоматически\n"
-        "• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна, поэтому подтверждение будет ручным по кнопке пользователя\n"
-        "• мутные, серые и запрещённые проекты в модерацию не пройдут\n\n"
-        "Шаг 1/8: Введи название проекта/оффера:"
+        t('➕ <b>Создание своего оффера</b>\n\nМожно рекламировать каналы, группы, чаты и ботов Telegram.\n\n⚠️ <b>Важно:</b>\n• публичные каналы/группы/чаты с username бот может проверять автоматически\n• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна, поэтому подтверждение будет ручным по кнопке пользователя\n• мутные, серые и запрещённые проекты в модерацию не пройдут\n\nШаг 1/8: Введи название проекта/оффера:')
     )
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -183,12 +177,7 @@ async def user_offer_duration(message: Message, state: FSMContext):
     await state.update_data(placement_cost=cost)
     
     text = (
-        f"💰 <b>Стоимость размещения:</b> <b>{cost:.0f} монет</b>\n\n"
-        f"• Награды: {data['reward_preview']} + {data['reward_final']}\n"
-        f"• Штраф: {data['penalty_unsubscribe']}\n"
-        f"• Длительность: {days} дней\n"
-        f"• Коэффициент: 20%\n\n"
-        "Выбери способ оплаты:"
+        t('💰 <b>Стоимость размещения:</b> <b>{cost:.0f} монет</b>\n\n• Награды: {arg1} + {arg2}\n• Штраф: {arg3}\n• Длительность: {days} дней\n• Коэффициент: 20%\n\nВыбери способ оплаты:', cost=cost, arg1=data['reward_preview'], arg2=data['reward_final'], arg3=data['penalty_unsubscribe'], days=days)
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -292,8 +281,8 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             await session.commit()
 
             await callback.message.answer_invoice(
-                title="Размещение оффера",
-                description=f"Оффер «{data['title']}» на {data['duration_days']} дней",
+                title=t('Размещение оффера'),
+                description=t('Оффер «{arg0}» на {arg1} дней', arg0=data['title'], arg1=data['duration_days']),
                 payload=payload,
                 currency="XTR",
                 prices=[LabeledPrice(label=t('Размещение'), amount=stars_price)],

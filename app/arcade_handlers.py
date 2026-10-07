@@ -37,15 +37,7 @@ def arcade_webapp_url() -> str:
 
 def _menu_text(cfg) -> str:
     return (
-        "🚀 <b>Космическая Аркада</b>\n\n"
-        "Отбивай волны инопланетного флота 👾 в настоящей аркаде (Mini App) "
-        "и наращивай множитель ставки!\n\n"
-        "🔫 Каждая уничтоженная волна — множитель растёт.\n"
-        "☠️ Рано или поздно флот прорвётся — ставка сгорит.\n"
-        "💰 Забирай выигрыш, пока не поздно!\n\n"
-        f"💵 Ставка: от <b>{_fmt(cfg.min_bet)}</b> до <b>{_fmt(cfg.max_bet)}</b> монет\n"
-        f"📈 Макс. множитель: <b>x{_fmt(cfg.max_multiplier)}</b>\n"
-        f"🛡 Дневной кап чистой прибыли: <b>{_fmt(cfg.daily_profit_cap)}</b> монет"
+        t('🚀 <b>Космическая Аркада</b>\n\nОтбивай волны инопланетного флота 👾 в настоящей аркаде (Mini App) и наращивай множитель ставки!\n\n🔫 Каждая уничтоженная волна — множитель растёт.\n☠️ Рано или поздно флот прорвётся — ставка сгорит.\n💰 Забирай выигрыш, пока не поздно!\n\n💵 Ставка: от <b>{arg0}</b> до <b>{arg1}</b> монет\n📈 Макс. множитель: <b>x{arg2}</b>\n🛡 Дневной кап чистой прибыли: <b>{arg3}</b> монет', arg0=_fmt(cfg.min_bet), arg1=_fmt(cfg.max_bet), arg2=_fmt(cfg.max_multiplier), arg3=_fmt(cfg.daily_profit_cap))
     )
 
 
@@ -95,12 +87,7 @@ async def arcade_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "arcade_howto")
 async def arcade_howto(callback: CallbackQuery):
     text = (
-        "🎮 <b>Как открыть Космическую аркаду</b>\n\n"
-        "Игра открывается как Telegram Mini App по прямой ссылке:\n"
-        f"<code>/arcade</code> на сервере бота.\n\n"
-        "⚠️ Сейчас публичный адрес не настроен: задайте переменную окружения "
-        "<code>WEBHOOK_BASE</code> (например <code>https://mybot.example.com</code>), "
-        "и кнопка «Играть» появится автоматически."
+        t('🎮 <b>Как открыть Космическую аркаду</b>\n\nИгра открывается как Telegram Mini App по прямой ссылке:\n<code>/arcade</code> на сервере бота.\n\n⚠️ Сейчас публичный адрес не настроен: задайте переменную окружения <code>WEBHOOK_BASE</code> (например <code>https://mybot.example.com</code>), и кнопка «Играть» появится автоматически.')
     )
     try:
         await callback.message.edit_text(text, parse_mode="HTML")
@@ -148,14 +135,14 @@ async def arcade_top(callback: CallbackQuery):
         )).all()
 
     if not rows:
-        text = "🏆 <b>Топ аркады (7 дней)</b>\n\nПока никто не вышел в плюс — будь первым! 🚀"
+        text = t('🏆 <b>Топ аркады (7 дней)</b>\n\nПока никто не вышел в плюс — будь первым! 🚀')
     else:
         medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-        lines = ["🏆 <b>Топ аркады (7 дней)</b>\n"]
+        lines = [t('🏆 <b>Топ аркады (7 дней)</b>\n')]
         for i, (name, net, games) in enumerate(rows):
             medal = medals.get(i, f"{i + 1}.")
             lines.append(
-                f"{medal} <b>{escape(name or 'Игрок')}</b> — +{_fmt(Decimal(net))} монет ({games} заб.)"
+                t('{medal} <b>{arg1}</b> — +{arg2} монет ({games} заб.)', medal=medal, arg1=escape(name or t('Игрок')), arg2=_fmt(Decimal(net)), games=games)
             )
         text = "\n".join(lines)
 
