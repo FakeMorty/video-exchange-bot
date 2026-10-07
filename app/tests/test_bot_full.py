@@ -4637,3 +4637,204 @@ async def test_language_button_opens_picker_in_user_language():
     texts = [b.text for row in markup.inline_keyboard for b in row]
     assert "✅ 🇬🇧 English" in texts
     assert "🇷🇺 Русский" in texts
+
+
+# ═══════════════════════════════════════════════════════════════
+# Полная локализация: EN_SOURCE покрывает все source-text ключи
+# ═══════════════════════════════════════════════════════════════
+
+def test_en_source_covers_all_source_text_keys():
+    """Каждый кириллический литерал-аргумент t(...) в app/ имеет английский перевод."""
+    import ast
+    import pathlib
+    import re
+
+    from app.i18n import TRANSLATIONS
+
+    en = TRANSLATIONS["en"]
+    app_dir = pathlib.Path(__file__).resolve().parent.parent
+    missing, untranslated = [], []
+    for f in sorted(app_dir.rglob("*.py")):
+        if "tests" in f.parts or "migrations" in f.parts or f.name.startswith("i18n"):
+            continue
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "t"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                key = node.args[0].value
+                if not re.search(r"[А-Яа-яёЁ]", key):
+                    continue
+                if key not in en:
+                    missing.append((str(f), key))
+                elif en[key] == key:
+                    untranslated.append((str(f), key))
+    assert not missing, f"нет EN-перевода для ключей: {missing[:10]}"
+    assert not untranslated, f"EN-значение совпадает с RU-ключом: {untranslated[:10]}"
+
+
+def test_en_source_covers_module_data_keys():
+    """Переводятся и данные модулей, которые попадают в t() в местах использования."""
+    from app.i18n import t
+
+    with __import__("app.i18n", fromlist=["language_scope"]).language_scope("en"):
+        # названия пакетов магазина (config)
+        assert t("1 000 монет") == "1,000 coins"
+        assert t("VIP на 30 дней") == "VIP for 30 days"
+        assert t("Старт-пак: 500 монет") == "Starter pack: 500 coins"
+        # стили и категории ников (nick_styles)
+        assert t("Алмаз") == "Diamond"
+        assert t("Элегантные") == "Elegant"
+        assert t("Рунические") == "Runic"
+        # перки донат-шопа (PERK_NAMES)
+        assert t("💰 Бустер монет x1.5") == "💰 Coin booster x1.5"
+        assert t("⚡ Приоритетная модерация") == "⚡ Priority moderation"
+        # причины жалоб (REPORT_REASONS)
+        assert t("Спам / реклама") == "Spam / advertising"
+        assert t("Нарушение авторских прав") == "Copyright violation"
+        # причины блокировки автора (BLOCK_AUTHOR_REASONS)
+        assert t("Неинтересно") == "Not interesting"
+        # подписи типов опросов (admin _POLL_TYPE_LABELS)
+        assert t("один вариант") == "single option"
+        assert t("несколько вариантов") == "multiple options"
+        assert t("свободный ответ") == "free text"
+        # причины отклонения оффера (admin _OFFER_REJECTION_REASONS)
+        assert t("Запрещённый или сомнительный проект") == "Forbidden or suspicious project"
+        # периоды отчётов (reports PERIODS)
+        assert t("7 дней") == "7 days"
+        assert t("Всё время") == "All time"
+        # источники баланса (reports *_SOURCE_LABELS)
+        assert t("Стартовый баланс") == "Starting balance"
+        assert t("Секслото: 6 совпадений") == "Sexloto: 6 matches"
+        # статус версии (release_notes CURRENT_STATUS)
+        assert t("Актуальная боевая сборка") == "Current production build"
+
+
+def test_t_english_rendering_context_and_fallbacks():
+    from app.i18n import language_scope, set_current_language, t
+
+    # Контекстный язык: EN рендерит английские строки, включая плейсхолдеры
+    with language_scope("en"):
+        assert t("✅ Готово") == "✅ Done"
+        assert t("💰 Цена: <b>{arg0:,} монет</b>\n", arg0=1500) == "💰 Price: <b>1,500 coins</b>\n"
+        assert t("🎫 <b>Куплено билетов:</b> {qty}", qty=3) == "🎫 <b>Tickets bought:</b> 3"
+        # числовые спеки в EN-переводе работают
+        assert t("Ежедневный бонус: +{reward:.0f} монет! Дней подряд: {streak}", reward=20.0, streak=3) == (
+            "Daily bonus: +20 coins! Streak: 3 days in a row"
+        )
+    # RU остался дефолтом
+    assert t("✅ Готово") == "✅ Готово"
+
+    # Явный язык двумя аргументами
+    assert t("en", "✅ Готово") == "✅ Done"
+    assert t("ru", "✅ Готово") == "✅ Готово"
+    # Фолбэк: нет ключа → сам ключ; неизвестный язык → русский
+    assert t("en", "несуществующий ключ 123") == "несуществующий ключ 123"
+    assert t("xx", "✅ Готово") == "✅ Готово"
+
+    # set_current_language влияет на t() без аргумента языка
+    set_current_language("en")
+    try:
+        assert t("🚫 Спам") == "🚫 Spam"
+    finally:
+        set_current_language("ru")
+    assert t("🚫 Спам") == "🚫 Спам"
+
+
+def test_main_menu_english_via_context_language():
+    from app.i18n import language_scope
+    from app.keyboards import main_menu
+
+    with language_scope("en"):
+        labels = [b.text for row in main_menu().keyboard for b in row]
+    assert "🎬 Watch" in labels
+    assert "🛍 Shop" in labels
+    assert "🌐 Language" in labels
+    assert "🎬 Смотреть" not in labels
+
+
+def test_en_placeholders_format_smoke():
+    """Все EN-переводы с плейсхолдерами форматируются без ошибок."""
+    import re
+
+    from app.i18n import TRANSLATIONS
+
+    ph_re = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(:[^{}]*)?\}")
+    checked = 0
+    for key, en in TRANSLATIONS["en"].items():
+        names = ph_re.findall(en)
+        if not names:
+            continue
+        values = {}
+        for name, spec in names:
+            if spec.endswith("f") or spec.endswith("d") or spec.endswith("s"):
+                values[name] = 1.5 if spec.endswith("f") else 1
+            else:
+                values[name] = "X"
+        try:
+            en.format(**values)
+        except Exception:
+            # числовой спек на строке — норма, пробуем числом
+            en.format(**{n: 1.5 for n, _ in names})
+        checked += 1
+    assert checked > 300  # покрыта существенная часть шаблонов
+
+
+@pytest.mark.asyncio
+async def test_poll_error_codes_are_language_independent():
+    """Контракт кодов ошибок опроса: call-sites не зависят от языка текста ошибки."""
+    from app.models import AdminPoll, User
+    from app.services import submit_admin_poll_response
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        user = User(telegram_id=424242, balance=Decimal("0.00"))
+        session.add(user)
+        await session.flush()
+        poll = AdminPoll(
+            question="Тестовый вопрос?",
+            poll_type="text",
+            reward=Decimal("100.00"),
+            created_by=user.id,
+        )
+        session.add(poll)
+        await session.commit()
+
+        _poll, reward, error, code = await submit_admin_poll_response(
+            session, poll.id, user.id, answer_text="ответ",
+        )
+        assert error is None and code is None and reward == Decimal("100.00")
+
+        _poll2, _reward2, dup_error, dup_code = await submit_admin_poll_response(
+            session, poll.id, user.id, answer_text="ещё ответ",
+        )
+        assert dup_error is not None and dup_code == "already"
+
+        _p, _r, closed_error, closed_code = await submit_admin_poll_response(
+            session, 999999, user.id, answer_text="ответ",
+        )
+        assert closed_error is not None and closed_code == "closed"
+
+        # валидационная ошибка тоже несёт код
+        poll2 = AdminPoll(
+            question="Опрос с вариантами?",
+            poll_type="single",
+            options_json='["А", "Б"]',
+            reward=Decimal("10.00"),
+            created_by=user.id,
+        )
+        session.add(poll2)
+        await session.commit()
+        _p3, _r3, invalid_error, invalid_code = await submit_admin_poll_response(
+            session, poll2.id, user.id, option_indexes=[],
+        )
+        assert invalid_error is not None and invalid_code == "invalid"
