@@ -115,11 +115,12 @@ from app.keyboards import (
     low_balance_offer_keyboard,
     video_error_keyboard, photo_error_keyboard, photo_limit_reached_keyboard,
     poll_answer_keyboard,
-    BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY,
-    BTN_OFFERS, BTN_REFERRALS, BTN_ADMIN,
-    BTN_GAMES, BTN_TOPS, BTN_VIP, BTN_LEVEL,
-    BTN_PROMO, BTN_FEEDBACK, BTN_LOTTERY, BTN_RULES, BTN_FAQ,
+    language_keyboard, menu_button_variants,
+    # Кнопки главного меню матчатся по menu_button_variants() (все языки),
+    # поэтому их константы здесь не нужны. Оставлены только кнопки вне меню.
+    BTN_VIP, BTN_LEVEL, BTN_LOTTERY,
 )
+from app.i18n import get_user_language, normalize_language, t
 from app.logger import get_logger
 from app.release_notes import build_version_text
 from app.rules_text import FULL_RULES_TEXT, SHORT_RULES_TEXT
@@ -140,9 +141,10 @@ async def cmd_cancel(message: Message, state: FSMContext):
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         admin_flag = is_admin_or_super(message.from_user.id, user) if user else False
+        lang = get_user_language(user)
     await message.answer(
-        "✅ Режим сброшен. Нажми /start или выбери действие в меню.",
-        reply_markup=main_menu(is_admin=admin_flag),
+        t(lang, "cancel.done"),
+        reply_markup=main_menu(is_admin=admin_flag, lang=lang),
     )
 
 
@@ -176,13 +178,13 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                 )
                 return
             admin_flag = is_any_admin(message.from_user.id, user)
+            lang = get_user_language(user)
             vip_str = " 👑" if is_vip(user) else ""
             styled_name = await get_styled_display_name(session, user)
             await message.answer(
-                f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
-                f"💰 Баланс: <b>{user.balance}</b> монет",
+                t(lang, "welcome.greeting", name=styled_name, vip=vip_str, balance=user.balance),
                 parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
+                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
             )
             return
 
@@ -589,14 +591,15 @@ async def process_nickname(message: Message, state: FSMContext):
 async def send_welcome_banner(message_or_callback, session, user):
     target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
     admin_flag = is_any_admin(user.telegram_id, user)
+    lang = get_user_language(user)
     vip_str = " 👑" if is_vip(user) else ""
     styled_name = await get_styled_display_name(session, user)
-    msg_text = (
-        f"👋 Привет, <b>{styled_name}</b>{vip_str}!\n"
-        f"💰 Баланс: <b>{user.balance}</b> монет"
+    msg_text = t(
+        lang, "welcome.greeting",
+        name=styled_name, vip=vip_str, balance=user.balance,
     )
     if not has_valid_nickname(user):
-        msg_text += "\n\n🎬 Без ника можно посмотреть всего 3 фото или видео. Затем установи ник бесплатно в профиле; для загрузок он тоже понадобится."
+        msg_text += "\n\n" + t(lang, "welcome.no_nickname_hint")
     custom_welcome = await get_setting(session, "welcome_text", "")
     if custom_welcome:
         msg_text += f"\n\n{custom_welcome}"
@@ -609,13 +612,13 @@ async def send_welcome_banner(message_or_callback, session, user):
                 photo=banner_file_id,
                 caption=msg_text,
                 parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
+                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
             )
         except Exception:
             await target.answer(
                 msg_text,
                 parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
+                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
             )
     elif os.path.exists("app/banner.jpg"):
         try:
@@ -623,19 +626,19 @@ async def send_welcome_banner(message_or_callback, session, user):
                 photo=FSInputFile("app/banner.jpg"),
                 caption=msg_text,
                 parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
+                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
             )
         except Exception:
             await target.answer(
                 msg_text,
                 parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag)
+                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
             )
     else:
         await target.answer(
             msg_text,
             parse_mode="HTML",
-            reply_markup=main_menu(is_admin=admin_flag)
+            reply_markup=main_menu(is_admin=admin_flag, lang=lang)
         )
 
     # Стартовый лутбокс показываем только новым пользователям (до 24 часов с регистрации)
@@ -692,15 +695,75 @@ async def cb_main_menu(callback: CallbackQuery):
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         admin_flag = is_any_admin(callback.from_user.id, user)
+        lang = get_user_language(user)
     await callback.message.answer(
-        "🏠 <b>Главное меню</b>\n\nВыбери нужный раздел:",
+        t(lang, "main_menu.title"),
         parse_mode="HTML",
-        reply_markup=main_menu(is_admin=admin_flag),
+        reply_markup=main_menu(is_admin=admin_flag, lang=lang),
     )
     await callback.answer()
 
 
-@router.message(F.text == BTN_ADMIN)
+# =========================
+# ЯЗЫК ИНТЕРФЕЙСА
+# =========================
+@router.message(F.text.in_(menu_button_variants("lang")))
+async def cmd_language_menu(message: Message, state: FSMContext):
+    """Кнопка «🌐 Язык» в главном меню — открывает выбор языка бота."""
+    await state.clear()
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        lang = get_user_language(user)
+        await log_user_action(session, user.id, "open_language_menu")
+    await message.answer(
+        t(lang, "lang.title"),
+        parse_mode="HTML",
+        reply_markup=language_keyboard(lang),
+    )
+
+
+@router.callback_query(F.data == "lang_menu")
+async def cb_language_menu(callback: CallbackQuery):
+    """Выбор языка по инлайн-кнопке (например, из профиля)."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        lang = get_user_language(user)
+    await callback.message.answer(
+        t(lang, "lang.title"),
+        parse_mode="HTML",
+        reply_markup=language_keyboard(lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("lang_set:"))
+async def cb_language_set(callback: CallbackQuery):
+    """Сохраняет выбранный язык и отвечает пользователю на этом языке."""
+    parts = (callback.data or "").split(":", 1)
+    lang = normalize_language(parts[1] if len(parts) > 1 else None)
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        user.language = lang
+        await session.commit()
+        admin_flag = is_any_admin(callback.from_user.id, user)
+        await log_user_action(session, user.id, "set_language", lang)
+    await callback.answer(t(lang, "lang.changed_alert"), show_alert=True)
+    await callback.message.answer(
+        t(lang, "main_menu.title"),
+        parse_mode="HTML",
+        reply_markup=main_menu(is_admin=admin_flag, lang=lang),
+    )
+
+
+@router.message(F.text.in_(menu_button_variants("admin")))
 async def cmd_admin_redirect(message: Message):
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
@@ -712,13 +775,13 @@ async def cmd_admin_redirect(message: Message):
 # =========================
 # PROFILE
 # =========================
-@router.message(F.text == BTN_RULES)
+@router.message(F.text.in_(menu_button_variants("rules")))
 async def show_rules(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(FULL_RULES_TEXT, parse_mode="HTML")
 
 
-@router.message(F.text == BTN_PROFILE)
+@router.message(F.text.in_(menu_button_variants("profile")))
 async def show_profile(message: Message, state: FSMContext):
     await state.clear()
     async with async_session() as session:
@@ -728,11 +791,12 @@ async def show_profile(message: Message, state: FSMContext):
         if not await require_nickname(message, user):
             return
 
+        lang = get_user_language(user)
         refs = await count_referrals(session, user.id)
         blocked_count = await count_blocked_authors(session, user.id)
         vip_str = ""
         if is_vip(user):
-            vip_str = f"\n👑 VIP до: {user.vip_until.strftime('%d.%m.%Y')}"
+            vip_str = "\n" + t(lang, "profile.vip_until", date=user.vip_until.strftime('%d.%m.%Y'))
 
         level = user.level
         xp_spent = sum(calc_level_xp_required(lvl) for lvl in range(1, level))
@@ -743,32 +807,36 @@ async def show_profile(message: Message, state: FSMContext):
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="✏️ Сменить ник",
+                text=t(lang, "profile.change_nick"),
                 callback_data="set_nickname_start"
             )],
             [InlineKeyboardButton(
-                text="🛍 Магазин",
+                text=t(lang, "menu.buy"),
                 callback_data="store_menu"
             )],
             [InlineKeyboardButton(
-                text=f"🚫 Заблокированные авторы ({blocked_count})",
+                text=t(lang, "profile.blocked_authors", count=blocked_count),
                 callback_data="blocked_authors:0"
+            )],
+            [InlineKeyboardButton(
+                text=t(lang, "menu.lang"),
+                callback_data="lang_menu"
             )]
         ])
         # Стилизованный ник (card-режим для профиля)
         styled_nick = await get_styled_display_name(session, user, card=True)
         text = (
-            f"👤 <b>Профиль</b>\n\n"
-            f"🏷 Ник:\n{styled_nick}\n\n"
-            f"🆔 Telegram ID: <code>{user.telegram_id}</code>\n"
-            f"💰 Баланс: <b>{user.balance}</b> монет\n"
-            f"🏆 Уровень: <b>{user.level}</b>\n"
-            f"⭐ XP: {xp_current}/{xp_needed} [{bar}]\n"
-            f"👥 Приглашено друзей: {refs}\n"
-            f"💎 Заработано с рефералов: {user.referral_earnings} монет\n"
-            f"📊 Статус: {user.status}"
+            f"{t(lang, 'profile.title')}\n\n"
+            f"{t(lang, 'profile.nick')}\n{styled_nick}\n\n"
+            f"{t(lang, 'profile.telegram_id')} <code>{user.telegram_id}</code>\n"
+            f"{t(lang, 'profile.balance', balance=user.balance)}\n"
+            f"{t(lang, 'profile.level', level=user.level)}\n"
+            f"{t(lang, 'profile.xp', current=xp_current, needed=xp_needed, bar=bar)}\n"
+            f"{t(lang, 'profile.referrals', count=refs)}\n"
+            f"{t(lang, 'profile.earned', amount=user.referral_earnings)}\n"
+            f"{t(lang, 'profile.status', status=user.status)}"
             f"{vip_str}\n\n"
-            f"Смена ника стоит {NICKNAME_CHANGE_COST} монет"
+            f"{t(lang, 'profile.nick_cost', cost=NICKNAME_CHANGE_COST)}"
         )
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
         await log_user_action(session, user.id, "view_profile")
@@ -1148,7 +1216,7 @@ async def buy_vip(callback: CallbackQuery):
 # =========================
 # WATCH
 # =========================
-@router.message(F.text == BTN_WATCH)
+@router.message(F.text.in_(menu_button_variants("watch")))
 async def btn_watch(message: Message, state: FSMContext):
     await state.clear()
     from app.services import is_admin_or_super
@@ -1847,7 +1915,7 @@ async def cb_react(callback: CallbackQuery):
 # =========================
 # UPLOAD
 # =========================
-@router.message(F.text == BTN_UPLOAD)
+@router.message(F.text.in_(menu_button_variants("upload")))
 async def btn_upload(message: Message, state: FSMContext):
     await state.clear()
     async with async_session() as session:
@@ -1999,7 +2067,7 @@ async def handle_photo_upload(message: Message):
 # =========================
 # REFERRALS
 # =========================
-@router.message(F.text == BTN_REFERRALS)
+@router.message(F.text.in_(menu_button_variants("referrals")))
 async def btn_referrals(message: Message, state: FSMContext):
     await state.clear()
     async with async_session() as session:
@@ -2058,7 +2126,7 @@ async def _show_store(target: Message, user: User) -> None:
     await target.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
-@router.message(F.text == BTN_BUY)
+@router.message(F.text.in_(menu_button_variants("buy")))
 async def btn_store(message: Message, state: FSMContext):
     await state.clear()
     async with async_session() as session:
@@ -3203,7 +3271,7 @@ async def cb_btn_buy(callback: CallbackQuery, state: FSMContext):
 # =========================
 # OFFERS
 # =========================
-@router.message(F.text == BTN_OFFERS)
+@router.message(F.text.in_(menu_button_variants("offers")))
 async def btn_offers(message: Message, state: FSMContext):
     await state.clear()
     async with async_session() as session:
@@ -3433,7 +3501,7 @@ async def btn_offers_back(callback: CallbackQuery):
 # =========================
 # GAMES (с игровыми сессиями)
 # =========================
-@router.message(F.text == BTN_GAMES)
+@router.message(F.text.in_(menu_button_variants("games")))
 async def btn_games(message: Message, state: FSMContext):
     await state.clear()
 
@@ -3466,7 +3534,7 @@ async def game_pay_session(callback: CallbackQuery):
 # =========================
 # TOPS
 # =========================
-@router.message(F.text == BTN_TOPS)
+@router.message(F.text.in_(menu_button_variants("tops")))
 async def btn_tops(message: Message, state: FSMContext):
     await state.clear()
     async with async_session() as session:
@@ -3976,7 +4044,7 @@ async def lottery_live_info(callback: CallbackQuery):
 # =========================
 # ЖАЛОБЫ И ПРЕДЛОЖЕНИЯ
 # =========================
-@router.message(F.text == BTN_FEEDBACK)
+@router.message(F.text.in_(menu_button_variants("feedback")))
 async def feedback_start(message: Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -4068,7 +4136,7 @@ async def feedback_submit(message: Message, state: FSMContext):
 # =========================
 # ПРОМОКОДЫ (НОВЫЙ РАЗДЕЛ)
 # =========================
-@router.message(F.text == BTN_PROMO)
+@router.message(F.text.in_(menu_button_variants("promo")))
 async def btn_promo(message: Message, state: FSMContext):
     await state.clear()
     async with async_session() as session:
@@ -4618,7 +4686,7 @@ async def cb_block_author_cancel(callback: CallbackQuery):
 # ====================================================
 # ЕЖЕДНЕВНЫЙ БОНУС, ЛОТЕРЕЯ, ПРОМОКОДЫ ТЕМПЛЕЙТЫ И ХАЛЯВА
 # ====================================================
-@router.message(F.text == BTN_FAQ)
+@router.message(F.text.in_(menu_button_variants("faq")))
 async def btn_faq(message: Message, state: FSMContext):
     await state.clear()
     

@@ -49,6 +49,8 @@ class User(Base):
     last_freebie_week: Mapped[int] = mapped_column(Integer, default=0)
     last_freebie_year: Mapped[int] = mapped_column(Integer, default=0)
     timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Язык интерфейса бота (i18n, см. app/i18n.py): "ru" по умолчанию, "en" — первый доп. язык
+    language: Mapped[str] = mapped_column(String(8), default="ru", server_default="ru")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Отношения

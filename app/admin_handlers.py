@@ -59,10 +59,15 @@ async def cmd_cancel_admin(message: Message, state: FSMContext):
     from app.keyboards import main_menu
     from app.services import get_user
     from app.user_handlers import is_any_admin
+    from app.i18n import get_user_language, t
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         admin_flag = is_any_admin(message.from_user.id, user)
-    await message.answer("❌ Действие отменено.", reply_markup=main_menu(is_admin=admin_flag))
+        lang = get_user_language(user)
+    await message.answer(
+        t(lang, "cancel.aborted"),
+        reply_markup=main_menu(is_admin=admin_flag, lang=lang),
+    )
 
 
 @router.message(CommandStart())

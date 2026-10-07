@@ -4,9 +4,14 @@ from aiogram.types import (
     KeyboardButton, ReplyKeyboardMarkup
 )
 
+from app.i18n import SUPPORTED_LANGUAGES, language_label, normalize_language, t
+
 # =========================
 # ТЕКСТОВЫЕ КНОПКИ ГЛАВНОГО МЕНЮ
 # =========================
+# Канонические русские подписи. Главное меню собирается через переводы
+# (app/i18n.py), а эти константы остаются для обратной совместимости —
+# они должны совпадать с t("ru", "menu.<ключ>") (это проверяет тест).
 BTN_WATCH      = "🎬 Смотреть"
 BTN_UPLOAD     = "📤 Загрузить"
 BTN_PROFILE    = "👤 Профиль"
@@ -25,23 +30,57 @@ BTN_LOOTBOXES  = "🎁 Лутбоксы"
 BTN_ARCADE     = "🚀 Космическая аркада"
 BTN_RULES      = "📜 Правила"
 BTN_FAQ        = "ℹ️ FAQ / Помощь"
+BTN_LANG       = "🌐 Язык"
 
 
 # =========================
 # ГЛАВНОЕ МЕНЮ (ReplyKeyboard)
 # =========================
-def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
+def main_menu(is_admin: bool = False, lang: str | None = None) -> ReplyKeyboardMarkup:
+    """Главное меню на языке интерфейса пользователя.
+
+    `lang` — код языка (см. app/i18n.py); None/неизвестный код = русский.
+    Последний ряд — кнопка выбора языка «🌐 Язык / 🌐 Language».
+    """
     kb = [
-        [KeyboardButton(text=BTN_WATCH), KeyboardButton(text=BTN_UPLOAD)],
-        [KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_BUY)],
-        [KeyboardButton(text=BTN_OFFERS), KeyboardButton(text=BTN_REFERRALS)],
-        [KeyboardButton(text=BTN_GAMES), KeyboardButton(text=BTN_TOPS)],
-        [KeyboardButton(text=BTN_PROMO), KeyboardButton(text=BTN_FEEDBACK)],
-        [KeyboardButton(text=BTN_RULES), KeyboardButton(text=BTN_FAQ)],
+        [KeyboardButton(text=t(lang, "menu.watch")), KeyboardButton(text=t(lang, "menu.upload"))],
+        [KeyboardButton(text=t(lang, "menu.profile")), KeyboardButton(text=t(lang, "menu.buy"))],
+        [KeyboardButton(text=t(lang, "menu.offers")), KeyboardButton(text=t(lang, "menu.referrals"))],
+        [KeyboardButton(text=t(lang, "menu.games")), KeyboardButton(text=t(lang, "menu.tops"))],
+        [KeyboardButton(text=t(lang, "menu.promo")), KeyboardButton(text=t(lang, "menu.feedback"))],
+        [KeyboardButton(text=t(lang, "menu.rules")), KeyboardButton(text=t(lang, "menu.faq"))],
+        [KeyboardButton(text=t(lang, "menu.lang"))],
     ]
     if is_admin:
-        kb.append([KeyboardButton(text=BTN_ADMIN)])
+        kb.append([KeyboardButton(text=t(lang, "menu.admin"))])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+def menu_button_variants(key: str) -> set[str]:
+    """Все языковые варианты подписи кнопки главного меню.
+
+    Обработчики главного меню матчат `F.text` по этому набору, чтобы кнопки
+    работали на любом выбранном языке интерфейса (например, и «🎬 Смотреть»,
+    и «🎬 Watch» открывают ленту).
+    """
+    return {t(lang, f"menu.{key}") for lang in SUPPORTED_LANGUAGES}
+
+
+def language_keyboard(current_lang: str | None = None) -> InlineKeyboardMarkup:
+    """Клавиатура выбора языка интерфейса бота (текущий язык отмечен ✅)."""
+    current = normalize_language(current_lang)
+    rows = []
+    for code in SUPPORTED_LANGUAGES:
+        mark = "✅ " if code == current else ""
+        rows.append([InlineKeyboardButton(
+            text=f"{mark}{language_label(code)}",
+            callback_data=f"lang_set:{code}",
+        )])
+    rows.append([InlineKeyboardButton(
+        text=t(current, "main_menu.button"),
+        callback_data="btn_main_menu",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # =========================

@@ -4440,3 +4440,200 @@ async def test_photo_and_video_requests_share_serialization():
     callback = SimpleNamespace(from_user=SimpleNamespace(id=778124))
     await asyncio.gather(photo(callback), video(callback), photo(callback))
     assert peak == 1
+
+
+# ══════════════════════════════════════════════════════════════
+#  Мультиязычность: кнопка выбора языка бота (старт с английского)
+# ══════════════════════════════════════════════════════════════
+
+def test_i18n_normalize_language_and_fallbacks():
+    from app.i18n import (
+        DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, get_user_language,
+        language_label, normalize_language, t,
+    )
+
+    assert DEFAULT_LANGUAGE == "ru"
+    assert set(SUPPORTED_LANGUAGES) >= {"ru", "en"}
+
+    # нормализация кодов
+    assert normalize_language(None) == "ru"
+    assert normalize_language("") == "ru"
+    assert normalize_language("EN") == "en"
+    assert normalize_language("en-US") == "en"
+    assert normalize_language("en_US") == "en"
+    assert normalize_language("de") == "ru"  # неизвестный язык -> дефолт
+
+    # переводы и фолбэки
+    assert t("ru", "menu.watch") == "🎬 Смотреть"
+    assert t("en", "menu.watch") == "🎬 Watch"
+    assert t("xx", "menu.watch") == "🎬 Смотреть"  # нет такого языка -> русский
+    assert t("en", "no.such.key") == "no.such.key"  # нет ключа -> сам ключ
+    assert t("en", "welcome.greeting", name="Nick", vip="", balance=100) == (
+        "👋 Hi, <b>Nick</b>!\n💰 Balance: <b>100</b> coins"
+    )
+
+    # язык пользователя
+    assert get_user_language(None) == "ru"
+    assert get_user_language(SimpleNamespace(language=None)) == "ru"
+    assert get_user_language(SimpleNamespace(language="en")) == "en"
+    assert get_user_language(SimpleNamespace(language="fr")) == "ru"
+
+    # подпись языка для кнопок
+    assert language_label("ru") == "🇷🇺 Русский"
+    assert language_label("en") == "🇬🇧 English"
+
+
+def test_main_menu_is_localized_and_has_language_button():
+    from app.keyboards import (
+        BTN_ADMIN, BTN_BUY, BTN_FAQ, BTN_FEEDBACK, BTN_GAMES, BTN_LANG,
+        BTN_OFFERS, BTN_PROFILE, BTN_PROMO, BTN_REFERRALS, BTN_RULES,
+        BTN_TOPS, BTN_UPLOAD, BTN_WATCH,
+        language_keyboard, main_menu, menu_button_variants,
+    )
+
+    ru_labels = [b.text for row in main_menu().keyboard for b in row]
+    en_labels = [b.text for row in main_menu(lang="en").keyboard for b in row]
+
+    # По умолчанию меню русское, включая кнопку выбора языка
+    for label in (BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY, BTN_OFFERS,
+                  BTN_REFERRALS, BTN_GAMES, BTN_TOPS, BTN_PROMO, BTN_FEEDBACK,
+                  BTN_RULES, BTN_FAQ, BTN_LANG):
+        assert label in ru_labels
+    # Английская локализация
+    for label in ("🎬 Watch", "📤 Upload", "👤 Profile", "🛍 Shop",
+                  "📢 Offers", "👥 Referrals", "🎮 Games", "🏆 Tops",
+                  "🎟 Promo codes", "💬 Feedback", "📜 Rules",
+                  "ℹ️ FAQ / Help", "🌐 Language"):
+        assert label in en_labels
+        assert label not in ru_labels
+    # Админ-кнопка тоже локализуется и не светится обычным юзерам
+    assert BTN_ADMIN not in ru_labels
+    admin_labels = [b.text for row in main_menu(is_admin=True, lang="en").keyboard for b in row]
+    assert "🔧 Admin" in admin_labels
+
+    # Варианты для матчинга обработчиков покрывают все языки
+    assert menu_button_variants("watch") == {"🎬 Смотреть", "🎬 Watch"}
+    assert menu_button_variants("lang") == {"🌐 Язык", "🌐 Language"}
+
+    # Клавиатура выбора языка: оба языка, текущий отмечен, есть возврат в меню
+    kb = language_keyboard("en")
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "🇷🇺 Русский" in texts
+    assert "✅ 🇬🇧 English" in texts
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "lang_set:ru" in callbacks
+    assert "lang_set:en" in callbacks
+    assert "btn_main_menu" in callbacks
+
+
+def test_menu_button_constants_match_ru_translations():
+    from app import keyboards as K
+    from app.i18n import t
+
+    pairs = {
+        "watch": K.BTN_WATCH, "upload": K.BTN_UPLOAD, "profile": K.BTN_PROFILE,
+        "buy": K.BTN_BUY, "offers": K.BTN_OFFERS, "referrals": K.BTN_REFERRALS,
+        "games": K.BTN_GAMES, "tops": K.BTN_TOPS, "promo": K.BTN_PROMO,
+        "feedback": K.BTN_FEEDBACK, "rules": K.BTN_RULES, "faq": K.BTN_FAQ,
+        "admin": K.BTN_ADMIN, "lang": K.BTN_LANG,
+    }
+    for key, constant in pairs.items():
+        assert t("ru", f"menu.{key}") == constant, key
+
+
+@pytest.mark.asyncio
+async def test_user_language_defaults_to_ru_and_persists(db_session):
+    from app.services import get_or_create_user, get_user
+
+    user, is_new = await get_or_create_user(db_session, 778201, "lang_default")
+    assert is_new
+    assert user.language == "ru"
+
+    user.language = "en"
+    await db_session.commit()
+
+    fetched = await get_user(db_session, 778201)
+    assert fetched.language == "en"
+
+
+@pytest.mark.asyncio
+async def test_language_switch_callback_saves_language_and_replies_in_it():
+    from unittest.mock import AsyncMock
+    from app.db import async_session
+    from app.services import get_or_create_user, get_user
+    from app.user_handlers import cb_language_set
+
+    await reset_bot_db()
+    async with async_session() as session:
+        await get_or_create_user(session, 778202, "lang_switcher")
+
+    callback = SimpleNamespace(
+        data="lang_set:en",
+        from_user=SimpleNamespace(id=778202),
+        message=SimpleNamespace(answer=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    await cb_language_set(callback)
+
+    # Язык сохранился в БД
+    async with async_session() as session:
+        user = await get_user(session, 778202)
+        assert user.language == "en"
+
+    # Toast-подтверждение и новое главное меню — на английском
+    assert callback.answer.await_count == 1
+    assert "English" in callback.answer.await_args.args[0]
+    assert callback.message.answer.await_count == 1
+    assert "Main menu" in callback.message.answer.await_args.args[0]
+    markup = callback.message.answer.await_args.kwargs["reply_markup"]
+    labels = [b.text for row in markup.keyboard for b in row]
+    assert "🎬 Watch" in labels
+    assert "🌐 Language" in labels
+    assert "🎬 Смотреть" not in labels
+
+    # Переключение обратно на русский тоже работает
+    callback_ru = SimpleNamespace(
+        data="lang_set:ru",
+        from_user=SimpleNamespace(id=778202),
+        message=SimpleNamespace(answer=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    await cb_language_set(callback_ru)
+    async with async_session() as session:
+        user = await get_user(session, 778202)
+        assert user.language == "ru"
+    labels_ru = [
+        b.text
+        for row in callback_ru.message.answer.await_args.kwargs["reply_markup"].keyboard
+        for b in row
+    ]
+    assert "🎬 Смотреть" in labels_ru
+
+
+@pytest.mark.asyncio
+async def test_language_button_opens_picker_in_user_language():
+    from unittest.mock import AsyncMock
+    from app.db import async_session
+    from app.services import get_or_create_user
+    from app.user_handlers import cmd_language_menu
+
+    await reset_bot_db()
+    async with async_session() as session:
+        user, _ = await get_or_create_user(session, 778203, "lang_picker")
+        user.language = "en"
+        await session.commit()
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=778203),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+    await cmd_language_menu(message, state)
+
+    state.clear.assert_awaited_once()
+    assert message.answer.await_count == 1
+    assert "Choose the bot language" in message.answer.await_args.args[0]
+    markup = message.answer.await_args.kwargs["reply_markup"]
+    texts = [b.text for row in markup.inline_keyboard for b in row]
+    assert "✅ 🇬🇧 English" in texts
+    assert "🇷🇺 Русский" in texts
