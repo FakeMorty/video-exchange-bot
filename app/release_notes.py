@@ -4,12 +4,14 @@ import html
 import re
 from pathlib import Path
 
+from app.i18n import t
+
 # Единственный ручной источник версии для отображения в боте.
 # Все тексты изменений автоматически подтягиваются из CHANGELOG.md,
 # поэтому будущим агентам достаточно:
 # 1) обновить CURRENT_VERSION при релизе,
 # 2) добавить записи в CHANGELOG.md.
-CURRENT_VERSION = "v3.23.0-three-views-before-nickname"
+CURRENT_VERSION = "v3.26.0-full-i18n"
 CURRENT_STATUS = "Актуальная боевая сборка"
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
@@ -62,16 +64,18 @@ def get_recent_changelog_items(limit: int = 8) -> list[str]:
 def build_version_text(*, admin: bool = False, limit: int = 8) -> str:
     items = get_recent_changelog_items(limit=limit)
 
-    text = (
+    text = t(
         "🤖 <b>ИНФОРМАЦИЯ О ВЕРСИИ И ИЗМЕНЕНИЯХ</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• <b>Текущая версия:</b> <code>{CURRENT_VERSION}</code>\n"
-        f"• <b>Статус:</b> {CURRENT_STATUS}\n\n"
-        "📢 <b>Последние изменения:</b>\n"
+        "• <b>Текущая версия:</b> <code>{version}</code>\n"
+        "• <b>Статус:</b> {status}\n\n"
+        "📢 <b>Последние изменения:</b>\n",
+        version=CURRENT_VERSION,
+        status=t(CURRENT_STATUS),
     )
 
     if not items:
-        text += "• История изменений пока недоступна. Проверь файл CHANGELOG.md.\n"
+        text += t("• История изменений пока недоступна. Проверь файл CHANGELOG.md.\n")
 
     shown = 0
     for item in items:
@@ -85,10 +89,10 @@ def build_version_text(*, admin: bool = False, limit: int = 8) -> str:
 
     omitted = len(items) - shown
     if omitted > 0:
-        text += f"• …и ещё {omitted} — полная история в CHANGELOG.md\n"
+        text += t("• …и ещё {omitted} — полная история в CHANGELOG.md\n", omitted=omitted)
 
     if admin:
-        text += (
+        text += t(
             "\n👑 <b>Подсказка для сопровождения:</b>\n"
             "Панель версии читает список изменений прямо из <code>CHANGELOG.md</code>. "
             "Перед релизом обновляйте версию в <code>app/release_notes.py</code> и добавляйте новые пункты в changelog."

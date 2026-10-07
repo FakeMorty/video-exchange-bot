@@ -1,27 +1,31 @@
 from datetime import datetime, timezone, timedelta
 import zoneinfo
 
+from app.i18n import t
+
 
 def _humanize_relative_time(target_dt: datetime) -> str:
     now = datetime.now(timezone.utc)
     diff = target_dt - now
     total_seconds = int(diff.total_seconds())
     if total_seconds <= 0:
-        return "прямо сейчас"
+        return t("прямо сейчас")
 
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     parts: list[str] = []
     if hours > 0:
-        parts.append(f"{hours} ч")
+        parts.append(t("{hours} ч", hours=hours))
     if minutes > 0:
-        parts.append(f"{minutes} мин")
-    return "через " + (" ".join(parts) if parts else "меньше минуты")
+        parts.append(t("{minutes} мин", minutes=minutes))
+    if parts:
+        return t("через {parts}", parts=" ".join(parts))
+    return t("меньше минуты")
 
 
 def format_time_for_user(dt: datetime, user_timezone: str = None) -> str:
     """
-    Форматирует время розыгрыша/события в понятный человеку вид.
+    Форматирует время розыгрыша/события в понятный человеку вид (с переводом).
 
     Пример:
     - "через 3 ч 15 мин (ровно в 20:00 по твоему времени / 17:00 МСК)"
@@ -38,12 +42,17 @@ def format_time_for_user(dt: datetime, user_timezone: str = None) -> str:
         try:
             tz = zoneinfo.ZoneInfo(user_timezone)
             local_dt = dt.astimezone(tz)
-            return (
-                f"{relative} "
-                f"(ровно в {local_dt.strftime('%H:%M')} по твоему времени / "
-                f"{msk_dt.strftime('%H:%M')} МСК)"
+            return t(
+                "{relative} (ровно в {local} по твоему времени / {msk} МСК)",
+                relative=relative,
+                local=local_dt.strftime('%H:%M'),
+                msk=msk_dt.strftime('%H:%M'),
             )
         except Exception:
             pass
 
-    return f"{relative} (ровно в {msk_dt.strftime('%H:%M')} МСК)"
+    return t(
+        "{relative} (ровно в {msk} МСК)",
+        relative=relative,
+        msk=msk_dt.strftime('%H:%M'),
+    )

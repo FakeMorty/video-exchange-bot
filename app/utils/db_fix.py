@@ -145,6 +145,14 @@ async def fix_database():
         except Exception:
             await conn.rollback()
 
+        # Язык интерфейса бота (i18n): ru по умолчанию, en — первый доп. язык
+        try:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN language VARCHAR(8) NOT NULL DEFAULT 'ru'"))
+            await conn.commit()
+            log_info(logger, "Added users.language")
+        except Exception:
+            await conn.rollback()
+
         # Ensure character exists in katya_chats table
         try:
             await conn.execute(text("ALTER TABLE katya_chats ADD COLUMN character VARCHAR(20) NOT NULL DEFAULT 'katya'"))

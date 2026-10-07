@@ -3,6 +3,7 @@
 import math
 from html import escape
 from decimal import Decimal
+from app.i18n import t
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -40,9 +41,9 @@ class UserOfferState(StatesGroup):
 # =========================
 def user_offers_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Офферы (участие)", callback_data="offers_participation")],
-        [InlineKeyboardButton(text="➕ Создать свой оффер", callback_data="user_create_offer")],
-        [InlineKeyboardButton(text="📋 Мои офферы", callback_data="user_my_offers")],
+        [InlineKeyboardButton(text=t('📢 Офферы (участие)'), callback_data="offers_participation")],
+        [InlineKeyboardButton(text=t('➕ Создать свой оффер'), callback_data="user_create_offer")],
+        [InlineKeyboardButton(text=t('📋 Мои офферы'), callback_data="user_my_offers")],
     ])
 
 
@@ -54,13 +55,7 @@ async def user_create_offer_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserOfferState.waiting_title)
     
     text = (
-        "➕ <b>Создание своего оффера</b>\n\n"
-        "Можно рекламировать каналы, группы, чаты и ботов Telegram.\n\n"
-        "⚠️ <b>Важно:</b>\n"
-        "• публичные каналы/группы/чаты с username бот может проверять автоматически\n"
-        "• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна, поэтому подтверждение будет ручным по кнопке пользователя\n"
-        "• мутные, серые и запрещённые проекты в модерацию не пройдут\n\n"
-        "Шаг 1/8: Введи название проекта/оффера:"
+        t('➕ <b>Создание своего оффера</b>\n\nМожно рекламировать каналы, группы, чаты и ботов Telegram.\n\n⚠️ <b>Важно:</b>\n• публичные каналы/группы/чаты с username бот может проверять автоматически\n• для ботов, приватных инвайтов и некоторых ссылок авто-проверка недоступна, поэтому подтверждение будет ручным по кнопке пользователя\n• мутные, серые и запрещённые проекты в модерацию не пройдут\n\nШаг 1/8: Введи название проекта/оффера:')
     )
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
@@ -70,37 +65,36 @@ async def user_create_offer_start(callback: CallbackQuery, state: FSMContext):
 async def user_offer_title(message: Message, state: FSMContext):
     title = (message.text or "").strip()
     if not title or len(title) > 100:
-        await message.answer("❌ Введи название длиной от 1 до 100 символов.")
+        await message.answer(t('❌ Введи название длиной от 1 до 100 символов.'))
         return
     await state.update_data(title=title)
     await state.set_state(UserOfferState.waiting_description)
-    await message.answer("Шаг 2/8: Введи описание оффера (что получат подписчики):")
+    await message.answer(t('Шаг 2/8: Введи описание оффера (что получат подписчики):'))
 
 
 @router.message(UserOfferState.waiting_description)
 async def user_offer_description(message: Message, state: FSMContext):
     description = (message.text or "").strip()
     if not description or len(description) > 1500:
-        await message.answer("❌ Введи описание длиной от 1 до 1500 символов.")
+        await message.answer(t('❌ Введи описание длиной от 1 до 1500 символов.'))
         return
     await state.update_data(description=description)
     await state.set_state(UserOfferState.waiting_url)
-    await message.answer("Шаг 3/8: Введи ссылку на Telegram-проект (канал / группа / чат / бот / invite link):")
+    await message.answer(t('Шаг 3/8: Введи ссылку на Telegram-проект (канал / группа / чат / бот / invite link):'))
 
 
 @router.message(UserOfferState.waiting_url)
 async def user_offer_url(message: Message, state: FSMContext):
     url = normalize_telegram_url(message.text or "")
     if not url:
-        await message.answer("❌ Нужна корректная ссылка t.me/... или @username Telegram-проекта.")
+        await message.answer(t('❌ Нужна корректная ссылка t.me/... или @username Telegram-проекта.'))
         return
     meta = classify_offer_url(url)
     await state.update_data(url=url, target_label=meta["label"], auto_verify=meta["auto_verify"])
     await state.set_state(UserOfferState.waiting_reward_preview)
     
     await message.answer(
-        "Шаг 4/8: Введи <b>предварительную награду</b> (монеты, выдаётся сразу):\n\n"
-        "Рекомендуется: 10, 20, 30",
+        t('Шаг 4/8: Введи <b>предварительную награду</b> (монеты, выдаётся сразу):\n\nРекомендуется: 10, 20, 30'),
         parse_mode="HTML"
     )
 
@@ -112,13 +106,12 @@ async def user_offer_preview(message: Message, state: FSMContext):
         if not val.is_finite() or val < 10:
             raise ValueError
     except Exception:
-        await message.answer("❌ Введи число ≥ 10")
+        await message.answer(t('❌ Введи число ≥ 10'))
         return
     await state.update_data(reward_preview=val)
     await state.set_state(UserOfferState.waiting_reward_final)
     await message.answer(
-        "Шаг 5/8: Введи <b>итоговую награду</b> (после проверки подписки):\n\n"
-        "Рекомендуется: 70, 100, 160",
+        t('Шаг 5/8: Введи <b>итоговую награду</b> (после проверки подписки):\n\nРекомендуется: 70, 100, 160'),
         parse_mode="HTML"
     )
 
@@ -130,16 +123,12 @@ async def user_offer_final(message: Message, state: FSMContext):
         if not val.is_finite() or val < 50:
             raise ValueError
     except Exception:
-        await message.answer("❌ Введи число ≥ 50")
+        await message.answer(t('❌ Введи число ≥ 50'))
         return
     await state.update_data(reward_final=val)
     await state.set_state(UserOfferState.waiting_penalty)
     await message.answer(
-        "💰 <b>Шаг 6/8: Штраф за отписку</b>\n\n"
-        "Введи сумму штрафа (монеты), которая будет списана дополнительно, "
-        "если пользователь прекратит участие в оффере там, где это можно проверить автоматически.\n\n"
-        "⚠️ Штраф <b>не может превышать итоговую награду</b> — "
-        "иначе нарушение становится дороже, чем возможный выигрыш, и это несправедливо.",
+        t('💰 <b>Шаг 6/8: Штраф за отписку</b>\n\nВведи сумму штрафа (монеты), которая будет списана дополнительно, если пользователь прекратит участие в оффере там, где это можно проверить автоматически.\n\n⚠️ Штраф <b>не может превышать итоговую награду</b> — иначе нарушение становится дороже, чем возможный выигрыш, и это несправедливо.'),
         parse_mode="HTML"
     )
 
@@ -151,23 +140,20 @@ async def user_offer_penalty(message: Message, state: FSMContext):
         if not val.is_finite() or val < 0:
             raise ValueError
     except Exception:
-        await message.answer("❌ Введи неотрицательное число.")
+        await message.answer(t('❌ Введи неотрицательное число.'))
         return
     # Штраф за отписку не должен превышать итоговую награду.
     data = await state.get_data()
     reward_final = data.get("reward_final")
     if reward_final is not None and val > Decimal(reward_final):
         await message.answer(
-            f"❌ Штраф ({val}) не может быть больше итоговой награды ({reward_final}). "
-            "Сумма штрафа должна быть меньше или равна награде."
+            t('❌ Штраф ({val}) не может быть больше итоговой награды ({reward_final}). Сумма штрафа должна быть меньше или равна награде.', val=val, reward_final=reward_final)
         )
         return
     await state.update_data(penalty_unsubscribe=val)
     await state.set_state(UserOfferState.waiting_duration)
     await message.answer(
-        "📅 <b>Шаг 7/8: Срок активности</b>\n\n"
-        "На сколько дней сделать оффер активным?\n\n"
-        "Рекомендуется: 30, 60, 90"
+        t('📅 <b>Шаг 7/8: Срок активности</b>\n\nНа сколько дней сделать оффер активным?\n\nРекомендуется: 30, 60, 90')
     )
 
 
@@ -178,7 +164,7 @@ async def user_offer_duration(message: Message, state: FSMContext):
         if days < 7 or days > 365:
             raise ValueError
     except Exception:
-        await message.answer("❌ Введи число от 7 до 365")
+        await message.answer(t('❌ Введи число от 7 до 365'))
         return
     
     await state.update_data(duration_days=days)
@@ -191,18 +177,13 @@ async def user_offer_duration(message: Message, state: FSMContext):
     await state.update_data(placement_cost=cost)
     
     text = (
-        f"💰 <b>Стоимость размещения:</b> <b>{cost:.0f} монет</b>\n\n"
-        f"• Награды: {data['reward_preview']} + {data['reward_final']}\n"
-        f"• Штраф: {data['penalty_unsubscribe']}\n"
-        f"• Длительность: {days} дней\n"
-        f"• Коэффициент: 20%\n\n"
-        "Выбери способ оплаты:"
+        t('💰 <b>Стоимость размещения:</b> <b>{cost:.0f} монет</b>\n\n• Награды: {arg1} + {arg2}\n• Штраф: {arg3}\n• Длительность: {days} дней\n• Коэффициент: 20%\n\nВыбери способ оплаты:', cost=cost, arg1=data['reward_preview'], arg2=data['reward_final'], arg3=data['penalty_unsubscribe'], days=days)
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"🪙 Монеты ({cost:.0f})", callback_data="user_offer_pay:coins")],
+        [InlineKeyboardButton(text=t('🪙 Монеты ({cost:.0f})', cost=cost), callback_data="user_offer_pay:coins")],
         [InlineKeyboardButton(text="⭐ Stars", callback_data="user_offer_pay:stars")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="offers_participation")],
+        [InlineKeyboardButton(text=t('❌ Отмена'), callback_data="offers_participation")],
     ])
     
     await state.set_state(UserOfferState.waiting_payment_method)
@@ -224,7 +205,7 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
         if method == "coins":
             if user.balance < cost:
                 await callback.message.answer(
-                    f"❌ Недостаточно монет. Нужно: {cost:.0f}, у тебя: {user.balance:.0f}"
+                    t('❌ Недостаточно монет. Нужно: {cost:.0f}, у тебя: {balance:.0f}', cost=cost, balance=user.balance)
                 )
                 await callback.answer()
                 return
@@ -258,17 +239,12 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             try:
                 await notify_admins(
                     callback.bot,
-                    f"📣 <b>Новый пользовательский оффер</b>\n"
-                    f"Автор: <code>{user.telegram_id}</code>\n"
-                    f"Название: <b>{escape(offer.title)}</b>\n"
-                    f"Тип цели: {classify_offer_url(offer.channel_url)['label']}\n"
-                    f"Статус: отправлен на модерацию\n\n"
-                    f"Открыть очередь: /admin",
+                    t('📣 <b>Новый пользовательский оффер</b>\nАвтор: <code>{telegram_id}</code>\nНазвание: <b>{arg1}</b>\nТип цели: {arg2}\nСтатус: отправлен на модерацию\n\nОткрыть очередь: /admin', telegram_id=user.telegram_id, arg1=escape(offer.title), arg2=classify_offer_url(offer.channel_url)['label']),
                 )
             except Exception:
                 pass
 
-            await callback.message.answer("✅ Оффер создан и отправлен на модерацию!")
+            await callback.message.answer(t('✅ Оффер создан и отправлен на модерацию!'))
             await state.clear()
             await callback.answer()
             return
@@ -305,17 +281,17 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
             await session.commit()
 
             await callback.message.answer_invoice(
-                title="Размещение оффера",
-                description=f"Оффер «{data['title']}» на {data['duration_days']} дней",
+                title=t('Размещение оффера'),
+                description=t('Оффер «{arg0}» на {arg1} дней', arg0=data['title'], arg1=data['duration_days']),
                 payload=payload,
                 currency="XTR",
-                prices=[LabeledPrice(label="Размещение", amount=stars_price)],
+                prices=[LabeledPrice(label=t('Размещение'), amount=stars_price)],
             )
             await state.clear()
             await callback.answer()
             return
 
-    await callback.answer("Неизвестный способ оплаты", show_alert=True)
+    await callback.answer(t('Неизвестный способ оплаты'), show_alert=True)
 
 
 # =========================
@@ -334,25 +310,25 @@ async def user_my_offers(callback: CallbackQuery):
         )).scalars().all()
     
     if not offers:
-        await callback.message.answer("У тебя пока нет своих офферов.")
+        await callback.message.answer(t('У тебя пока нет своих офферов.'))
         await callback.answer()
         return
     
-    text = "📋 <b>Твои офферы:</b>\n\n"
+    text = t("📋 <b>Твои офферы:</b>\n\n")
     status_labels = {
-        "payment_pending": "💳 ожидает оплаты",
-        "pending": "⏳ на модерации",
-        "approved": "✅ одобрен",
-        "rejected": "❌ отклонён",
+        "payment_pending": t("💳 ожидает оплаты"),
+        "pending": t("⏳ на модерации"),
+        "approved": t("✅ одобрен"),
+        "rejected": t("❌ отклонён"),
     }
     for offer in offers:
         text += (
             f"<b>#{offer.id} {escape(offer.title)}</b>\n"
-            f"Статус: {status_labels.get(offer.status, escape(offer.status))}\n"
-            f"Награда: {offer.reward_preview}+{offer.reward_final} монет\n"
+            + t("Статус: {status}\n", status=status_labels.get(offer.status, escape(offer.status)))
+            + t("Награда: {preview}+{final} монет\n", preview=offer.reward_preview, final=offer.reward_final)
         )
         if offer.status == "rejected" and offer.rejection_reason:
-            text += f"Причина: {escape(offer.rejection_reason)}\n"
+            text += t("Причина: {reason}\n", reason=escape(offer.rejection_reason))
         text += "\n"
 
     await callback.message.answer(text[:4000], parse_mode="HTML")

@@ -32,6 +32,10 @@ from app.config import (
     ADMINS,
 )
 from app.db import engine, init_db, async_session
+from app.i18n import (
+    DEFAULT_LANGUAGE, current_language, get_user_language, language_scope,
+    normalize_language, t,
+)
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
 from app.user_offer_handlers import router as user_offer_router
@@ -101,6 +105,44 @@ def _get_webapp_user_id(request: web.Request, payload: dict | None = None) -> in
     return _validate_telegram_webapp_init_data(init_data)
 
 
+async def _webapp_user_lang(request: web.Request, payload: dict | None = None) -> str:
+    """Язык пользователя Mini App по initData (для локализации ответов API)."""
+    from app.services import get_user
+    uid = _get_webapp_user_id(request, payload)
+    if not uid:
+        return DEFAULT_LANGUAGE
+    try:
+        async with async_session() as session:
+            user = await get_user(session, uid)
+            return get_user_language(user) if user else DEFAULT_LANGUAGE
+    except Exception:
+        return DEFAULT_LANGUAGE
+
+
+def localized_api(handler):
+    """Декоратор API-хендлера Mini App: язык ответов = язык пользователя из initData."""
+    import functools
+
+    @functools.wraps(handler)
+    async def wrapper(request: web.Request) -> web.Response:
+        with language_scope(await _webapp_user_lang(request)):
+            return await handler(request)
+    return wrapper
+
+
+def _inject_page_lang(html: str, request: web.Request) -> str:
+    """Внедряет язык страницы (?lang=) в HTML Mini App для JS-локализации."""
+    if "window.BOT_LANG" in html:
+        return html
+    lang = normalize_language(request.query.get("lang", ""))
+    inject = f'<script>window.BOT_LANG = {json.dumps(lang)};</script>'
+    idx = html.find("<head>")
+    if idx == -1:
+        return inject + html
+    end = idx + len("<head>")
+    return html[:end] + inject + html[end:]
+
+
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
     meta = classify_offer_url(channel_url)
     normalized = normalize_telegram_url(channel_url)
@@ -160,22 +202,27 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                     penalized_count += 1
                     penalized_total += float(total_charge)
                     try:
-                        msg = (
-                            "⚠️ <b>Оффер завершён с возвратом награды</b>\n\n"
-                            "После твоей отписки от канала ранее начисленная награда была отозвана."
-                        )
-                        if extra_penalty > 0:
-                            msg += f"\n\n⚠️ Дополнительно списан штраф за отписку: <b>{extra_penalty}</b> монет."
-                        
-                        msg += (
-                            f"\n\nСписано всего: <b>{total_charge}</b> монет\n"
-                            f"Текущий баланс: <b>{max(user.balance, 0)}</b> монет"
-                        )
-                        await bot.send_message(
-                            user.telegram_id,
-                            msg,
-                            parse_mode="HTML",
-                        )
+                        with language_scope(user.language):
+                            msg = t(
+                                "⚠️ <b>Оффер завершён с возвратом награды</b>\n\n"
+                                "После твоей отписки от канала ранее начисленная награда была отозвана."
+                            )
+                            if extra_penalty > 0:
+                                msg += t(
+                                    "\n\n⚠️ Дополнительно списан штраф за отписку: <b>{extra_penalty}</b> монет.",
+                                    extra_penalty=extra_penalty,
+                                )
+                            msg += t(
+                                "\n\nСписано всего: <b>{total_charge}</b> монет\n"
+                                "Текущий баланс: <b>{balance}</b> монет",
+                                total_charge=total_charge,
+                                balance=max(user.balance, 0),
+                            )
+                            await bot.send_message(
+                                user.telegram_id,
+                                msg,
+                                parse_mode="HTML",
+                            )
                     except Exception:
                         pass
             if checked_count:
@@ -191,10 +238,7 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                     try:
                         await notify_admins(
                             bot,
-                            f"⚠️ <b>Сработали штрафы по офферам</b>\n"
-                            f"Проверено участий: <b>{checked_count}</b>\n"
-                            f"Ошибочных/наказанных: <b>{penalized_count}</b>\n"
-                            f"Списано суммарно: <b>{penalized_total:.2f}</b> монет",
+                            t('⚠️ <b>Сработали штрафы по офферам</b>\nПроверено участий: <b>{checked_count}</b>\nОшибочных/наказанных: <b>{penalized_count}</b>\nСписано суммарно: <b>{penalized_total:.2f}</b> монет', checked_count=checked_count, penalized_count=penalized_count, penalized_total=penalized_total),
                         )
                     except Exception:
                         pass
@@ -217,16 +261,18 @@ async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
     
     for u in users:
-        time_str = format_time_for_user(draw_starts_at, u.timezone)
-        msg = (
-            "⏰ <b>Секслото — скоро розыгрыш!</b>\n\n"
-            f"Розыгрыш начнётся {time_str}.\n"
-            "Не забудьте зайти в Live и посмотреть на свои бочонки! 🎰"
-        )
-        try:
-            await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
-        except Exception:
-            pass
+        with language_scope(u.language):
+            time_str = format_time_for_user(draw_starts_at, u.timezone)
+            msg = t(
+                "⏰ <b>Секслото — скоро розыгрыш!</b>\n\n"
+                "Розыгрыш начнётся {time_str}.\n"
+                "Не забудьте зайти в Live и посмотреть на свои бочонки! 🎰",
+                time_str=time_str,
+            )
+            try:
+                await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
+            except Exception:
+                pass
         await asyncio.sleep(0.05)
 
 
@@ -237,16 +283,19 @@ async def notify_lottery_started(bot: Bot, session, round_id: int):
     user_ids = list(set(t.user_id for t in tickets))
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
 
-    msg = (
-        f"🎰 <b>СЕКСЛОТО #{round_id} НАЧИНАЕТСЯ!</b> 🎰\n\n"
-        f"Лототрон запущен! Бочонки начинают перемешиваться! 🌀\n"
-        f"Следи за сообщениями — мы будем вытаскивать бочонки в реальном времени примерно каждые {LOTTERY_SECONDS_PER_BALL} секунд! 🎪"
-    )
     for u in users:
-        try:
-            await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
-        except Exception:
-            pass
+        with language_scope(u.language):
+            msg = t(
+                "🎰 <b>СЕКСЛОТО #{round_id} НАЧИНАЕТСЯ!</b> 🎰\n\n"
+                "Лототрон запущен! Бочонки начинают перемешиваться! 🌀\n"
+                "Следи за сообщениями — мы будем вытаскивать бочонки в реальном времени примерно каждые {seconds} секунд! 🎪",
+                round_id=round_id,
+                seconds=LOTTERY_SECONDS_PER_BALL,
+            )
+            try:
+                await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
+            except Exception:
+                pass
         await asyncio.sleep(0.05)
 
 
@@ -346,46 +395,48 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
 
             if win_amount > 0:
                 share_note = (
-                    f" (делится на {shared_with} победителей)"
+                    t(" (делится на {shared_with} победителей)", shared_with=shared_with)
                     if shared_with > 1
                     else ""
                 )
                 tickets_info.append(
-                    f"🎫 Билет №{t.id} [{ticket_nums_str}]: "
-                    f"совпало {matched} чисел — <b>выигрыш {win_amount} монет</b>{share_note} 🎉"
+                    t("🎫 Билет №{tid} [{nums}]: совпало {matched} чисел — <b>выигрыш {win_amount} монет</b>{share_note} 🎉",
+                      tid=t.id, nums=ticket_nums_str, matched=matched, win_amount=win_amount, share_note=share_note)
                 )
             else:
                 tickets_info.append(
-                    f"🎫 Билет №{t.id} [{ticket_nums_str}]: "
-                    f"совпало {matched} чисел (без выигрыша) 😔"
+                    t("🎫 Билет №{tid} [{nums}]: совпало {matched} чисел (без выигрыша) 😔",
+                      tid=t.id, nums=ticket_nums_str, matched=matched)
                 )
 
         tickets_report = "\n".join(tickets_info)
 
-        if total_won > 0:
-            msg = (
-                f"🎉 <b>РОЗЫГРЫШ ЛОТЕРЕИ #{round_id} ЗАВЕРШЕН!</b>\n\n"
-                f"🔵 <b>Выигрышные номера:</b>\n"
-                f"➡ <b>[ {drawn_nums_str} ]</b>\n\n"
-                f"📝 <b>Результаты твоих билетов:</b>\n"
-                f"{tickets_report}\n\n"
-                f"🏆 <b>Итоговый выигрыш: {total_won} монет!</b>\n"
-                f"Награда зачислена на твой баланс. Поздравляем!"
-            )
-        else:
-            msg = (
-                f"🎰 <b>РОЗЫГРЫШ ЛОТЕРЕИ #{round_id} ЗАВЕРШЕН!</b>\n\n"
-                f"🔵 <b>Выигрышные номера:</b>\n"
-                f"➡ <b>[ {drawn_nums_str} ]</b>\n\n"
-                f"📝 <b>Результаты твоих билетов:</b>\n"
-                f"{tickets_report}\n\n"
-                f"😔 К сожалению, в этот раз выиграть не удалось. Повезет в следующий раз!"
-            )
-            
-        try:
-            await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
-        except Exception:
-            pass
+        with language_scope(u.language):
+            if total_won > 0:
+                msg = t(
+                    "🎉 <b>РОЗЫГРЫШ ЛОТЕРЕИ #{round_id} ЗАВЕРШЕН!</b>\n\n"
+                    "🔵 <b>Выигрышные номера:</b>\n"
+                    "➡ <b>[ {drawn} ]</b>\n\n"
+                    "📝 <b>Результаты твоих билетов:</b>\n"
+                    "{report}\n\n"
+                    "🏆 <b>Итоговый выигрыш: {total_won} монет!</b>\n"
+                    "Награда зачислена на твой баланс. Поздравляем!",
+                    round_id=round_id, drawn=drawn_nums_str, report=tickets_report, total_won=total_won,
+                )
+            else:
+                msg = t(
+                    "🎰 <b>РОЗЫГРЫШ ЛОТЕРЕИ #{round_id} ЗАВЕРШЕН!</b>\n\n"
+                    "🔵 <b>Выигрышные номера:</b>\n"
+                    "➡ <b>[ {drawn} ]</b>\n\n"
+                    "📝 <b>Результаты твоих билетов:</b>\n"
+                    "{report}\n\n"
+                    "😔 К сожалению, в этот раз выиграть не удалось. Повезет в следующий раз!",
+                    round_id=round_id, drawn=drawn_nums_str, report=tickets_report,
+                )
+            try:
+                await bot.send_message(u.telegram_id, msg, parse_mode="HTML")
+            except Exception:
+                pass
         await asyncio.sleep(0.05)
 
 
@@ -447,6 +498,7 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
         await asyncio.sleep(30)
 
 
+@localized_api
 async def lottery_state_handler(request: web.Request) -> web.Response:
     async with async_session() as session:
         round_obj = await get_latest_lottery_round(session)
@@ -751,95 +803,95 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
   <div class="container">
     <!-- Шапка Пользователя -->
     <div class="user-header">
-      <div style="font-weight: bold;">👤 <span id="user-name">Гость</span></div>
+      <div style="font-weight: bold;">👤 <span id="user-name" data-i18n="Гость"></span></div>
       <div style="font-weight: 800; color: var(--gold);">💰 <span id="user-balance">--</span> 🪙</div>
     </div>
 
     <div class="card">
       <div class="header">
         <h2>🏆 Секслото <span id="round-id">...</span></h2>
-        <div id="status-badge" class="status-badge">Загрузка...</div>
+        <div id="status-badge" class="status-badge" data-i18n="Загрузка..."></div>
       </div>
       
       <!-- Лототрон Секслото с реальной 2D физикой Canvas -->
       <canvas id="lototron-canvas" width="160" height="160" style="display: block; margin: 10px auto; border-radius: 50%; box-shadow: 0 0 25px rgba(42, 133, 255, 0.35); border: 4px solid var(--accent-color); background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));"></canvas>
-      <div id="interactive-tip" class="interactive-tip">📱 Наклоняй телефон или таскай шары пальцем!</div>
+      <div id="interactive-tip" class="interactive-tip" data-i18n="📱 Наклоняй телефон или таскай шары пальцем!"></div>
 
       <!-- Таймер до розыгрыша -->
       <div id="timer-box" style="margin: 10px 0; font-size: 14px; font-weight: bold; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05);">
-        ⏱ До розыгрыша: <span id="countdown" style="color: var(--accent-color);">--:--:--</span>
+        <span data-i18n="⏱ До розыгрыша:"></span> <span id="countdown" style="color: var(--accent-color);">--:--:--</span>
       </div>
 
       <!-- Призовой фонд -->
       <div class="prize-box">
-        <div style="font-size: 13px; color: var(--tg-theme-hint-color, #888); font-weight: bold; text-transform: uppercase;">Призовой фонд 💰</div>
+        <div style="font-size: 13px; color: var(--tg-theme-hint-color, #888); font-weight: bold; text-transform: uppercase;" data-i18n="Призовой фонд 💰"></div>
         <div class="prize-pool" id="prize-pool">0.00 🪙</div>
       </div>
 
       <div class="info-row">
-        <span style="color: var(--tg-theme-hint-color, #888);">Цена билета:</span>
+        <span style="color: var(--tg-theme-hint-color, #888);" data-i18n="Цена билета:"></span>
         <strong><span id="ticket-price">-</span> 🪙</strong>
       </div>
       <div class="info-row">
-        <span style="color: var(--tg-theme-hint-color, #888);">Куплено билетов:</span>
+        <span style="color: var(--tg-theme-hint-color, #888);" data-i18n="Куплено билетов:"></span>
         <strong id="tickets-count">-</strong>
       </div>
       <div class="info-row">
-        <span style="color: var(--tg-theme-hint-color, #888);">Старт розыгрыша:</span>
+        <span style="color: var(--tg-theme-hint-color, #888);" data-i18n="Старт розыгрыша:"></span>
         <strong id="draw-time">-</strong>
       </div>
     </div>
 
     <!-- Свайпаемые рекламные баннеры (Акции и ставки) -->
     <div id="banners-container">
-      <div class="strip-title" style="margin-bottom: 8px;">🔥 Акции и Ставки Секслото 🔥</div>
+      <div class="strip-title" style="margin-bottom: 8px;" data-i18n="🔥 Акции и Ставки Секслото 🔥"></div>
       <div class="banner-carousel">
         
         <!-- Слайд 1: Купить билеты -->
         <div class="banner-slide">
           <div>
-            <h3>🎟 Купить билеты Секслото</h3>
-            <p>Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!</p>
+            <h3 data-i18n="🎟 Купить билеты Секслото"></h3>
+            <p data-i18n="Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!"></p>
           </div>
-          <button class="banner-btn" onclick="openTicketModal()">Купить билеты по <span id="banner-ticket-price">-</span> 🪙</button>
+          <button class="banner-btn" onclick="openTicketModal()"><span data-i18n="Купить билеты по"></span> <span id="banner-ticket-price">-</span> 🪙</button>
         </div>
         
         <!-- Слайд 2: Монеты за звезды -->
         <div class="banner-slide">
           <div>
-            <h3>💎 Монеты за звёзды</h3>
-            <p>Получи мгновенный буст баланса монет за Telegram Stars!</p>
+            <h3 data-i18n="💎 Монеты за звёзды"></h3>
+            <p data-i18n="Получи мгновенный буст баланса монет за Telegram Stars!"></p>
           </div>
-          <button class="banner-btn" onclick="openStarsModal()">Купить монеты</button>
+          <button class="banner-btn" onclick="openStarsModal()" data-i18n="Купить монеты"></button>
         </div>
 
         <!-- Слайд 3: Бесплатные монеты / Офферы -->
         <div class="banner-slide">
           <div>
-            <h3>📋 Бесплатные монеты</h3>
-            <p>Выполняй задания и подписки в разделе Офферы!</p>
+            <h3 data-i18n="📋 Бесплатные монеты"></h3>
+            <p data-i18n="Выполняй задания и подписки в разделе Офферы!"></p>
           </div>
-          <button class="banner-btn" onclick="openOffersModal()">Открыть Офферы</button>
+          <button class="banner-btn" onclick="openOffersModal()" data-i18n="Открыть Офферы"></button>
         </div>
 
         <!-- Слайд 4: Ставки на первый/последний бочонок -->
         <div class="banner-slide">
           <div>
-            <h3>🎯 Ставки на бочонки</h3>
-            <p>Угадай, чётный или нечётный выпадет первый/последний бочонок!</p>
+            <h3 data-i18n="🎯 Ставки на бочонки"></h3>
+            <p data-i18n="Угадай, чётный или нечётный выпадет первый/последний бочонок!"></p>
           </div>
           <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 8px;">
-            <button class="banner-btn" style="background: #34c759; padding: 6px 12px; font-size: 11px;" onclick="placeBetAction('first')">Ставка на 1-й</button>
-            <button class="banner-btn" style="background: #bf5af2; padding: 6px 12px; font-size: 11px;" onclick="placeBetAction('last')">Ставка на последний</button>
+            <button class="banner-btn" style="background: #34c759; padding: 6px 12px; font-size: 11px;" onclick="placeBetAction('first')" data-i18n="Ставка на 1-й"></button>
+            <button class="banner-btn" style="background: #bf5af2; padding: 6px 12px; font-size: 11px;" onclick="placeBetAction('last')" data-i18n="Ставка на последний"></button>
           </div>
         </div>
       </div>
-      <div style="text-align: center; font-size: 10px; color: var(--tg-theme-hint-color, #888); margin-top: -5px;">↔ Свайпай баннеры влево/вправо</div>
+      <div style="text-align: center; font-size: 10px; color: var(--tg-theme-hint-color, #888); margin-top: -5px;" data-i18n="↔ Свайпай баннеры влево/вправо"></div>
     </div>
 
     <!-- Полоска с выпавшими числами -->
     <div class="strip-container">
-      <div class="strip-title">🔵 Выпавшие бочонки «Секслото» 🔵</div>
+      <div class="strip-title" data-i18n="🔵 Выпавшие бочонки «Секслото» 🔵"></div>
       <div class="balls-strip" id="balls-container">
         <div class="no-numbers" style="color: var(--tg-theme-hint-color); font-size: 14px; text-align:center; width:100%;">Розыгрыш еще не начался...</div>
       </div>
@@ -850,24 +902,22 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
   <div id="ticket-modal" class="modal">
     <div class="modal-content">
       <span class="modal-close" onclick="closeTicketModal()">&times;</span>
-      <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;">🎟 Купить билеты</h3>
-      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);">
-        Укажи количество билетов или нажми «Максимум».
-      </p>
+      <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;" data-i18n="🎟 Купить билеты"></h3>
+      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);" data-i18n="Укажи количество билетов или нажми «Максимум»."></p>
       <div style="display:flex; flex-direction:column; gap:10px;">
         <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
           <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="setTicketQty(1)">1</button>
           <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="setTicketQty(5)">5</button>
           <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="setTicketQty(10)">10</button>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px; background:#34c759;" onclick="setMaxTicketQty()">Максимум</button>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px; background:#34c759;" onclick="setMaxTicketQty()" data-i18n="Максимум"></button>
         </div>
         <input id="ticket-qty-input" type="number" min="1" step="1" value="1"
                style="width:100%; box-sizing:border-box; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.04); color:var(--text-color); font-size:15px;" />
         <div style="font-size:12px; color: var(--tg-theme-hint-color, #888); text-align:center;">
-          Цена билета: <b><span id="ticket-modal-price">-</span> 🪙</b><br>
-          Сейчас можно купить до: <b><span id="ticket-modal-max">-</span></b>
+          <span data-i18n="Цена билета:"></span> <b><span id="ticket-modal-price">-</span> 🪙</b><br>
+          <span data-i18n="Сейчас можно купить до:"></span> <b><span id="ticket-modal-max">-</span></b>
         </div>
-        <button class="banner-btn" onclick="confirmBuyTickets()">Купить</button>
+        <button class="banner-btn" onclick="confirmBuyTickets()" data-i18n="Купить"></button>
       </div>
     </div>
   </div>
@@ -876,20 +926,20 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
   <div id="stars-modal" class="modal">
     <div class="modal-content">
       <span class="modal-close" onclick="closeStarsModal()">&times;</span>
-      <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;">💎 Монеты за звёзды</h3>
-      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);">3 понятных пакета, чтобы быстро вернуться к просмотру:</p>
+      <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;" data-i18n="💎 Монеты за звёзды"></h3>
+      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);" data-i18n="3 понятных пакета, чтобы быстро вернуться к просмотру:"></p>
       <div style="display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto;">
         <div class="package-item">
-          <div><b>⚡ 500 монет</b><br><small style="color: var(--tg-theme-hint-color);">Быстрый старт · 450 ★</small></div>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_50')">Купить</button>
+          <div><b data-i18n="⚡ 500 монет"></b><br><small style="color: var(--tg-theme-hint-color);" data-i18n="Быстрый старт · 450 ★"></small></div>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_50')" data-i18n="Купить"></button>
         </div>
         <div class="package-item">
-          <div><b>🔥 1 000 монет</b><br><small style="color: var(--tg-theme-hint-color);">Популярный пакет · 900 ★</small></div>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_100')">Купить</button>
+          <div><b data-i18n="🔥 1 000 монет"></b><br><small style="color: var(--tg-theme-hint-color);" data-i18n="Популярный пакет · 900 ★"></small></div>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_100')" data-i18n="Купить"></button>
         </div>
         <div class="package-item">
-          <div><b>💎 2 200 монет</b><br><small style="color: var(--tg-theme-hint-color);">Самый выгодный · 1 800 ★</small></div>
-          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_200')">Купить</button>
+          <div><b data-i18n="💎 2 200 монет"></b><br><small style="color: var(--tg-theme-hint-color);" data-i18n="Самый выгодный · 1 800 ★"></small></div>
+          <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="buyCoins('pack_200')" data-i18n="Купить"></button>
         </div>
       </div>
     </div>
@@ -899,10 +949,10 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
   <div id="offers-modal" class="modal">
     <div class="modal-content">
       <span class="modal-close" onclick="closeOffersModal()">&times;</span>
-      <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;">📋 Бесплатные монеты</h3>
-      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);">Выполняй задания партнёров и получай монеты по условиям каждого оффера.</p>
+      <h3 style="color: var(--accent-color); margin-top: 0; text-align: center;" data-i18n="📋 Бесплатные монеты"></h3>
+      <p style="font-size: 12px; text-align: center; color: var(--tg-theme-hint-color, #888);" data-i18n="Выполняй задания партнёров и получай монеты по условиям каждого оффера."></p>
       <div id="offers-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto;">
-        <div style="text-align: center; font-size: 13px; padding: 20px; color: var(--tg-theme-hint-color);">Загрузка заданий...</div>
+        <div style="text-align: center; font-size: 13px; padding: 20px; color: var(--tg-theme-hint-color);" data-i18n="Загрузка заданий..."></div>
       </div>
     </div>
   </div>
@@ -911,11 +961,157 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     window.Telegram.WebApp.ready();
     window.Telegram.WebApp.expand();
 
+    const I18N = {
+      ru: {
+        "Lottery Live — Секслото Шоу 🎰": "Lottery Live — Секслото Шоу 🎰",
+        "Гость": "Гость",
+        "Загрузка...": "Загрузка...",
+        "📱 Наклоняй телефон или таскай шары пальцем!": "📱 Наклоняй телефон или таскай шары пальцем!",
+        "⏱ До розыгрыша:": "⏱ До розыгрыша:",
+        "Призовой фонд 💰": "Призовой фонд 💰",
+        "Цена билета:": "Цена билета:",
+        "Куплено билетов:": "Куплено билетов:",
+        "Старт розыгрыша:": "Старт розыгрыша:",
+        "🔥 Акции и Ставки Секслото 🔥": "🔥 Акции и Ставки Секслото 🔥",
+        "🎟 Купить билеты Секслото": "🎟 Купить билеты Секслото",
+        "Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!": "Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!",
+        "Купить билеты по": "Купить билеты по",
+        "💎 Монеты за звёзды": "💎 Монеты за звёзды",
+        "Получи мгновенный буст баланса монет за Telegram Stars!": "Получи мгновенный буст баланса монет за Telegram Stars!",
+        "Купить монеты": "Купить монеты",
+        "📋 Бесплатные монеты": "📋 Бесплатные монеты",
+        "Выполняй задания и подписки в разделе Офферы!": "Выполняй задания и подписки в разделе Офферы!",
+        "Открыть Офферы": "Открыть Офферы",
+        "🎯 Ставки на бочонки": "🎯 Ставки на бочонки",
+        "Угадай, чётный или нечётный выпадет первый/последний бочонок!": "Угадай, чётный или нечётный выпадет первый/последний бочонок!",
+        "Ставка на 1-й": "Ставка на 1-й",
+        "Ставка на последний": "Ставка на последний",
+        "↔ Свайпай баннеры влево/вправо": "↔ Свайпай баннеры влево/вправо",
+        "🔵 Выпавшие бочонки «Секслото» 🔵": "🔵 Выпавшие бочонки «Секслото» 🔵",
+        "Розыгрыш еще не начался...": "Розыгрыш еще не начался...",
+        "🎟 Купить билеты": "🎟 Купить билеты",
+        "Укажи количество билетов или нажми «Максимум».": "Укажи количество билетов или нажми «Максимум».",
+        "Максимум": "Максимум",
+        "Сейчас можно купить до:": "Сейчас можно купить до:",
+        "Купить": "Купить",
+        "3 понятных пакета, чтобы быстро вернуться к просмотру:": "3 понятных пакета, чтобы быстро вернуться к просмотру:",
+        "⚡ 500 монет": "⚡ 500 монет",
+        "Быстрый старт · 450 ★": "Быстрый старт · 450 ★",
+        "🔥 1 000 монет": "🔥 1 000 монет",
+        "Популярный пакет · 900 ★": "Популярный пакет · 900 ★",
+        "💎 2 200 монет": "💎 2 200 монет",
+        "Самый выгодный · 1 800 ★": "Самый выгодный · 1 800 ★",
+        "Выполняй задания партнёров и получай монеты по условиям каждого оффера.": "Выполняй задания партнёров и получай монеты по условиям каждого оффера.",
+        "Загрузка заданий...": "Загрузка заданий...",
+        "❌ Введи корректное количество билетов.": "❌ Введи корректное количество билетов.",
+        "🎟 Куплено билетов: {qty}. Баланс обновлен!": "🎟 Куплено билетов: {qty}. Баланс обновлен!",
+        "❌ Ошибка покупки: {error}": "❌ Ошибка покупки: {error}",
+        "неизвестно": "неизвестно",
+        "❌ Сбой сервера покупки билетов.": "❌ Сбой сервера покупки билетов.",
+        "💎 Оплата успешно завершена! Пакет монет начислен!": "💎 Оплата успешно завершена! Пакет монет начислен!",
+        "❌ Ошибка создания инвойса: {error}": "❌ Ошибка создания инвойса: {error}",
+        "❌ Сбой соединения с платежным шлюзом.": "❌ Сбой соединения с платежным шлюзом.",
+        "Награда: +{reward} 🪙": "Награда: +{reward} 🪙",
+        "Выполнить": "Выполнить",
+        "Доступных офферов пока нет.": "Доступных офферов пока нет.",
+        "Ошибка загрузки.": "Ошибка загрузки.",
+        "1-й": "1-й",
+        "последний": "последний",
+        "первого": "первого",
+        "🎯 Ставка на {which} бочонок": "🎯 Ставка на {which} бочонок",
+        "Сделай прогноз на чётность {which} бочонка. Стоимость ставки: 10 монет (удвоение при выигрыше!)": "Сделай прогноз на чётность {which} бочонка. Стоимость ставки: 10 монет (удвоение при выигрыше!)",
+        "ЧЁТНЫЙ 🟢": "ЧЁТНЫЙ 🟢",
+        "НЕЧЁТНЫЙ 🔴": "НЕЧЁТНЫЙ 🔴",
+        "Отмена": "Отмена",
+        "🎯 Ставка успешно зарегистрирована в Секслото! Баланс монет обновлен!": "🎯 Ставка успешно зарегистрирована в Секслото! Баланс монет обновлен!",
+        "❌ Ставка отклонена: {error}": "❌ Ставка отклонена: {error}",
+        "❌ Сбой сервера ставок.": "❌ Сбой сервера ставок.",
+        "Открыта": "Открыта",
+        "Идет розыгрыш!": "Идет розыгрыш!",
+        "Завершена": "Завершена",
+      },
+      en: {
+        "Lottery Live — Секслото Шоу 🎰": "Lottery Live — Sexloto Show 🎰",
+        "Гость": "Guest",
+        "Загрузка...": "Loading...",
+        "📱 Наклоняй телефон или таскай шары пальцем!": "📱 Tilt your phone or drag the balls with your finger!",
+        "⏱ До розыгрыша:": "⏱ Until the draw:",
+        "Призовой фонд 💰": "Prize pool 💰",
+        "Цена билета:": "Ticket price:",
+        "Куплено билетов:": "Tickets bought:",
+        "Старт розыгрыша:": "Draw starts:",
+        "🔥 Акции и Ставки Секслото 🔥": "🔥 Deals & Bets — Sexloto 🔥",
+        "🎟 Купить билеты Секслото": "🎟 Buy Sexloto tickets",
+        "Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!": "Test your luck and choose how many tickets you want to take this round!",
+        "Купить билеты по": "Buy tickets for",
+        "💎 Монеты за звёзды": "💎 Coins for Stars",
+        "Получи мгновенный буст баланса монет за Telegram Stars!": "Get an instant coin balance boost with Telegram Stars!",
+        "Купить монеты": "Buy coins",
+        "📋 Бесплатные монеты": "📋 Free coins",
+        "Выполняй задания и подписки в разделе Офферы!": "Complete tasks and subscriptions in the Offers section!",
+        "Открыть Офферы": "Open Offers",
+        "🎯 Ставки на бочонки": "🎯 Bets on barrels",
+        "Угадай, чётный или нечётный выпадет первый/последний бочонок!": "Guess whether the first/last barrel will be even or odd!",
+        "Ставка на 1-й": "Bet on 1st",
+        "Ставка на последний": "Bet on last",
+        "↔ Свайпай баннеры влево/вправо": "↔ Swipe banners left/right",
+        "🔵 Выпавшие бочонки «Секслото» 🔵": "🔵 Drawn barrels «Sexloto» 🔵",
+        "Розыгрыш еще не начался...": "The draw has not started yet...",
+        "🎟 Купить билеты": "🎟 Buy tickets",
+        "Укажи количество билетов или нажми «Максимум».": "Enter the number of tickets or tap «Max».",
+        "Максимум": "Max",
+        "Сейчас можно купить до:": "You can buy up to:",
+        "Купить": "Buy",
+        "3 понятных пакета, чтобы быстро вернуться к просмотру:": "3 clear packages to get you back to watching:",
+        "⚡ 500 монет": "⚡ 500 coins",
+        "Быстрый старт · 450 ★": "Quick start · 450 ★",
+        "🔥 1 000 монет": "🔥 1,000 coins",
+        "Популярный пакет · 900 ★": "Popular pack · 900 ★",
+        "💎 2 200 монет": "💎 2,200 coins",
+        "Самый выгодный · 1 800 ★": "Best value · 1,800 ★",
+        "Выполняй задания партнёров и получай монеты по условиям каждого оффера.": "Complete partner tasks and earn coins under each offer's terms.",
+        "Загрузка заданий...": "Loading tasks...",
+        "❌ Введи корректное количество билетов.": "❌ Enter a valid number of tickets.",
+        "🎟 Куплено билетов: {qty}. Баланс обновлен!": "🎟 Tickets bought: {qty}. Balance updated!",
+        "❌ Ошибка покупки: {error}": "❌ Purchase error: {error}",
+        "неизвестно": "unknown",
+        "❌ Сбой сервера покупки билетов.": "❌ Ticket purchase server failure.",
+        "💎 Оплата успешно завершена! Пакет монет начислен!": "💎 Payment successful! Coin pack credited!",
+        "❌ Ошибка создания инвойса: {error}": "❌ Invoice creation error: {error}",
+        "❌ Сбой соединения с платежным шлюзом.": "❌ Payment gateway connection failure.",
+        "Награда: +{reward} 🪙": "Reward: +{reward} 🪙",
+        "Выполнить": "Open",
+        "Доступных офферов пока нет.": "No offers available yet.",
+        "Ошибка загрузки.": "Loading error.",
+        "1-й": "1st",
+        "последний": "last",
+        "первого": "first",
+        "🎯 Ставка на {which} бочонок": "🎯 Bet on the {which} barrel",
+        "Сделай прогноз на чётность {which} бочонка. Стоимость ставки: 10 монет (удвоение при выигрыше!)": "Predict the parity of the {which} barrel. Bet cost: 10 coins (doubled on win!)",
+        "ЧЁТНЫЙ 🟢": "EVEN 🟢",
+        "НЕЧЁТНЫЙ 🔴": "ODD 🔴",
+        "Отмена": "Cancel",
+        "🎯 Ставка успешно зарегистрирована в Секслото! Баланс монет обновлен!": "🎯 Bet registered in Sexloto! Coin balance updated!",
+        "❌ Ставка отклонена: {error}": "❌ Bet rejected: {error}",
+        "❌ Сбой сервера ставок.": "❌ Betting server failure.",
+        "Открыта": "Open",
+        "Идет розыгрыш!": "Drawing now!",
+        "Завершена": "Finished",
+      },
+    };
+    const L = (k, p) => {
+      let s = (I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k;
+      if (p) for (const n in p) s = s.replaceAll('{' + n + '}', p[n]);
+      return s;
+    };
+    document.title = L('Lottery Live — Секслото Шоу 🎰');
+    document.querySelectorAll('[data-i18n]').forEach(el => { el.innerHTML = L(el.dataset.i18n); });
+
     // Telegram WebApp auth context
     const tgUser = window.Telegram.WebApp.initDataUnsafe.user;
     const initData = window.Telegram.WebApp.initData || '';
     const userId = tgUser ? tgUser.id : 0;
-    const userName = tgUser ? (tgUser.first_name + (tgUser.last_name ? ' ' + tgUser.last_name : '')) : 'Гость';
+    const userName = tgUser ? (tgUser.first_name + (tgUser.last_name ? ' ' + tgUser.last_name : '')) : L('Гость');
 
     function authHeaders(extra = {}) {
         return Object.assign({'X-Telegram-Init-Data': initData}, extra);
@@ -1244,7 +1440,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
         const qtyInput = document.getElementById('ticket-qty-input');
         const quantity = parseInt(qtyInput.value || '0', 10);
         if (!Number.isFinite(quantity) || quantity < 1) {
-            window.Telegram.WebApp.showAlert('❌ Введи корректное количество билетов.');
+            window.Telegram.WebApp.showAlert(L('❌ Введи корректное количество билетов.'));
             return;
         }
         try {
@@ -1259,13 +1455,13 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
                 window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
                 currentUserBalance = Number(data.balance || 0);
                 document.getElementById('user-balance').innerText = currentUserBalance.toFixed(2);
-                window.Telegram.WebApp.showAlert('🎟 Куплено билетов: ' + data.quantity + '. Баланс обновлен!');
+                window.Telegram.WebApp.showAlert(L('🎟 Куплено билетов: {qty}. Баланс обновлен!', {qty: data.quantity}));
                 tick();
             } else {
-                window.Telegram.WebApp.showAlert('❌ Ошибка покупки: ' + (data.error || 'неизвестно'));
+                window.Telegram.WebApp.showAlert(L('❌ Ошибка покупки: {error}', {error: data.error || L('неизвестно')}));
             }
         } catch (e) {
-            window.Telegram.WebApp.showAlert('❌ Сбой сервера покупки билетов.');
+            window.Telegram.WebApp.showAlert(L('❌ Сбой сервера покупки билетов.'));
         }
     }
 
@@ -1292,15 +1488,15 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
                 window.Telegram.WebApp.openInvoice(data.invoice_link, function(status) {
                     if (status === 'paid') {
                         window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-                        window.Telegram.WebApp.showAlert('💎 Оплата успешно завершена! Пакет монет начислен!');
+                        window.Telegram.WebApp.showAlert(L('💎 Оплата успешно завершена! Пакет монет начислен!'));
                         setTimeout(loadUserBalance, 1500);
                     }
                 });
             } else {
-                window.Telegram.WebApp.showAlert('❌ Ошибка создания инвойса: ' + (data.error || 'неизвестно'));
+                window.Telegram.WebApp.showAlert(L('❌ Ошибка создания инвойса: {error}', {error: data.error || L('неизвестно')}));
             }
         } catch (e) {
-            window.Telegram.WebApp.showAlert('❌ Сбой соединения с платежным шлюзом.');
+            window.Telegram.WebApp.showAlert(L('❌ Сбой соединения с платежным шлюзом.'));
         }
     }
 
@@ -1315,7 +1511,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
 
     async function loadOffers() {
         const list = document.getElementById('offers-list');
-        list.innerHTML = '<div style="text-align: center; color: var(--tg-theme-hint-color); padding: 15px;">Загрузка заданий...</div>';
+        list.innerHTML = '<div style="text-align: center; color: var(--tg-theme-hint-color); padding: 15px;">' + L('Загрузка заданий...') + '</div>';
         try {
             const res = await fetch('/api/lottery/offers');
             if (res.ok) {
@@ -1326,29 +1522,29 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
                         const div = document.createElement('div');
                         div.className = 'package-item';
                         div.innerHTML = `
-                            <div><b>${o.title}</b><br><small style="color: var(--tg-theme-hint-color);">Награда: +${o.reward} 🪙</small></div>
-                            <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="window.Telegram.WebApp.openLink('${o.url}')">Выполнить</button>
+                            <div><b>${o.title}</b><br><small style="color: var(--tg-theme-hint-color);">${L('Награда: +{reward} 🪙', {reward: o.reward})}</small></div>
+                            <button class="banner-btn" style="padding: 6px 12px; font-size: 11px;" onclick="window.Telegram.WebApp.openLink('${o.url}')">${L('Выполнить')}</button>
                         `;
                         list.appendChild(div);
                     });
                 } else {
-                    list.innerHTML = '<div style="text-align: center; color: var(--tg-theme-hint-color); padding: 15px;">Доступных офферов пока нет.</div>';
+                    list.innerHTML = '<div style="text-align: center; color: var(--tg-theme-hint-color); padding: 15px;">' + L('Доступных офферов пока нет.') + '</div>';
                 }
             }
         } catch (e) {
-            list.innerHTML = '<div style="text-align: center; color: red; padding: 15px;">Ошибка загрузки.</div>';
+            list.innerHTML = '<div style="text-align: center; color: red; padding: 15px;">' + L('Ошибка загрузки.') + '</div>';
         }
     }
 
     // Интерактивные ставки на бочонки прямо в WebApp!
     function placeBetAction(type) {
         window.Telegram.WebApp.showPopup({
-            title: '🎯 Ставка на ' + (type === 'first' ? '1-й' : 'последний') + ' бочонок',
-            message: 'Сделай прогноз на чётность ' + (type === 'first' ? 'первого' : 'последнего') + ' бочонка. Стоимость ставки: 10 монет (удвоение при выигрыше!)',
+            title: L('🎯 Ставка на {which} бочонок', {which: L(type === 'first' ? '1-й' : 'последний')}),
+            message: L('Сделай прогноз на чётность {which} бочонка. Стоимость ставки: 10 монет (удвоение при выигрыше!)', {which: L(type === 'first' ? 'первого' : 'последнего')}),
             buttons: [
-                {id: 'even', type: 'default', text: 'ЧЁТНЫЙ 🟢'},
-                {id: 'odd', type: 'default', text: 'НЕЧЁТНЫЙ 🔴'},
-                {id: 'cancel', type: 'cancel', text: 'Отмена'}
+                {id: 'even', type: 'default', text: L('ЧЁТНЫЙ 🟢')},
+                {id: 'odd', type: 'default', text: L('НЕЧЁТНЫЙ 🔴')},
+                {id: 'cancel', type: 'cancel', text: L('Отмена')}
             ]
         }, async function(buttonId) {
             if (buttonId === 'even' || buttonId === 'odd') {
@@ -1362,13 +1558,13 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
                     const data = await res.json();
                     if (res.ok && data.ok) {
                         window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-                        window.Telegram.WebApp.showAlert('🎯 Ставка успешно зарегистрирована в Секслото! Баланс монет обновлен!');
+                        window.Telegram.WebApp.showAlert(L('🎯 Ставка успешно зарегистрирована в Секслото! Баланс монет обновлен!'));
                         document.getElementById('user-balance').innerText = data.balance.toFixed(2);
                     } else {
-                        window.Telegram.WebApp.showAlert('❌ Ставка отклонена: ' + (data.error || 'неизвестно'));
+                        window.Telegram.WebApp.showAlert(L('❌ Ставка отклонена: {error}', {error: data.error || L('неизвестно')}));
                     }
                 } catch (e) {
-                    window.Telegram.WebApp.showAlert('❌ Сбой сервера ставок.');
+                    window.Telegram.WebApp.showAlert(L('❌ Сбой сервера ставок.'));
                 }
             }
         });
@@ -1410,21 +1606,21 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
         const timerBox = document.getElementById('timer-box');
         
         if (data.status === 'open') {
-            statusText = 'Открыта';
+            statusText = L('Открыта');
             badgeClass += 'status-open';
             isSpinning = false;
             tip.style.display = 'block';
             banners.style.display = 'block';
             timerBox.style.display = 'block';
         } else if (data.status === 'drawing') {
-            statusText = 'Идет розыгрыш!';
+            statusText = L('Идет розыгрыш!');
             badgeClass += 'status-drawing';
             isSpinning = true;
             tip.style.display = 'none'; 
             banners.style.display = 'none'; 
             timerBox.style.display = 'none'; 
         } else if (data.status === 'completed') {
-            statusText = 'Завершена';
+            statusText = L('Завершена');
             badgeClass += 'status-completed';
             isSpinning = false;
             tip.style.display = 'block';
@@ -1472,7 +1668,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
             }
         } else {
             if (container.children.length === 0) {
-                container.innerHTML = '<div class="no-numbers" style="color: var(--tg-theme-hint-color); font-size: 14px; text-align:center; width:100%;">Розыгрыш еще не начался...</div>';
+                container.innerHTML = '<div class="no-numbers" style="color: var(--tg-theme-hint-color); font-size: 14px; text-align:center; width:100%;">' + L('Розыгрыш еще не начался...') + '</div>';
             }
         }
         
@@ -1500,7 +1696,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
 </body>
 </html>
 """
-    return web.Response(text=html, content_type="text/html")
+    return web.Response(text=_inject_page_lang(html, request), content_type="text/html")
 
 
 async def api_videofeed_feed(request: web.Request) -> web.Response:
@@ -1590,12 +1786,33 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
 </head>
 <body>
   <div class="feed" id="feed">
-     <div style="color:white; text-align:center; padding-top: 50vh;">Загрузка ленты...</div>
+     <div style="color:white; text-align:center; padding-top: 50vh;" data-i18n="Загрузка ленты..."></div>
   </div>
   <script>
      window.Telegram.WebApp.ready();
      window.Telegram.WebApp.expand();
-     
+
+     const I18N = {
+       ru: {
+         "Загрузка ленты...": "Загрузка ленты...",
+         "Нет доступных видео.<br>Загрузи видео в бота!": "Нет доступных видео.<br>Загрузи видео в бота!",
+         "Загрузка видео...": "Загрузка видео...",
+         "Функция лайков в разработке!": "Функция лайков в разработке!",
+         "Донаты автору в разработке!": "Донаты автору в разработке!",
+         "Ошибка загрузки видео.": "Ошибка загрузки видео.",
+       },
+       en: {
+         "Загрузка ленты...": "Loading feed...",
+         "Нет доступных видео.<br>Загрузи видео в бота!": "No videos available yet.<br>Upload a video to the bot!",
+         "Загрузка видео...": "Loading video...",
+         "Функция лайков в разработке!": "Likes are coming soon!",
+         "Донаты автору в разработке!": "Tips for creators are coming soon!",
+         "Ошибка загрузки видео.": "Failed to load videos.",
+       },
+     };
+     const L = (k) => ((I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k);
+     document.querySelectorAll('[data-i18n]').forEach(el => { el.innerHTML = L(el.dataset.i18n); });
+
      let isMuted = true;
 
      async function loadFeed() {
@@ -1630,7 +1847,7 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
             feed.innerHTML = ''; // clear loading
             
             if(data.videos.length === 0) {
-                feed.innerHTML = '<div style="color:white; text-align:center; padding-top: 50vh;">Нет доступных видео.<br>Загрузи видео в бота!</div>';
+                feed.innerHTML = '<div style="color:white; text-align:center; padding-top: 50vh;">' + L('Нет доступных видео.<br>Загрузи видео в бота!') + '</div>';
                 return;
             }
 
@@ -1638,12 +1855,12 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
                 const container = document.createElement('div');
                 container.className = 'video-container';
                 container.innerHTML = `
-                    <div class="loading">Загрузка видео...</div>
+                    <div class="loading">${L('Загрузка видео...')}</div>
                     <video src="/api/video/${v.id}" loop playsinline preload="auto" muted crossOrigin="anonymous" style="background:transparent;"></video>
                     <div class="mute-btn" onclick="toggleMute(event)">🔇</div>
                     <div class="overlay">
-                        <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('Функция лайков в разработке!')">❤️</div>
-                        <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('Донаты автору в разработке!')">💸</div>
+                        <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('${L('Функция лайков в разработке!')}')">❤️</div>
+                        <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('${L('Донаты автору в разработке!')}')">💸</div>
                     </div>
                 `;
                 
@@ -1662,7 +1879,7 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
             });
             setupObserver();
         } catch(e) {
-            document.getElementById('feed').innerHTML = '<div style="color:red; text-align:center; padding-top: 50vh;">Ошибка загрузки видео.</div>';
+            document.getElementById('feed').innerHTML = '<div style="color:red; text-align:center; padding-top: 50vh;">' + L('Ошибка загрузки видео.') + '</div>';
         }
      }
      
@@ -1698,7 +1915,7 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
 </body>
 </html>
 """
-    return web.Response(text=html, content_type="text/html")
+    return web.Response(text=_inject_page_lang(html, request), content_type="text/html")
 
 async def handle_health_check(request):
     """Handler for Render health checks"""
@@ -1886,12 +2103,17 @@ async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
                 bot=bot,
             )
         if exception:
-            admin_text = (
+            admin_text = t(
                 "⚠️ <b>DonationAlerts: нужна сверка</b>\n\n"
-                f"Донат: <code>{exception.donation_id}</code>\n"
-                f"Сумма: <b>{exception.amount} {exception.currency}</b>\n"
-                f"Причина: <code>{exception.reason}</code>\n"
-                f"Сообщение: <code>{(exception.message or '—')[:180]}</code>"
+                "Донат: <code>{donation_id}</code>\n"
+                "Сумма: <b>{amount} {currency}</b>\n"
+                "Причина: <code>{reason}</code>\n"
+                "Сообщение: <code>{message}</code>",
+                donation_id=exception.donation_id,
+                amount=exception.amount,
+                currency=exception.currency,
+                reason=exception.reason,
+                message=(exception.message or '—')[:180],
             )
             for admin_id in ADMINS:
                 try:
@@ -1939,6 +2161,7 @@ async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
 # =========================
 # WEB APP API HANDLERS
 # =========================
+@localized_api
 async def api_user_balance(request: web.Request) -> web.Response:
     try:
         telegram_user_id = _get_webapp_user_id(request)
@@ -1955,6 +2178,7 @@ async def api_user_balance(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
 
+@localized_api
 async def api_lottery_buy(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -1984,6 +2208,7 @@ async def api_lottery_buy(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
 
+@localized_api
 async def api_lottery_buy_coins(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -2017,16 +2242,17 @@ async def api_lottery_buy_coins(request: web.Request) -> web.Response:
             from aiogram.types import LabeledPrice
             bot = request.app['bot']
             link = await bot.create_invoice_link(
-                title=f"Покупка {pack['title']}",
-                description=f"{pack['coins']} монет за {current_pack['stars']} Stars",
+                title=t("Покупка {title}", title=t(pack['title'])),
+                description=t("{coins} монет за {stars} Stars", coins=pack['coins'], stars=current_pack['stars']),
                 payload=payment.payload,
                 currency="XTR",
-                prices=[LabeledPrice(label=pack['title'], amount=current_pack['stars'])]
+                prices=[LabeledPrice(label=t(pack['title']), amount=current_pack['stars'])]
             )
             return web.json_response({"ok": True, "invoice_link": link})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
 
+@localized_api
 async def api_lottery_offers(request: web.Request) -> web.Response:
     try:
         from app.services import get_active_offers
@@ -2038,6 +2264,7 @@ async def api_lottery_offers(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
 
+@localized_api
 async def api_lottery_place_bet(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -2048,7 +2275,7 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
         bet_type = data.get("bet_type", "")
         allowed_bets = {"first_even", "first_odd", "last_even", "last_odd"}
         if bet_type not in allowed_bets:
-            return web.json_response({"ok": False, "error": "Неверный тип ставки"})
+            return web.json_response({"ok": False, "error": t("Неверный тип ставки")})
 
         from app.services import get_user, ensure_current_lottery_round, change_balance_atomic, to_decimal
         from app.models import utc_now
@@ -2056,9 +2283,9 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
         try:
             bet_amount = to_decimal(data.get("bet_amount", 10) or 10)
             if bet_amount <= 0 or not bet_amount.is_finite():
-                return web.json_response({"ok": False, "error": "Некорректная сумма ставки"})
+                return web.json_response({"ok": False, "error": t("Некорректная сумма ставки")})
         except Exception:
-            return web.json_response({"ok": False, "error": "Некорректная сумма ставки"})
+            return web.json_response({"ok": False, "error": t("Некорректная сумма ставки")})
 
         from app.db import async_session
         from app.models import LotteryBet
@@ -2067,12 +2294,12 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
             if user.balance < bet_amount:
-                return web.json_response({"ok": False, "error": "Недостаточно монет"})
+                return web.json_response({"ok": False, "error": t("Недостаточно монет")})
 
             round_obj = await ensure_current_lottery_round(session)
             now = utc_now()
             if round_obj.status != "open" or (round_obj.draw_starts_at and now >= round_obj.draw_starts_at):
-                return web.json_response({"ok": False, "error": "Прием ставок закрыт"})
+                return web.json_response({"ok": False, "error": t("Прием ставок закрыт")})
 
             await change_balance_atomic(session, user.id, -bet_amount, "lottery_bet", source_id=round_obj.id, details=f"type={bet_type}")
             bet = LotteryBet(
@@ -2088,6 +2315,7 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
 
+@localized_api
 async def api_user_timezone(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -2219,15 +2447,12 @@ async def retention_worker(bot: Bot, stop_event: asyncio.Event):
                         try:
                             bot_info = await bot.get_me()
                             ref_link = f"https://t.me/{bot_info.username}?start={u.referral_code}"
-                            await bot.send_message(
-                                u.telegram_id,
-                                "😭 <b>Мы заметили, что у тебя кончились монетки!</b>\n\n"
-                                f"Не уходи просто так! Мы начислили тебе <b>+{bonus} бонусных монет</b>, чтобы ты мог посмотреть еще пару сливчиков. 🔥\n\n"
-                                "👉 <b>Хочешь смотреть бесконечно?</b>\n"
-                                f"Скинь эту ссылку друзьям:\n<code>{ref_link}</code>\n\n"
-                                "За каждого, кто посмотрит 5 видео, мы начислим тебе огромный бонус! Ждем тебя в ленте 🎬",
-                                parse_mode="HTML"
-                            )
+                            with language_scope(u.language):
+                                await bot.send_message(
+                                    u.telegram_id,
+                                    t('😭 <b>Мы заметили, что у тебя кончились монетки!</b>\n\nНе уходи просто так! Мы начислили тебе <b>+{bonus} бонусных монет</b>, чтобы ты мог посмотреть еще пару сливчиков. 🔥\n\n👉 <b>Хочешь смотреть бесконечно?</b>\nСкинь эту ссылку друзьям:\n<code>{ref_link}</code>\n\nЗа каждого, кто посмотрит 5 видео, мы начислим тебе огромный бонус! Ждем тебя в ленте 🎬', bonus=bonus, ref_link=ref_link),
+                                    parse_mode="HTML"
+                                )
                         except Exception:
                             pass
         except Exception as e:
@@ -2272,27 +2497,28 @@ async def weekly_freebie_broadcast(bot: Bot) -> int | None:
 
         word = get_current_freebie_word()
         users = (await session.execute(
-            select(User.telegram_id).where(User.status == "active")
-        )).scalars().all()
-
-        msg = (
-            "🎁 <b>ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА — новое слово недели!</b>\n\n"
-            f"Секретное слово этой недели: <code>{word}</code>\n\n"
-            "Введи его в разделе 🎟 <b>Промокоды</b> → 🎁 <b>Еженедельная Халява</b> "
-            "и получи случайную награду <b>от 200 до 1500 монет</b>!\n\n"
-            "<i>Слово действует до конца недели, награда — один раз на человека. "
-            "На следующей неделе слово будет новое. 😉</i>"
-        )
+            select(User.telegram_id, User.language).where(User.status == "active")
+        )).all()
 
         sent = 0
-        for uid in users:
-            try:
-                await bot.send_message(uid, msg, parse_mode="HTML")
-                sent += 1
-                if sent % 30 == 0:
-                    await asyncio.sleep(0.5)
-            except Exception:
-                pass
+        for uid, user_lang in users:
+            with language_scope(user_lang):
+                msg = t(
+                    "🎁 <b>ЕЖЕНЕДЕЛЬНАЯ ХАЛЯВА — новое слово недели!</b>\n\n"
+                    "Секретное слово этой недели: <code>{word}</code>\n\n"
+                    "Введи его в разделе 🎟 <b>Промокоды</b> → 🎁 <b>Еженедельная Халява</b> "
+                    "и получи случайную награду <b>от 200 до 1500 монет</b>!\n\n"
+                    "<i>Слово действует до конца недели, награда — один раз на человека. "
+                    "На следующей неделе слово будет новое. 😉</i>",
+                    word=word,
+                )
+                try:
+                    await bot.send_message(uid, msg, parse_mode="HTML")
+                    sent += 1
+                    if sent % 30 == 0:
+                        await asyncio.sleep(0.5)
+                except Exception:
+                    pass
 
         await set_setting(session, "weekly_promo_last_sent_week", week_key)
         await session.commit()
@@ -2325,8 +2551,9 @@ _ONBOARDING_DRIP_WINDOWS = [
 
 
 def _onboarding_drip_text(action_key: str, ref_link: str, ref_reward) -> str:
+    """Текст дрип-сообщения онбординга (переводится под язык получателя)."""
     if action_key == "onboard_drip_1":
-        return (
+        return t(
             "👋 <b>Ну как тебе у нас?</b>\n\n"
             "Коротко о главном:\n"
             "• 💰 <b>Офферы</b> — монеты за подписки на каналы\n"
@@ -2335,20 +2562,22 @@ def _onboarding_drip_text(action_key: str, ref_link: str, ref_reward) -> str:
             "Загляни в разделы 💰 Офферы и 🎟 Промокоды — там сейчас самое интересное."
         )
     if action_key == "onboard_drip_2":
-        return (
+        return t(
             "👥 <b>Друзья = монеты!</b>\n\n"
-            f"За каждого активного приглашённого начисляем <b>+{ref_reward} монет</b>. "
+            "За каждого активного приглашённого начисляем <b>+{ref_reward} монет</b>. "
             "Просто отправь свою ссылку знакомому:\n"
-            f"<code>{ref_link}</code>\n\n"
-            "Один активный друг ≈ десятки просмотров бесплатно. 🚀"
+            "<code>{ref_link}</code>\n\n"
+            "Один активный друг ≈ десятки просмотров бесплатно. 🚀",
+            ref_reward=ref_reward,
+            ref_link=ref_link,
         )
     if action_key == "onboard_drip_5":
-        return (
+        return t(
             "👀 <b>Продолжим знакомство?</b>\n\n"
             "Открой 🎬 Смотреть — первые 3 фото или видео доступны без ника. "
             "В профиле можно настроить его позже. Если что-то непонятно, напиши в поддержку."
         )
-    return (
+    return t(
         "👀 <b>Мы тут контент обновили…</b>\n\n"
         "Загляни в ленту — много нового. За сегодняшний заход уже ждёт стрик-бонус, "
         "а в 🎟 Промокодах может лежать халявное слово недели. 😉"
@@ -2395,9 +2624,10 @@ async def onboarding_retention_pass(bot: Bot) -> dict:
                     if await has_action_since(session, user.id, action_key, datetime.min):
                         continue
                     ref_link = f"https://t.me/{bot_info.username}?start={user.referral_code or ''}"
-                    text = _onboarding_drip_text(action_key, ref_link, REFERRAL_REWARD_INVITER)
                     try:
-                        await bot.send_message(user.telegram_id, text, parse_mode="HTML")
+                        with language_scope(user.language):
+                            text = _onboarding_drip_text(action_key, ref_link, REFERRAL_REWARD_INVITER)
+                            await bot.send_message(user.telegram_id, text, parse_mode="HTML")
                     except Exception:
                         continue  # юзер заблокировал бота — не отмечаем шаг как пройденный
                     await log_user_action(session, user.id, action_key, f"age_h={age_h:.1f}", auto_commit=False)
@@ -2421,13 +2651,12 @@ async def onboarding_retention_pass(bot: Bot) -> dict:
                 if await has_action_since(session, user.id, "comeback_bonus", cooldown_since):
                     continue
                 try:
-                    await bot.send_message(
-                        user.telegram_id,
-                        "🥺 <b>Мы скучали!</b>\n\n"
-                        f"Возвращайся: тебе уже начислен бонус <b>+{cb_amount:.0f} монет</b>, "
-                        "Подготовлены свежие видео, а в 🎟 Промокодах ждёт слово халявы недели!",
-                        parse_mode="HTML",
-                    )
+                    with language_scope(user.language):
+                        await bot.send_message(
+                            user.telegram_id,
+                            t('🥺 <b>Мы скучали!</b>\n\nВозвращайся: тебе уже начислен бонус <b>+{cb_amount:.0f} монет</b>, Подготовлены свежие видео, а в 🎟 Промокодах ждёт слово халявы недели!', cb_amount=cb_amount),
+                            parse_mode="HTML",
+                        )
                 except Exception:
                     continue  # недоставлено — не платим и не отмечаем
                 await change_balance_atomic(session, user.id, to_decimal(cb_amount), "comeback_bonus", details=f"idle_h={idle_h:.0f}")
@@ -2639,7 +2868,7 @@ body {
 <body>
 
 <div class="header">
-  <div>КЕЙСЫ <span id="case-name-top">ОБЫЧНЫЙ</span></div>
+  <div><span data-i18n="КЕЙСЫ"></span> <span id="case-name-top" data-i18n="ОБЫЧНЫЙ"></span></div>
   <div class="balance"><span id="balance-val">0.00</span> 🪙</div>
 </div>
 
@@ -2655,22 +2884,74 @@ body {
   </div>
 
   <div class="controls">
-    <button class="btn-open" id="btn-open">ОТКРЫТЬ ЗА <span id="open-price">100</span></button>
-    <div class="pity-info" id="pity-info">До гаранта Редкого+: 10</div>
+    <button class="btn-open" id="btn-open"><span data-i18n="ОТКРЫТЬ ЗА"></span> <span id="open-price">100</span></button>
+    <div class="pity-info" id="pity-info" data-i18n="До гаранта Редкого+:"></div>
   </div>
 </div>
 
 <div id="win-overlay">
-  <div class="win-title">ПРЕДМЕТ ПОЛУЧЕН!</div>
+  <div class="win-title" data-i18n="ПРЕДМЕТ ПОЛУЧЕН!"></div>
   <div class="win-item" id="win-icon">🎁</div>
   <div class="win-name" id="win-name">???</div>
-  <button class="btn-open" onclick="closeWin()">ОТЛИЧНО</button>
+  <button class="btn-open" onclick="closeWin()" data-i18n="ОТЛИЧНО"></button>
 </div>
 
 <script>
 const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
+
+const I18N = {
+  ru: {
+    "Кейсы": "Кейсы",
+    "КЕЙСЫ": "КЕЙСЫ",
+    "ОБЫЧНЫЙ": "ОБЫЧНЫЙ",
+    "ОТКРЫТЬ ЗА": "ОТКРЫТЬ ЗА",
+    "До гаранта Редкого+:": "До гаранта Редкого+:",
+    "До гаранта Редкого+: {pity}": "До гаранта Редкого+: {pity}",
+    "ПРЕДМЕТ ПОЛУЧЕН!": "ПРЕДМЕТ ПОЛУЧЕН!",
+    "ОТЛИЧНО": "ОТЛИЧНО",
+    "Обычная": "Обычная",
+    "Редкая": "Редкая",
+    "Эпическая": "Эпическая",
+    "Джекпот": "Джекпот",
+    "Золотая": "Золотая",
+    "Монеты": "Монеты",
+    "Стиль ника": "Стиль ника",
+    "Требуется уровень {level}": "Требуется уровень {level}",
+    "Ошибка соединения. Попробуй ещё раз.": "Ошибка соединения. Попробуй ещё раз.",
+    "Не удалось открыть кейс.": "Не удалось открыть кейс.",
+    "монет": "монет",
+  },
+  en: {
+    "Кейсы": "Cases",
+    "КЕЙСЫ": "CASES",
+    "ОБЫЧНЫЙ": "COMMON",
+    "ОТКРЫТЬ ЗА": "OPEN FOR",
+    "До гаранта Редкого+:": "Guaranteed Rare+ in:",
+    "До гаранта Редкого+: {pity}": "Guaranteed Rare+ in: {pity}",
+    "ПРЕДМЕТ ПОЛУЧЕН!": "ITEM WON!",
+    "ОТЛИЧНО": "GREAT",
+    "Обычная": "Common",
+    "Редкая": "Rare",
+    "Эпическая": "Epic",
+    "Джекпот": "Jackpot",
+    "Золотая": "Gold",
+    "Монеты": "Coins",
+    "Стиль ника": "Nickname style",
+    "Требуется уровень {level}": "Level {level} required",
+    "Ошибка соединения. Попробуй ещё раз.": "Connection error. Please try again.",
+    "Не удалось открыть кейс.": "Failed to open the case.",
+    "монет": "coins",
+  },
+};
+const L = (k, p) => {
+  let s = (I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k;
+  if (p) for (const n in p) s = s.replaceAll('{' + n + '}', p[n]);
+  return s;
+};
+document.title = L('Кейсы');
+document.querySelectorAll('[data-i18n]').forEach(el => { el.innerHTML = L(el.dataset.i18n); });
 
 const track = document.getElementById('spinner-track');
 const btnOpen = document.getElementById('btn-open');
@@ -2682,16 +2963,16 @@ let pity = 10;
 let isSpinning = false;
 
 const RARITIES = {
-  common: { name: 'Обычная', color: 'blue' },
-  rare: { name: 'Редкая', color: 'purple' },
-  epic: { name: 'Эпическая', color: 'pink' },
-  jackpot: { name: 'Джекпот', color: 'red' },
-  gold: { name: 'Золотая', color: 'gold' }
+  common: { name: L('Обычная'), color: 'blue' },
+  rare: { name: L('Редкая'), color: 'purple' },
+  epic: { name: L('Эпическая'), color: 'pink' },
+  jackpot: { name: L('Джекпот'), color: 'red' },
+  gold: { name: L('Золотая'), color: 'gold' }
 };
 
 const ITEMS_DATA = {
-  coins: { icon: '🪙', label: 'Монеты' },
-  style: { icon: '🎨', label: 'Стиль ника' }
+  coins: { icon: '🪙', label: L('Монеты') },
+  style: { icon: '🎨', label: L('Стиль ника') }
 };
 
 function createItemEl(data) {
@@ -2714,7 +2995,7 @@ async function loadState() {
   if (data.ok) {
     balance = data.balance;
     document.getElementById('balance-val').innerText = balance.toFixed(2);
-    document.getElementById('pity-info').innerText = `До гаранта Редкого+: ${data.pity}`;
+    document.getElementById('pity-info').innerText = L('До гаранта Редкого+: {pity}', {pity: data.pity});
     
     const selector = document.getElementById('case-selector');
     selector.innerHTML = '';
@@ -2730,7 +3011,7 @@ async function loadState() {
       card.onclick = () => {
         if (isSpinning) return;
         if (data.user_level < c.req_level) {
-          tg.showAlert('Требуется уровень ' + c.req_level);
+          tg.showAlert(L('Требуется уровень {level}', {level: c.req_level}));
           return;
         }
         currentCase = c.id;
@@ -2760,13 +3041,13 @@ async function openCase() {
     });
     data = await res.json();
   } catch (e) {
-    tg.showAlert('Ошибка соединения. Попробуй ещё раз.');
+    tg.showAlert(L('Ошибка соединения. Попробуй ещё раз.'));
     btnOpen.disabled = false;
     return;
   }
   
   if (!data.ok) {
-    tg.showAlert(data.error || 'Не удалось открыть кейс.');
+    tg.showAlert(data.error || L('Не удалось открыть кейс.'));
     btnOpen.disabled = false;
     return;
   }
@@ -2811,7 +3092,7 @@ async function openCase() {
 
 function showWin(item) {
   document.getElementById('win-icon').innerText = ITEMS_DATA[item.type].icon;
-  document.getElementById('win-name').innerText = item.value + (item.type === 'style' ? '' : ' монет');
+  document.getElementById('win-name').innerText = item.value + (item.type === 'style' ? '' : ' ' + L('монет'));
   document.getElementById('win-name').className = `win-name rarity-${item.rarity}`;
   winOverlay.style.display = 'flex';
   tg.HapticFeedback.notificationOccurred('success');
@@ -2830,9 +3111,10 @@ loadState();
 """
 
 async def cases_page_handler(request: web.Request) -> web.Response:
-    return web.Response(text=CASES_PAGE_HTML, content_type="text/html")
+    return web.Response(text=_inject_page_lang(CASES_PAGE_HTML, request), content_type="text/html")
 
 
+@localized_api
 async def api_cases_state(request: web.Request) -> web.Response:
     telegram_user_id = _get_webapp_user_id(request)
     if not telegram_user_id:
@@ -2846,10 +3128,10 @@ async def api_cases_state(request: web.Request) -> web.Response:
         
         from app.config import LOOTBOX_COIN_PRICE
         cases = [
-            {"id": "common", "name": "Обычный", "icon": "🎁", "price": float(LOOTBOX_COIN_PRICE), "req_level": 1},
-            {"id": "elite", "name": "Элитный", "icon": "💎", "price": 1000.0, "req_level": 10},
-            {"id": "legendary", "name": "Легендарный", "icon": "🔥", "price": 5000.0, "req_level": 20},
-            {"id": "styles", "name": "Кейс ников", "icon": "🎨", "price": 250.0, "req_level": 1},
+            {"id": "common", "name": t("Обычный"), "icon": "🎁", "price": float(LOOTBOX_COIN_PRICE), "req_level": 1},
+            {"id": "elite", "name": t("Элитный"), "icon": "💎", "price": 1000.0, "req_level": 10},
+            {"id": "legendary", "name": t("Легендарный"), "icon": "🔥", "price": 5000.0, "req_level": 20},
+            {"id": "styles", "name": t("Кейс ников"), "icon": "🎨", "price": 250.0, "req_level": 1},
         ]
         
         return web.json_response({
@@ -2860,6 +3142,7 @@ async def api_cases_state(request: web.Request) -> web.Response:
             "cases": cases
         })
 
+@localized_api
 async def api_cases_open(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -2992,28 +3275,27 @@ input{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.25); 
   <div class="chip">💰 <b id="hudPotential">0</b></div>
   <div class="chip">👛 <b id="hudBalance">0</b></div>
 </div>
-<button id="cashoutBtn" class="hidden">💰 Забрать</button>
+<button id="cashoutBtn" class="hidden" data-i18n="💰 Забрать"></button>
 
 <div id="lobby" class="screen">
   <div style="font-size:46px">🚀</div>
-  <h1>Космическая Аркада</h1>
-  <div class="sub">Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>
-  Успей нажать «Забрать», пока флот не прорвался! ☠️</div>
-  <div>👛 Баланс: <b id="lobbyBalance">—</b> монет</div>
+  <h1 data-i18n="Космическая Аркада"></h1>
+  <div class="sub" data-i18n="Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️"></div>
+  <div>👛 <span data-i18n="Баланс:"></span> <b id="lobbyBalance">—</b> <span data-i18n="монет"></span></div>
   <div class="chips" id="betChips"></div>
-  <input id="betInput" type="number" inputmode="decimal" placeholder="Своя ставка"/>
+  <input id="betInput" type="number" inputmode="decimal" data-i18n-placeholder="Своя ставка" placeholder="Своя ставка"/>
   <div class="limits" id="limitsLine"></div>
-  <button class="btn hidden" id="resumeBtn">▶️ Продолжить забег</button>
-  <button class="btn primary" id="startBtn">🚀 В бой!</button>
+  <button class="btn hidden" id="resumeBtn" data-i18n="▶️ Продолжить забег"></button>
+  <button class="btn primary" id="startBtn" data-i18n="🚀 В бой!"></button>
   <div class="top-list hidden" id="topList"></div>
 </div>
 
 <div id="overlay" class="screen hidden">
   <div id="ovEmoji" style="font-size:58px">🏆</div>
-  <h1 id="ovTitle" style="font-size:24px">Победа!</h1>
+  <h1 id="ovTitle" style="font-size:24px" data-i18n="Победа!"></h1>
   <div id="ovText" class="sub"></div>
-  <button class="btn primary" id="againBtn">🔁 Ещё раз</button>
-  <button class="btn" id="toLobbyBtn">✏️ Сменить ставку</button>
+  <button class="btn primary" id="againBtn" data-i18n="🔁 Ещё раз"></button>
+  <button class="btn" id="toLobbyBtn" data-i18n="✏️ Сменить ставку"></button>
 </div>
 
 <div id="toast"></div>
@@ -3024,6 +3306,89 @@ var tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 var initData = tg ? (tg.initData || '') : '';
 function $(id){ return document.getElementById(id); }
+
+var I18N = {
+  ru: {
+    "Космическая Аркада": "Космическая Аркада",
+    "💰 Забрать": "💰 Забрать",
+    "💰 Забрать {amount}": "💰 Забрать {amount}",
+    "Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️": "Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️",
+    "Баланс:": "Баланс:",
+    "монет": "монет",
+    "Своя ставка": "Своя ставка",
+    "▶️ Продолжить забег": "▶️ Продолжить забег",
+    "▶️ Продолжить (ставка {bet}, x{mult})": "▶️ Продолжить (ставка {bet}, x{mult})",
+    "🚀 В бой!": "🚀 В бой!",
+    "Победа!": "Победа!",
+    "🔁 Ещё раз": "🔁 Ещё раз",
+    "✏️ Сменить ставку": "✏️ Сменить ставку",
+    "Не хватает монет 😢": "Не хватает монет 😢",
+    "Ставка вне лимитов": "Ставка вне лимитов",
+    "Аркада временно отключена": "Аркада временно отключена",
+    "У тебя уже идёт забег": "У тебя уже идёт забег",
+    "Сначала отбей хотя бы одну волну!": "Сначала отбей хотя бы одну волну!",
+    "Забег уже завершён": "Забег уже завершён",
+    "Ошибка: {code}": "Ошибка: {code}",
+    "ВОЛНА {wave} ОТБИТА! 💥": "ВОЛНА {wave} ОТБИТА! 💥",
+    "Сервер отменил забег": "Сервер отменил забег",
+    "Прорыв флота!": "Прорыв флота!",
+    "Инопланетяне прорвались на волне {wave}.\nСтавка {bet} монет сгорела.": "Инопланетяне прорвались на волне {wave}.\nСтавка {bet} монет сгорела.",
+    "Ставка {bet} × x{mult} = {payout} монет зачислено!": "Ставка {bet} × x{mult} = {payout} монет зачислено!",
+    "🌟 Множитель достиг потолка x{max}!": "🌟 Множитель достиг потолка x{max}!",
+    "🛡 Часть прибыли срезана дневным лимитом.": "🛡 Часть прибыли срезана дневным лимитом.",
+    "Сверхновая!": "Сверхновая!",
+    "Выигрыш забран!": "Выигрыш забран!",
+    "🏆 Топ недели": "🏆 Топ недели",
+    "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день": "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день",
+    "Нет связи с сервером: {error}": "Нет связи с сервером: {error}",
+    "Введи ставку": "Введи ставку",
+  },
+  en: {
+    "Космическая Аркада": "Space Arcade",
+    "💰 Забрать": "💰 Cash out",
+    "💰 Забрать {amount}": "💰 Cash out {amount}",
+    "Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️": "Defend against the fleet waves 👾 — every wave grows your bet multiplier.<br/>Hit \"Cash out\" before the fleet breaks through! ☠️",
+    "Баланс:": "Balance:",
+    "монет": "coins",
+    "Своя ставка": "Your bet",
+    "▶️ Продолжить забег": "▶️ Resume run",
+    "▶️ Продолжить (ставка {bet}, x{mult})": "▶️ Resume (bet {bet}, x{mult})",
+    "🚀 В бой!": "🚀 Go!",
+    "Победа!": "Victory!",
+    "🔁 Ещё раз": "🔁 Again",
+    "✏️ Сменить ставку": "✏️ Change bet",
+    "Не хватает монет 😢": "Not enough coins 😢",
+    "Ставка вне лимитов": "Bet out of limits",
+    "Аркада временно отключена": "Arcade is temporarily disabled",
+    "У тебя уже идёт забег": "You already have a run in progress",
+    "Сначала отбей хотя бы одну волну!": "Deflect at least one wave first!",
+    "Забег уже завершён": "Run already finished",
+    "Ошибка: {code}": "Error: {code}",
+    "ВОЛНА {wave} ОТБИТА! 💥": "WAVE {wave} DEFLECTED! 💥",
+    "Сервер отменил забег": "Server cancelled the run",
+    "Прорыв флота!": "Fleet breakthrough!",
+    "Инопланетяне прорвались на волне {wave}.\nСтавка {bet} монет сгорела.": "Aliens broke through on wave {wave}.\nYour bet of {bet} coins is lost.",
+    "Ставка {bet} × x{mult} = {payout} монет зачислено!": "Bet {bet} × x{mult} = {payout} coins credited!",
+    "🌟 Множитель достиг потолка x{max}!": "🌟 Multiplier hit the x{max} cap!",
+    "🛡 Часть прибыли срезана дневным лимитом.": "🛡 Part of the profit was cut by the daily limit.",
+    "Сверхновая!": "Supernova!",
+    "Выигрыш забран!": "Winnings cashed out!",
+    "🏆 Топ недели": "🏆 Top of the week",
+    "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день": "Bet from {min} to {max} coins · max x{maxmult} · profit cap {cap}/day",
+    "Нет связи с сервером: {error}": "No server connection: {error}",
+    "Введи ставку": "Enter a bet",
+  },
+};
+function L(k, p){
+  var s = (I18N[window.BOT_LANG] || I18N.ru)[k] || I18N.ru[k] || k;
+  if (p) for (var n in p) s = s.split('{' + n + '}').join(p[n]);
+  return s;
+}
+document.title = L('Космическая Аркада');
+document.querySelectorAll('[data-i18n]').forEach(function(el){
+  el.innerHTML = L(el.dataset.i18n);
+  if (el.dataset.i18nPlaceholder) el.placeholder = L(el.dataset.i18nPlaceholder);
+});
 
 var CFG = { min_bet:10, max_bet:250, max_multiplier:50, daily_profit_cap:500, enabled:true };
 var balance = 0, bet = 0, runId = null, mult = 1, wave = 0;
@@ -3065,9 +3430,9 @@ function fmt(v){
   return s === '-0' ? '0' : s;
 }
 function errText(c){
-  return { no_funds:'Не хватает монет 😢', bad_bet:'Ставка вне лимитов',
-    disabled:'Аркада временно отключена', run_in_progress:'У тебя уже идёт забег',
-    no_waves:'Сначала отбей хотя бы одну волну!', not_active:'Забег уже завершён' }[c] || ('Ошибка: ' + c);
+  return { no_funds:L('Не хватает монет 😢'), bad_bet:L('Ставка вне лимитов'),
+    disabled:L('Аркада временно отключена'), run_in_progress:L('У тебя уже идёт забег'),
+    no_waves:L('Сначала отбей хотя бы одну волну!'), not_active:L('Забег уже завершён') }[c] || L('Ошибка: {code}', {code: c});
 }
 
 /* ---------- HUD ---------- */
@@ -3084,7 +3449,7 @@ function refreshCashoutBtn(){
   var b = $('cashoutBtn');
   if (phase==='playing' && wave >= 1) {
     b.classList.remove('hidden');
-    b.textContent = '💰 Забрать ' + fmt(bet * mult);
+    b.textContent = L('💰 Забрать {amount}', {amount: fmt(bet * mult)});
   } else b.classList.add('hidden');
 }
 
@@ -3237,7 +3602,7 @@ function frame(ts){
       waveFlash -= dt;
       ctx.globalAlpha = Math.min(waveFlash, 1);
       ctx.fillStyle = '#fbbf24'; ctx.font = 'bold 21px sans-serif';
-      ctx.fillText('ВОЛНА ' + wave + ' ОТБИТА! 💥', W/2, H/2 - 60);
+      ctx.fillText(L('ВОЛНА {wave} ОТБИТА! 💥', {wave: wave}), W/2, H/2 - 60);
       ctx.globalAlpha = 1;
     }
   }
@@ -3260,7 +3625,7 @@ function onWaveCleared(){
     } else if (r.outcome === 'cashed_out') {
       waitingServer = false; onWin(r.payout, r.multiplier, true, r.cap_applied);
     } else {
-      waitingServer = false; toLobby('Сервер отменил забег');
+      waitingServer = false; toLobby(L('Сервер отменил забег'));
     }
   }).catch(function(e){ waitingServer = false; toLobby(errText(e.message)); });
 }
@@ -3275,17 +3640,17 @@ function onDefeat(){
   boom(player.x, H - 66); boom(player.x, H - 66);
   setTimeout(function(){
     phase = 'over';
-    showOverlay('☠️', 'Прорыв флота!',
-      'Инопланетяне прорвались на волне ' + (wave + 1) + '.\\nСтавка ' + fmt(bet) + ' монет сгорела.');
+    showOverlay('☠️', L('Прорыв флота!'),
+      L('Инопланетяне прорвались на волне {wave}.\\nСтавка {bet} монет сгорела.', {wave: wave + 1, bet: fmt(bet)}));
   }, 1150);
 }
 
 function onWin(payout, multiplier, capped, capApplied){
   phase = 'over'; haptic('success');
-  var txt = 'Ставка ' + fmt(bet) + ' × x' + fmt(multiplier) + ' = ' + fmt(payout) + ' монет зачислено!';
-  if (capped) txt = '🌟 Множитель достиг потолка x' + fmt(CFG.max_multiplier) + '!\\n' + txt;
-  if (capApplied) txt += '\\n🛡 Часть прибыли срезана дневным лимитом.';
-  showOverlay(capped ? '🌟' : '🏆', capped ? 'Сверхновая!' : 'Выигрыш забран!', txt);
+  var txt = L('Ставка {bet} × x{mult} = {payout} монет зачислено!', {bet: fmt(bet), mult: fmt(multiplier), payout: fmt(payout)});
+  if (capped) txt = L('🌟 Множитель достиг потолка x{max}!', {max: fmt(CFG.max_multiplier)}) + '\\n' + txt;
+  if (capApplied) txt += '\\n' + L('🛡 Часть прибыли срезана дневным лимитом.');
+  showOverlay(capped ? '🌟' : '🏆', capped ? L('Сверхновая!') : L('Выигрыш забран!'), txt);
 }
 
 function showOverlay(emoji, title, text){
@@ -3321,7 +3686,7 @@ function refreshTop(){
     if (!t.rows || !t.rows.length) { el.classList.add('hidden'); return; }
     var medals = ['🥇','🥈','🥉'];
     el.classList.remove('hidden');
-    el.innerHTML = '<b>🏆 Топ недели</b><br/>' + t.rows.slice(0,5).map(function(r, i){
+    el.innerHTML = '<b>' + L('🏆 Топ недели') + '</b><br/>' + t.rows.slice(0,5).map(function(r, i){
       return (medals[i] || (i+1) + '.') + ' ' + r.name + ' — +' + fmt(r.net);
     }).join('<br/>');
   }).catch(function(){});
@@ -3333,21 +3698,21 @@ function refreshState(){
     CFG.max_multiplier = s.max_multiplier; CFG.daily_profit_cap = s.daily_profit_cap;
     balance = s.balance;
     $('lobbyBalance').textContent = fmt(balance);
-    $('limitsLine').textContent = 'Ставка от ' + fmt(CFG.min_bet) + ' до ' + fmt(CFG.max_bet) +
-      ' монет · макс. x' + fmt(CFG.max_multiplier) +
-      ' · кап прибыли ' + fmt(CFG.daily_profit_cap) + '/день';
+    $('limitsLine').textContent = L('Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день', {
+      min: fmt(CFG.min_bet), max: fmt(CFG.max_bet),
+      maxmult: fmt(CFG.max_multiplier), cap: fmt(CFG.daily_profit_cap)
+    });
     resumeRun = s.active_run;
     if (resumeRun) {
       bet = resumeRun.bet;
       $('resumeBtn').classList.remove('hidden');
-      $('resumeBtn').textContent = '▶️ Продолжить (ставка ' + fmt(resumeRun.bet) +
-        ', x' + fmt(resumeRun.multiplier) + ')';
+      $('resumeBtn').textContent = L('▶️ Продолжить (ставка {bet}, x{mult})', {bet: fmt(resumeRun.bet), mult: fmt(resumeRun.multiplier)});
     } else {
       $('resumeBtn').classList.add('hidden');
       buildChips();
     }
-    if (!CFG.enabled) toast('Аркада временно отключена');
-  }).catch(function(e){ toast('Нет связи с сервером: ' + e.message); });
+    if (!CFG.enabled) toast(L('Аркада временно отключена'));
+  }).catch(function(e){ toast(L('Нет связи с сервером: {error}', {error: e.message})); });
   refreshTop();
 }
 
@@ -3381,9 +3746,9 @@ function toLobby(msg){
 
 /* ---------- КНОПКИ ---------- */
 $('startBtn').onclick = function(){
-  if (!CFG.enabled) { toast('Аркада временно отключена'); return; }
+  if (!CFG.enabled) { toast(L('Аркада временно отключена')); return; }
   var v = $('betInput').value ? parseFloat($('betInput').value) : bet;
-  if (!(v > 0)) { toast('Введи ставку'); return; }
+  if (!(v > 0)) { toast(L('Введи ставку')); return; }
   startRun(v);
 };
 $('resumeBtn').onclick = function(){
@@ -3416,7 +3781,7 @@ refreshState();
 
 
 async def arcade_page_handler(request: web.Request) -> web.Response:
-    return web.Response(text=ARCADE_PAGE_HTML, content_type="text/html")
+    return web.Response(text=_inject_page_lang(ARCADE_PAGE_HTML, request), content_type="text/html")
 
 
 def _arcade_run_public(run) -> dict:
@@ -3430,6 +3795,7 @@ def _arcade_run_public(run) -> dict:
     }
 
 
+@localized_api
 async def api_arcade_state(request: web.Request) -> web.Response:
     telegram_user_id = _get_webapp_user_id(request)
     if not telegram_user_id:
@@ -3458,12 +3824,13 @@ async def api_arcade_state(request: web.Request) -> web.Response:
                 "max_multiplier": float(cfg.max_multiplier),
                 "daily_profit_cap": float(cfg.daily_profit_cap),
                 "active_run": active_run,
-                "name": user.display_name or user.first_name or "Игрок",
+                "name": user.display_name or user.first_name or t("Игрок"),
             })
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+@localized_api
 async def api_arcade_start(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -3516,6 +3883,7 @@ async def _arcade_load_owned_run(session, telegram_user_id: int, run_id: int):
     return user, run, None
 
 
+@localized_api
 async def api_arcade_wave(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -3564,6 +3932,7 @@ async def api_arcade_wave(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+@localized_api
 async def api_arcade_cashout(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -3604,6 +3973,7 @@ async def api_arcade_cashout(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+@localized_api
 async def api_arcade_top(request: web.Request) -> web.Response:
     try:
         from datetime import timedelta as _td
@@ -3632,7 +4002,7 @@ async def api_arcade_top(request: web.Request) -> web.Response:
         return web.json_response({
             "ok": True,
             "rows": [
-                {"name": name or "Игрок", "net": float(net), "games": int(games)}
+                {"name": name or t("Игрок"), "net": float(net), "games": int(games)}
                 for (name, net, games) in rows
             ],
         })

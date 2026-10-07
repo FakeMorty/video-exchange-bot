@@ -3689,7 +3689,7 @@ async def test_admin_poll_reward_is_idempotent_and_respects_closure():
         session.add(poll)
         await session.commit()
 
-        answered_poll, reward, error = await submit_admin_poll_response(
+        answered_poll, reward, error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[0]
         )
         assert answered_poll is not None
@@ -3701,7 +3701,7 @@ async def test_admin_poll_reward_is_idempotent_and_respects_closure():
         assert len(logs) == 1
         assert logs[0].source == "admin_poll_reward"
 
-        _poll, duplicate_reward, duplicate_error = await submit_admin_poll_response(
+        _poll, duplicate_reward, duplicate_error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[1]
         )
         assert duplicate_reward is None
@@ -3712,7 +3712,7 @@ async def test_admin_poll_reward_is_idempotent_and_respects_closure():
 
         poll.is_active = False
         await session.commit()
-        blocked_poll, blocked_reward, blocked_error = await submit_admin_poll_response(
+        blocked_poll, blocked_reward, blocked_error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[0]
         )
         assert blocked_poll is None
@@ -4314,7 +4314,7 @@ async def test_poll_reward_100_unanswered_lookup_and_promo_pool():
         assert any("100 монет" in it["text"] for it in poll_items)
 
         # После ответа награда 100 и опрос больше не предлагается
-        answered, reward, error = await submit_admin_poll_response(
+        answered, reward, error, _err_code = await submit_admin_poll_response(
             session, poll.id, user.id, option_indexes=[0]
         )
         assert reward == Decimal("100.00")
@@ -4440,3 +4440,401 @@ async def test_photo_and_video_requests_share_serialization():
     callback = SimpleNamespace(from_user=SimpleNamespace(id=778124))
     await asyncio.gather(photo(callback), video(callback), photo(callback))
     assert peak == 1
+
+
+# ══════════════════════════════════════════════════════════════
+#  Мультиязычность: кнопка выбора языка бота (старт с английского)
+# ══════════════════════════════════════════════════════════════
+
+def test_i18n_normalize_language_and_fallbacks():
+    from app.i18n import (
+        DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, get_user_language,
+        language_label, normalize_language, t,
+    )
+
+    assert DEFAULT_LANGUAGE == "ru"
+    assert set(SUPPORTED_LANGUAGES) >= {"ru", "en"}
+
+    # нормализация кодов
+    assert normalize_language(None) == "ru"
+    assert normalize_language("") == "ru"
+    assert normalize_language("EN") == "en"
+    assert normalize_language("en-US") == "en"
+    assert normalize_language("en_US") == "en"
+    assert normalize_language("de") == "ru"  # неизвестный язык -> дефолт
+
+    # переводы и фолбэки
+    assert t("ru", "menu.watch") == "🎬 Смотреть"
+    assert t("en", "menu.watch") == "🎬 Watch"
+    assert t("xx", "menu.watch") == "🎬 Смотреть"  # нет такого языка -> русский
+    assert t("en", "no.such.key") == "no.such.key"  # нет ключа -> сам ключ
+    assert t("en", "welcome.greeting", name="Nick", vip="", balance=100) == (
+        "👋 Hi, <b>Nick</b>!\n💰 Balance: <b>100</b> coins"
+    )
+
+    # язык пользователя
+    assert get_user_language(None) == "ru"
+    assert get_user_language(SimpleNamespace(language=None)) == "ru"
+    assert get_user_language(SimpleNamespace(language="en")) == "en"
+    assert get_user_language(SimpleNamespace(language="fr")) == "ru"
+
+    # подпись языка для кнопок
+    assert language_label("ru") == "🇷🇺 Русский"
+    assert language_label("en") == "🇬🇧 English"
+
+
+def test_main_menu_is_localized_and_has_language_button():
+    from app.keyboards import (
+        BTN_ADMIN, BTN_BUY, BTN_FAQ, BTN_FEEDBACK, BTN_GAMES, BTN_LANG,
+        BTN_OFFERS, BTN_PROFILE, BTN_PROMO, BTN_REFERRALS, BTN_RULES,
+        BTN_TOPS, BTN_UPLOAD, BTN_WATCH,
+        language_keyboard, main_menu, menu_button_variants,
+    )
+
+    ru_labels = [b.text for row in main_menu().keyboard for b in row]
+    en_labels = [b.text for row in main_menu(lang="en").keyboard for b in row]
+
+    # По умолчанию меню русское, включая кнопку выбора языка
+    for label in (BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY, BTN_OFFERS,
+                  BTN_REFERRALS, BTN_GAMES, BTN_TOPS, BTN_PROMO, BTN_FEEDBACK,
+                  BTN_RULES, BTN_FAQ, BTN_LANG):
+        assert label in ru_labels
+    # Английская локализация
+    for label in ("🎬 Watch", "📤 Upload", "👤 Profile", "🛍 Shop",
+                  "📢 Offers", "👥 Referrals", "🎮 Games", "🏆 Tops",
+                  "🎟 Promo codes", "💬 Feedback", "📜 Rules",
+                  "ℹ️ FAQ / Help", "🌐 Language"):
+        assert label in en_labels
+        assert label not in ru_labels
+    # Админ-кнопка тоже локализуется и не светится обычным юзерам
+    assert BTN_ADMIN not in ru_labels
+    admin_labels = [b.text for row in main_menu(is_admin=True, lang="en").keyboard for b in row]
+    assert "🔧 Admin" in admin_labels
+
+    # Варианты для матчинга обработчиков покрывают все языки
+    assert menu_button_variants("watch") == {"🎬 Смотреть", "🎬 Watch"}
+    assert menu_button_variants("lang") == {"🌐 Язык", "🌐 Language"}
+
+    # Клавиатура выбора языка: оба языка, текущий отмечен, есть возврат в меню
+    kb = language_keyboard("en")
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "🇷🇺 Русский" in texts
+    assert "✅ 🇬🇧 English" in texts
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "lang_set:ru" in callbacks
+    assert "lang_set:en" in callbacks
+    assert "btn_main_menu" in callbacks
+
+
+def test_menu_button_constants_match_ru_translations():
+    from app import keyboards as K
+    from app.i18n import t
+
+    pairs = {
+        "watch": K.BTN_WATCH, "upload": K.BTN_UPLOAD, "profile": K.BTN_PROFILE,
+        "buy": K.BTN_BUY, "offers": K.BTN_OFFERS, "referrals": K.BTN_REFERRALS,
+        "games": K.BTN_GAMES, "tops": K.BTN_TOPS, "promo": K.BTN_PROMO,
+        "feedback": K.BTN_FEEDBACK, "rules": K.BTN_RULES, "faq": K.BTN_FAQ,
+        "admin": K.BTN_ADMIN, "lang": K.BTN_LANG,
+    }
+    for key, constant in pairs.items():
+        assert t("ru", f"menu.{key}") == constant, key
+
+
+@pytest.mark.asyncio
+async def test_user_language_defaults_to_ru_and_persists(db_session):
+    from app.services import get_or_create_user, get_user
+
+    user, is_new = await get_or_create_user(db_session, 778201, "lang_default")
+    assert is_new
+    assert user.language == "ru"
+
+    user.language = "en"
+    await db_session.commit()
+
+    fetched = await get_user(db_session, 778201)
+    assert fetched.language == "en"
+
+
+@pytest.mark.asyncio
+async def test_language_switch_callback_saves_language_and_replies_in_it():
+    from unittest.mock import AsyncMock
+    from app.db import async_session
+    from app.services import get_or_create_user, get_user
+    from app.user_handlers import cb_language_set
+
+    await reset_bot_db()
+    async with async_session() as session:
+        await get_or_create_user(session, 778202, "lang_switcher")
+
+    callback = SimpleNamespace(
+        data="lang_set:en",
+        from_user=SimpleNamespace(id=778202),
+        message=SimpleNamespace(answer=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    await cb_language_set(callback)
+
+    # Язык сохранился в БД
+    async with async_session() as session:
+        user = await get_user(session, 778202)
+        assert user.language == "en"
+
+    # Toast-подтверждение и новое главное меню — на английском
+    assert callback.answer.await_count == 1
+    assert "English" in callback.answer.await_args.args[0]
+    assert callback.message.answer.await_count == 1
+    assert "Main menu" in callback.message.answer.await_args.args[0]
+    markup = callback.message.answer.await_args.kwargs["reply_markup"]
+    labels = [b.text for row in markup.keyboard for b in row]
+    assert "🎬 Watch" in labels
+    assert "🌐 Language" in labels
+    assert "🎬 Смотреть" not in labels
+
+    # Переключение обратно на русский тоже работает
+    callback_ru = SimpleNamespace(
+        data="lang_set:ru",
+        from_user=SimpleNamespace(id=778202),
+        message=SimpleNamespace(answer=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    await cb_language_set(callback_ru)
+    async with async_session() as session:
+        user = await get_user(session, 778202)
+        assert user.language == "ru"
+    labels_ru = [
+        b.text
+        for row in callback_ru.message.answer.await_args.kwargs["reply_markup"].keyboard
+        for b in row
+    ]
+    assert "🎬 Смотреть" in labels_ru
+
+
+@pytest.mark.asyncio
+async def test_language_button_opens_picker_in_user_language():
+    from unittest.mock import AsyncMock
+    from app.db import async_session
+    from app.services import get_or_create_user
+    from app.user_handlers import cmd_language_menu
+
+    await reset_bot_db()
+    async with async_session() as session:
+        user, _ = await get_or_create_user(session, 778203, "lang_picker")
+        user.language = "en"
+        await session.commit()
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=778203),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+    await cmd_language_menu(message, state)
+
+    state.clear.assert_awaited_once()
+    assert message.answer.await_count == 1
+    assert "Choose the bot language" in message.answer.await_args.args[0]
+    markup = message.answer.await_args.kwargs["reply_markup"]
+    texts = [b.text for row in markup.inline_keyboard for b in row]
+    assert "✅ 🇬🇧 English" in texts
+    assert "🇷🇺 Русский" in texts
+
+
+# ═══════════════════════════════════════════════════════════════
+# Полная локализация: EN_SOURCE покрывает все source-text ключи
+# ═══════════════════════════════════════════════════════════════
+
+def test_en_source_covers_all_source_text_keys():
+    """Каждый кириллический литерал-аргумент t(...) в app/ имеет английский перевод."""
+    import ast
+    import pathlib
+    import re
+
+    from app.i18n import TRANSLATIONS
+
+    en = TRANSLATIONS["en"]
+    app_dir = pathlib.Path(__file__).resolve().parent.parent
+    missing, untranslated = [], []
+    for f in sorted(app_dir.rglob("*.py")):
+        if "tests" in f.parts or "migrations" in f.parts or f.name.startswith("i18n"):
+            continue
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "t"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                key = node.args[0].value
+                if not re.search(r"[А-Яа-яёЁ]", key):
+                    continue
+                if key not in en:
+                    missing.append((str(f), key))
+                elif en[key] == key:
+                    untranslated.append((str(f), key))
+    assert not missing, f"нет EN-перевода для ключей: {missing[:10]}"
+    assert not untranslated, f"EN-значение совпадает с RU-ключом: {untranslated[:10]}"
+
+
+def test_en_source_covers_module_data_keys():
+    """Переводятся и данные модулей, которые попадают в t() в местах использования."""
+    from app.i18n import t
+
+    with __import__("app.i18n", fromlist=["language_scope"]).language_scope("en"):
+        # названия пакетов магазина (config)
+        assert t("1 000 монет") == "1,000 coins"
+        assert t("VIP на 30 дней") == "VIP for 30 days"
+        assert t("Старт-пак: 500 монет") == "Starter pack: 500 coins"
+        # стили и категории ников (nick_styles)
+        assert t("Алмаз") == "Diamond"
+        assert t("Элегантные") == "Elegant"
+        assert t("Рунические") == "Runic"
+        # перки донат-шопа (PERK_NAMES)
+        assert t("💰 Бустер монет x1.5") == "💰 Coin booster x1.5"
+        assert t("⚡ Приоритетная модерация") == "⚡ Priority moderation"
+        # причины жалоб (REPORT_REASONS)
+        assert t("Спам / реклама") == "Spam / advertising"
+        assert t("Нарушение авторских прав") == "Copyright violation"
+        # причины блокировки автора (BLOCK_AUTHOR_REASONS)
+        assert t("Неинтересно") == "Not interesting"
+        # подписи типов опросов (admin _POLL_TYPE_LABELS)
+        assert t("один вариант") == "single option"
+        assert t("несколько вариантов") == "multiple options"
+        assert t("свободный ответ") == "free text"
+        # причины отклонения оффера (admin _OFFER_REJECTION_REASONS)
+        assert t("Запрещённый или сомнительный проект") == "Forbidden or suspicious project"
+        # периоды отчётов (reports PERIODS)
+        assert t("7 дней") == "7 days"
+        assert t("Всё время") == "All time"
+        # источники баланса (reports *_SOURCE_LABELS)
+        assert t("Стартовый баланс") == "Starting balance"
+        assert t("Секслото: 6 совпадений") == "Sexloto: 6 matches"
+        # статус версии (release_notes CURRENT_STATUS)
+        assert t("Актуальная боевая сборка") == "Current production build"
+
+
+def test_t_english_rendering_context_and_fallbacks():
+    from app.i18n import language_scope, set_current_language, t
+
+    # Контекстный язык: EN рендерит английские строки, включая плейсхолдеры
+    with language_scope("en"):
+        assert t("✅ Готово") == "✅ Done"
+        assert t("💰 Цена: <b>{arg0:,} монет</b>\n", arg0=1500) == "💰 Price: <b>1,500 coins</b>\n"
+        assert t("🎫 <b>Куплено билетов:</b> {qty}", qty=3) == "🎫 <b>Tickets bought:</b> 3"
+        # числовые спеки в EN-переводе работают
+        assert t("Ежедневный бонус: +{reward:.0f} монет! Дней подряд: {streak}", reward=20.0, streak=3) == (
+            "Daily bonus: +20 coins! Streak: 3 days in a row"
+        )
+    # RU остался дефолтом
+    assert t("✅ Готово") == "✅ Готово"
+
+    # Явный язык двумя аргументами
+    assert t("en", "✅ Готово") == "✅ Done"
+    assert t("ru", "✅ Готово") == "✅ Готово"
+    # Фолбэк: нет ключа → сам ключ; неизвестный язык → русский
+    assert t("en", "несуществующий ключ 123") == "несуществующий ключ 123"
+    assert t("xx", "✅ Готово") == "✅ Готово"
+
+    # set_current_language влияет на t() без аргумента языка
+    set_current_language("en")
+    try:
+        assert t("🚫 Спам") == "🚫 Spam"
+    finally:
+        set_current_language("ru")
+    assert t("🚫 Спам") == "🚫 Спам"
+
+
+def test_main_menu_english_via_context_language():
+    from app.i18n import language_scope
+    from app.keyboards import main_menu
+
+    with language_scope("en"):
+        labels = [b.text for row in main_menu().keyboard for b in row]
+    assert "🎬 Watch" in labels
+    assert "🛍 Shop" in labels
+    assert "🌐 Language" in labels
+    assert "🎬 Смотреть" not in labels
+
+
+def test_en_placeholders_format_smoke():
+    """Все EN-переводы с плейсхолдерами форматируются без ошибок."""
+    import re
+
+    from app.i18n import TRANSLATIONS
+
+    ph_re = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(:[^{}]*)?\}")
+    checked = 0
+    for key, en in TRANSLATIONS["en"].items():
+        names = ph_re.findall(en)
+        if not names:
+            continue
+        values = {}
+        for name, spec in names:
+            if spec.endswith("f") or spec.endswith("d") or spec.endswith("s"):
+                values[name] = 1.5 if spec.endswith("f") else 1
+            else:
+                values[name] = "X"
+        try:
+            en.format(**values)
+        except Exception:
+            # числовой спек на строке — норма, пробуем числом
+            en.format(**{n: 1.5 for n, _ in names})
+        checked += 1
+    assert checked > 300  # покрыта существенная часть шаблонов
+
+
+@pytest.mark.asyncio
+async def test_poll_error_codes_are_language_independent():
+    """Контракт кодов ошибок опроса: call-sites не зависят от языка текста ошибки."""
+    from app.models import AdminPoll, User
+    from app.services import submit_admin_poll_response
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        user = User(telegram_id=424242, balance=Decimal("0.00"))
+        session.add(user)
+        await session.flush()
+        poll = AdminPoll(
+            question="Тестовый вопрос?",
+            poll_type="text",
+            reward=Decimal("100.00"),
+            created_by=user.id,
+        )
+        session.add(poll)
+        await session.commit()
+
+        _poll, reward, error, code = await submit_admin_poll_response(
+            session, poll.id, user.id, answer_text="ответ",
+        )
+        assert error is None and code is None and reward == Decimal("100.00")
+
+        _poll2, _reward2, dup_error, dup_code = await submit_admin_poll_response(
+            session, poll.id, user.id, answer_text="ещё ответ",
+        )
+        assert dup_error is not None and dup_code == "already"
+
+        _p, _r, closed_error, closed_code = await submit_admin_poll_response(
+            session, 999999, user.id, answer_text="ответ",
+        )
+        assert closed_error is not None and closed_code == "closed"
+
+        # валидационная ошибка тоже несёт код
+        poll2 = AdminPoll(
+            question="Опрос с вариантами?",
+            poll_type="single",
+            options_json='["А", "Б"]',
+            reward=Decimal("10.00"),
+            created_by=user.id,
+        )
+        session.add(poll2)
+        await session.commit()
+        _p3, _r3, invalid_error, invalid_code = await submit_admin_poll_response(
+            session, poll2.id, user.id, option_indexes=[],
+        )
+        assert invalid_error is not None and invalid_code == "invalid"

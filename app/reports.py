@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.i18n import t
+
 import asyncio
 import tempfile
 from collections import Counter, defaultdict
@@ -128,11 +130,11 @@ def _user_role_info(user: User) -> dict[str, bool | str]:
     is_super = user.telegram_id in ADMINS
     is_admin = is_super or bool(getattr(user, "is_admin", False))
     if is_super:
-        label = "Супер-админ"
+        label = t('Супер-админ')
     elif is_admin:
-        label = "Админ"
+        label = t('Админ')
     else:
-        label = "Обычный пользователь"
+        label = t('Обычный пользователь')
     return {
         "is_super_admin": is_super,
         "is_admin": is_admin,
@@ -175,7 +177,7 @@ def _prepare_line_series(day_map: dict[str, float], days: int) -> tuple[list[str
 
 def _top_items(items: dict[str, float], mapping: dict[str, str], limit: int = 6) -> dict[str, float]:
     ranked = sorted(items.items(), key=lambda kv: kv[1], reverse=True)[:limit]
-    return {mapping.get(k, k): v for k, v in ranked if v > 0}
+    return {t(mapping.get(k, k)): v for k, v in ranked if v > 0}
 
 
 async def _sum_balance(session, user_id: int | None, *, positive: bool | None = None, start=None, sources: set[str] | None = None) -> Decimal:
@@ -400,8 +402,8 @@ def _chart_heatmap(title: str, matrix: list[list[float]], x_labels: list[str], y
     ax.set_yticks(range(len(y_labels)))
     ax.set_yticklabels(y_labels, fontsize=8)
     ax.set_title(title)
-    ax.set_xlabel("Часы")
-    ax.set_ylabel("Дни недели")
+    ax.set_xlabel(t('Часы'))
+    ax.set_ylabel(t('Дни недели'))
     fig.colorbar(image, ax=ax, fraction=0.03, pad=0.02)
     return _save_chart(fig, path)
 
@@ -412,7 +414,7 @@ def _bullet(text: str, styles):
 
 
 def _chart_hint(text: str, styles):
-    return Paragraph(f"<b>Как читать:</b> {text}", styles["SmallCustom"])
+    return Paragraph(t('<b>Как читать:</b> {text}', text=text), styles["SmallCustom"])
 
 
 def _safe_div(numerator, denominator) -> float:
@@ -433,12 +435,12 @@ def _fmt_pct(value: Decimal | float | int | None) -> str:
 
 def _describe_activity_segment(active_days_30: int) -> str:
     if active_days_30 >= 20:
-        return "ядро аудитории"
+        return t('ядро аудитории')
     if active_days_30 >= 10:
-        return "регулярный пользователь"
+        return t('регулярный пользователь')
     if active_days_30 >= 3:
-        return "эпизодический пользователь"
-    return "редко возвращается"
+        return t('эпизодический пользователь')
+    return t('редко возвращается')
 
 
 def _report_footer(canvas, doc, *, title: str, generated_at: str, font_name: str):
@@ -448,8 +450,8 @@ def _report_footer(canvas, doc, *, title: str, generated_at: str, font_name: str
     canvas.line(doc.leftMargin, 1.05 * cm, A4[0] - doc.rightMargin, 1.05 * cm)
     canvas.setFont(font_name, 8)
     canvas.setFillColor(colors.HexColor("#64748B"))
-    canvas.drawString(doc.leftMargin, 0.72 * cm, f"{title} • сгенерировано {generated_at}")
-    canvas.drawRightString(A4[0] - doc.rightMargin, 0.72 * cm, f"Стр. {canvas.getPageNumber()}")
+    canvas.drawString(doc.leftMargin, 0.72 * cm, t('{title} • сгенерировано {generated_at}', title=title, generated_at=generated_at))
+    canvas.drawRightString(A4[0] - doc.rightMargin, 0.72 * cm, t('Стр. {arg0}', arg0=canvas.getPageNumber()))
     canvas.restoreState()
 
 
@@ -542,7 +544,7 @@ async def _collect_activity_timestamps(session, start) -> list:
 
 
 def _build_hour_weekday_heatmap(timestamps: list) -> dict:
-    weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    weekdays = [t('Пн'), t('Вт'), t('Ср'), t('Чт'), t('Пт'), t('Сб'), t('Вс')]
     hours = [f"{hour:02d}" for hour in range(24)]
     matrix = [[0.0 for _ in range(24)] for _ in range(7)]
     for timestamp in timestamps:
@@ -554,8 +556,8 @@ def _heatmap_peak_comment(heatmap: dict) -> str:
     cells = [(value, day, hour) for day, row in enumerate(heatmap["matrix"]) for hour, value in enumerate(row)]
     value, day, hour = max(cells, key=lambda cell: cell[0], default=(0, 0, 0))
     if not value:
-        return "Недостаточно активности для определения пика"
-    return f"Пик активности — {heatmap['weekdays'][day]} около {hour:02d}:00 UTC ({int(value)} действий)"
+        return t('Недостаточно активности для определения пика')
+    return t('Пик активности — {arg0} около {hour:02d}:00 UTC ({arg2} действий)', arg0=heatmap['weekdays'][day], hour=hour, arg2=int(value))
 
 
 def _build_cohort_retention(users: list[tuple[int, object]], activity_dates: dict[int, set], as_of_date) -> dict:
@@ -605,7 +607,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
     async with async_session() as session:
         user = await session.scalar(select(User).where(User.telegram_id == telegram_user_id))
         if not user:
-            raise ValueError("Пользователь не найден")
+            raise ValueError(t('Пользователь не найден'))
 
         now = utc_now()
         generated_at = now.strftime("%d.%m.%Y %H:%M UTC")
@@ -624,7 +626,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
         paid_stars_total = sum(int(payment.stars_amount or 0) for payment in payments)
         paid_stars_30 = sum(int(payment.stars_amount or 0) for payment in payments_30)
         paid_coins_total = sum((Decimal(str(payment.coins_amount or 0)) for payment in payments), Decimal("0"))
-        payment_type_counts = Counter(PAYMENT_TYPE_LABELS.get(_detect_payment_type(payment.payload), "Другое") for payment in payments)
+        payment_type_counts = Counter(PAYMENT_TYPE_LABELS.get(_detect_payment_type(payment.payload), t('Другое')) for payment in payments)
         payment_stars_daily = defaultdict(float)
         payment_count_daily = defaultdict(float)
         for payment in payments_30:
@@ -641,7 +643,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
             net = earned - spent
             day_span = days or reg_days
             avg_daily = (net / Decimal(day_span)) if day_span else Decimal("0")
-            economy_rows.append({"period": label, "earned": earned, "spent": spent, "net": net, "avg_daily": avg_daily})
+            economy_rows.append({"period": t(label), "earned": earned, "spent": spent, "net": net, "avg_daily": avg_daily})
 
         last_30_labels = _daterange(30)
         daily_net = defaultdict(Decimal)
@@ -696,7 +698,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
                 upload_daily_photo[day] += 1
             else:
                 upload_daily_video[day] += 1
-        upload_series = {"Видео": [upload_daily_video.get(day, 0.0) for day in last_30_labels], "Фото": [upload_daily_photo.get(day, 0.0) for day in last_30_labels]}
+        upload_series = {t('Видео'): [upload_daily_video.get(day, 0.0) for day in last_30_labels], t('Фото'): [upload_daily_photo.get(day, 0.0) for day in last_30_labels]}
         action_counts = {action: float(count) for action, count in actions_30}
         approval_rate_pct = _safe_div(status_counts.get("approved", 0) * 100, len(uploads))
         content_efficiency = {
@@ -706,10 +708,10 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
             "views_per_approved_upload": _safe_div(own_content_views, status_counts.get("approved", 0)),
         }
         activity_mix_30 = {
-            "Просмотры": float(len(own_view_rows_30)),
-            "Загрузки": float(len(uploads_30)),
-            "Комментарии": float(len(comments_30)),
-            "Реакции": float(len(reactions_30)),
+            t('Просмотры'): float(len(own_view_rows_30)),
+            t('Загрузки'): float(len(uploads_30)),
+            t('Комментарии'): float(len(comments_30)),
+            t('Реакции'): float(len(reactions_30)),
         }
 
         tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.user_id == user.id).order_by(LotteryTicket.created_at.asc()))).scalars().all()
@@ -721,7 +723,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
             rel_logs = [log for log in lottery_logs if start is None or log.created_at >= start]
             spent = sum((-log.amount for log in rel_logs if log.source == "lottery_ticket_purchase" and log.amount < 0), Decimal("0"))
             won = sum((log.amount for log in rel_logs if log.source.startswith("lottery_win_") or log.source == "lottery_bet_win"), Decimal("0"))
-            lottery_rows.append({"period": label, "tickets": len(rel_tickets), "spent": spent, "won": won, "net": won - spent})
+            lottery_rows.append({"period": t(label), "tickets": len(rel_tickets), "spent": spent, "won": won, "net": won - spent})
         best_ticket = max(tickets, key=lambda ticket: (ticket.matched_count, ticket.created_at), default=None)
         match_distribution = Counter(str(ticket.matched_count) for ticket in tickets)
         ticket_daily = defaultdict(float)
@@ -762,7 +764,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
             start = period_starts[label]
             refs = [ref for ref in referrals if start is None or ref.created_at >= start]
             income = sum((log.amount for log in referral_income_logs if start is None or log.created_at >= start), Decimal("0"))
-            referral_rows.append({"period": label, "count": len(refs), "income": income})
+            referral_rows.append({"period": t(label), "count": len(refs), "income": income})
         referral_activation_rate = _safe_div(active_referrals * 100, len(referrals))
 
         chats = (await session.execute(select(KatyaChat).where(KatyaChat.user_id == user.id))).scalars().all()
@@ -773,7 +775,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
             start = period_starts[label]
             msgs = [message for message, _character in ai_messages if start is None or message.created_at >= start]
             spent = sum((-log.amount for log in ai_logs if (start is None or log.created_at >= start) and log.amount < 0), Decimal("0"))
-            ai_rows.append({"period": label, "messages": len(msgs), "spent": spent})
+            ai_rows.append({"period": t(label), "messages": len(msgs), "spent": spent})
         ai_daily = defaultdict(float)
         ai_character_counts = Counter()
         ai_user_messages = 0
@@ -786,8 +788,8 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
                 ai_assistant_messages += 1
             if message_obj.created_at >= now - timedelta(days=30):
                 ai_daily[str(message_obj.created_at.date())] += 1
-        activity_mix_30["ИИ-сообщения"] = float(sum(ai_daily.values()))
-        activity_mix_30["Билеты Секслото"] = float(sum(ticket_series))
+        activity_mix_30[t('ИИ-сообщения')] = float(sum(ai_daily.values()))
+        activity_mix_30[t('Билеты Секслото')] = float(sum(ticket_series))
         ai_spent_total = sum((-log.amount for log in ai_logs if log.amount < 0), Decimal("0"))
         ai_cost_per_user_message = _safe_div(ai_spent_total, ai_user_messages)
 
@@ -801,21 +803,21 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
         active_days_30 = len(active_dates_30)
         activity_segment = _describe_activity_segment(active_days_30)
 
-        dominant_map = {"контент-мейкер": len(uploads), "зритель": own_views, "игрок Секслото": len(tickets), "любитель ИИ-общения": len(ai_messages)}
-        dominant_type = max(dominant_map, key=dominant_map.get) if dominant_map else "пользователь"
+        dominant_map = {t('контент-мейкер'): len(uploads), t('зритель'): own_views, t('игрок Секслото'): len(tickets), t('любитель ИИ-общения'): len(ai_messages)}
+        dominant_type = max(dominant_map, key=dominant_map.get) if dominant_map else t('пользователь')
         top_income = max(source_income.items(), key=lambda kv: kv[1])[0] if source_income else None
         top_expense = max(source_expense.items(), key=lambda kv: kv[1])[0] if source_expense else None
         lottery_all_time = next((row for row in lottery_rows if row["period"] == "Всё время"), None)
         if lottery_all_time and lottery_all_time["tickets"]:
-            lottery_comment = "Секслото приносит плюс" if lottery_all_time["net"] > 0 else "Секслото пока убыточно"
+            lottery_comment = t('Секслото приносит плюс') if lottery_all_time["net"] > 0 else t('Секслото пока убыточно')
         else:
-            lottery_comment = "Секслото пока не использовалось"
+            lottery_comment = t('Секслото пока не использовалось')
 
         last_30_net = next((row["net"] for row in economy_rows if row["period"] == "30 дней"), Decimal("0"))
-        balance_comment = "За 30 дней баланс растёт" if last_30_net > 0 else ("За 30 дней баланс снижается" if last_30_net < 0 else "Баланс за 30 дней почти без изменений")
-        referral_comment = f"Реферальный канал даёт {_fmt_pct(referral_activation_rate)} активных приглашённых" if referrals else "Рефералы пока не используются"
-        content_comment = f"Контент одобряется с конверсией {_fmt_pct(approval_rate_pct)}" if uploads else "Пользователь пока не загружал контент"
-        purchase_comment = f"Успешных покупок: {len(payments)} на {paid_stars_total} Stars" if payments else "Платных покупок пока не было"
+        balance_comment = t('За 30 дней баланс растёт') if last_30_net > 0 else (t('За 30 дней баланс снижается') if last_30_net < 0 else t('Баланс за 30 дней почти без изменений'))
+        referral_comment = t('Реферальный канал даёт {arg0} активных приглашённых', arg0=_fmt_pct(referral_activation_rate)) if referrals else t('Рефералы пока не используются')
+        content_comment = t('Контент одобряется с конверсией {arg0}', arg0=_fmt_pct(approval_rate_pct)) if uploads else t('Пользователь пока не загружал контент')
+        purchase_comment = t('Успешных покупок: {arg0} на {paid_stars_total} Stars', arg0=len(payments), paid_stars_total=paid_stars_total) if payments else t('Платных покупок пока не было')
 
         user_ids = [row[0] for row in (await session.execute(select(User.id).order_by(User.id.asc()))).all()]
         upload_count_map = {uid: int(cnt) for uid, cnt in (await session.execute(select(Video.uploader_user_id, func.count(Video.id)).group_by(Video.uploader_user_id))).all()}
@@ -827,13 +829,13 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
         all_balances = (await session.execute(select(User.balance))).scalars().all()
         all_xp = (await session.execute(select(User.xp))).scalars().all()
         comparison_rows = [
-            _build_comparison_row("Баланс", user.balance, list(all_balances)),
+            _build_comparison_row(t('Баланс'), user.balance, list(all_balances)),
             _build_comparison_row("XP", user.xp, list(all_xp)),
-            _build_comparison_row("Загружено контента", len(uploads), [upload_count_map.get(uid, 0) for uid in user_ids]),
-            _build_comparison_row("Просмотров", own_views, [view_count_map.get(uid, 0) for uid in user_ids]),
-            _build_comparison_row("Рефералов", len(referrals), [referral_count_map.get(uid, 0) for uid in user_ids]),
-            _build_comparison_row("Потрачено Stars", paid_stars_total, [payment_stars_map.get(uid, 0) for uid in user_ids]),
-            _build_comparison_row("Билетов Секслото", len(tickets), [lottery_ticket_map.get(uid, 0) for uid in user_ids]),
+            _build_comparison_row(t('Загружено контента'), len(uploads), [upload_count_map.get(uid, 0) for uid in user_ids]),
+            _build_comparison_row(t('Просмотров'), own_views, [view_count_map.get(uid, 0) for uid in user_ids]),
+            _build_comparison_row(t('Рефералов'), len(referrals), [referral_count_map.get(uid, 0) for uid in user_ids]),
+            _build_comparison_row(t('Потрачено Stars'), paid_stars_total, [payment_stars_map.get(uid, 0) for uid in user_ids]),
+            _build_comparison_row(t('Билетов Секслото'), len(tickets), [lottery_ticket_map.get(uid, 0) for uid in user_ids]),
         ]
         strongest_metric = max(comparison_rows, key=lambda row: row["percentile"], default=None)
         weakest_metric = min(comparison_rows, key=lambda row: row["percentile"], default=None)
@@ -875,7 +877,7 @@ async def collect_user_report_data(telegram_user_id: int) -> dict:
             "strongest": strongest_metric["label"] if strongest_metric else "—",
             "weakest": weakest_metric["label"] if weakest_metric else "—",
         },
-        "insights": {"dominant": dominant_type, "activity_segment": activity_segment, "top_income": INCOME_SOURCE_LABELS.get(top_income, top_income) if top_income else "—", "top_expense": EXPENSE_SOURCE_LABELS.get(top_expense, top_expense) if top_expense else "—", "lottery_comment": lottery_comment, "balance_comment": balance_comment, "referral_comment": referral_comment, "content_comment": content_comment, "purchase_comment": purchase_comment},
+        "insights": {"dominant": dominant_type, "activity_segment": activity_segment, "top_income": t(INCOME_SOURCE_LABELS.get(top_income, top_income)) if top_income else "—", "top_expense": t(EXPENSE_SOURCE_LABELS.get(top_expense, top_expense)) if top_expense else "—", "lottery_comment": lottery_comment, "balance_comment": balance_comment, "referral_comment": referral_comment, "content_comment": content_comment, "purchase_comment": purchase_comment},
     }
 
 
@@ -902,7 +904,7 @@ async def collect_bot_report_data() -> dict:
         payment_type_stars = defaultdict(float)
         payment_type_coins = defaultdict(float)
         for payment in paid_payments:
-            label = PAYMENT_TYPE_LABELS.get(_detect_payment_type(payment.payload), "Другое")
+            label = PAYMENT_TYPE_LABELS.get(_detect_payment_type(payment.payload), t('Другое'))
             payment_type_counts[label] += 1
             payment_type_stars[label] += float(payment.stars_amount or 0)
             payment_type_coins[label] += float(payment.coins_amount or 0)
@@ -923,7 +925,7 @@ async def collect_bot_report_data() -> dict:
             stmt = select(func.count(User.id))
             if start is not None:
                 stmt = stmt.where(User.created_at >= start)
-            new_users_rows.append({"period": label, "count": await _count_query(session, stmt)})
+            new_users_rows.append({"period": t(label), "count": await _count_query(session, stmt)})
 
         dau = await _count_query(session, select(func.count(func.distinct(UserActionLog.user_id))).where(UserActionLog.created_at >= now - timedelta(days=1)))
         wau = await _count_query(session, select(func.count(func.distinct(UserActionLog.user_id))).where(UserActionLog.created_at >= now - timedelta(days=7)))
@@ -981,7 +983,7 @@ async def collect_bot_report_data() -> dict:
             stmt = select(func.count(LotteryTicket.id))
             if start is not None:
                 stmt = stmt.where(LotteryTicket.created_at >= start)
-            lottery_ticket_rows.append({"period": label, "tickets": await _count_query(session, stmt)})
+            lottery_ticket_rows.append({"period": t(label), "tickets": await _count_query(session, stmt)})
         rounds_total = await _count_query(session, select(func.count(LotteryRound.id)))
         total_tickets = await _count_query(session, select(func.count(LotteryTicket.id)))
         players_total = await _count_query(session, select(func.count(func.distinct(LotteryTicket.user_id))))
@@ -990,11 +992,11 @@ async def collect_bot_report_data() -> dict:
         lottery_ticket_subq = (select(LotteryRound.id.label("round_id"), func.count(LotteryTicket.id).label("ticket_count")).join(LotteryTicket, LotteryTicket.round_id == LotteryRound.id, isouter=True).group_by(LotteryRound.id).subquery())
         avg_tickets_per_round = Decimal(str((await session.execute(select(func.avg(lottery_ticket_subq.c.ticket_count)))).scalar_one() or 0))
         win_counts = {
-            "6 совпадений": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_6")),
-            "5 совпадений": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_5")),
-            "4 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_4")),
-            "3 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_3")),
-            "2 совпадения": await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_2")),
+            t('6 совпадений'): await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_6")),
+            t('5 совпадений'): await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_5")),
+            t('4 совпадения'): await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_4")),
+            t('3 совпадения'): await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_3")),
+            t('2 совпадения'): await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "lottery_win_2")),
         }
         lottery_spent = abs(await _sum_balance(session, None, positive=False, sources={"lottery_ticket_purchase"}))
         lottery_paid = await _sum_balance(session, None, positive=True, sources={"lottery_win_2", "lottery_win_3", "lottery_win_4", "lottery_win_5", "lottery_win_6"})
@@ -1018,22 +1020,22 @@ async def collect_bot_report_data() -> dict:
             stmt = select(func.count(User.id)).where(User.referred_by_user_id.is_not(None))
             if start is not None:
                 stmt = stmt.where(User.created_at >= start)
-            referred_rows.append({"period": label, "count": await _count_query(session, stmt)})
+            referred_rows.append({"period": t(label), "count": await _count_query(session, stmt)})
         retention_pushes = await _count_query(session, select(func.count(UserActionLog.id)).where(UserActionLog.action == "retention_push"))
         weekly_promo_activations = await _count_query(session, select(func.count(PromocodeActivation.id)).join(Promocode, Promocode.id == PromocodeActivation.promocode_id).where(Promocode.code.like("FREEBIE_%"))) + await _count_query(session, select(func.count(BalanceLog.id)).where(BalanceLog.source == "freebie_reward", BalanceLog.amount > 0))
         retention_rows = (await session.execute(select(func.date(User.created_at), func.count(User.id)).where(User.referred_by_user_id.is_not(None), User.created_at >= now - timedelta(days=30)).group_by(func.date(User.created_at)))).all()
         retention_map = {str(day): float(count) for day, count in retention_rows}
 
         if registrations_last_7 > registrations_prev_7:
-            growth_comment = "Рост ускоряется относительно предыдущей недели"
+            growth_comment = t('Рост ускоряется относительно предыдущей недели')
         elif registrations_last_7 < registrations_prev_7:
-            growth_comment = "Рост замедлился относительно предыдущей недели"
+            growth_comment = t('Рост замедлился относительно предыдущей недели')
         else:
-            growth_comment = "Темп регистраций стабилен"
-        monetization_comment = f"Платёжная конверсия держится на уровне {_fmt_pct(_safe_div(payer_count * 100, total_users))}" if payer_count else "Платящих пользователей пока нет"
-        content_comment = f"Контент одобряется с конверсией {_fmt_pct(approval_rate_pct)}" if content_total else "Контента пока нет"
-        lottery_comment = f"В Секслото уже вовлечено {_fmt_pct(penetration_pct)} базы, RTP ≈ {_fmt_pct(rtp)}" if total_tickets else "Секслото пока не набрало истории"
-        retention_comment = f"Липкость аудитории DAU/MAU = {_fmt_pct(sticky_pct)}; по рефералке пришло {_fmt_pct(referred_share_pct)} базы" if total_users else "Недостаточно данных для удержания"
+            growth_comment = t('Темп регистраций стабилен')
+        monetization_comment = t('Платёжная конверсия держится на уровне {arg0}', arg0=_fmt_pct(_safe_div(payer_count * 100, total_users))) if payer_count else t('Платящих пользователей пока нет')
+        content_comment = t('Контент одобряется с конверсией {arg0}', arg0=_fmt_pct(approval_rate_pct)) if content_total else t('Контента пока нет')
+        lottery_comment = t('В Секслото уже вовлечено {arg0} базы, RTP ≈ {arg1}', arg0=_fmt_pct(penetration_pct), arg1=_fmt_pct(rtp)) if total_tickets else t('Секслото пока не набрало истории')
+        retention_comment = t('Липкость аудитории DAU/MAU = {arg0}; по рефералке пришло {arg1} базы', arg0=_fmt_pct(sticky_pct), arg1=_fmt_pct(referred_share_pct)) if total_users else t('Недостаточно данных для удержания')
 
         activity_dates = await _collect_activity_dates(session)
         activity_timestamps_30 = await _collect_activity_timestamps(session, now - timedelta(days=30))
@@ -1062,10 +1064,9 @@ async def collect_bot_report_data() -> dict:
             payment_stars_by_user[payment.user_id] += float(payment.stars_amount or 0)
         top_payers = sorted(payment_stars_by_user.values(), reverse=True)
         monetization_comment += (
-            f"; доля топ-1: {_fmt_pct(_safe_div(sum(top_payers[:1]) * 100, purchases_paid))}, "
-            f"топ-3: {_fmt_pct(_safe_div(sum(top_payers[:3]) * 100, purchases_paid))} выручки Stars"
+            t('; доля топ-1: {arg0}, топ-3: {arg1} выручки Stars', arg0=_fmt_pct(_safe_div(sum(top_payers[:1]) * 100, purchases_paid)), arg1=_fmt_pct(_safe_div(sum(top_payers[:3]) * 100, purchases_paid)))
         )
-        content_comment += f"; топ-2 автора загрузили {_fmt_pct(_safe_div(sum(sorted(upload_count_map.values(), reverse=True)[:2]) * 100, content_total))} контента"
+        content_comment += t('; топ-2 автора загрузили {arg0} контента', arg0=_fmt_pct(_safe_div(sum(sorted(upload_count_map.values(), reverse=True)[:2]) * 100, content_total)))
         activity_dates_str = {user_id: {str(day) for day in dates} for user_id, dates in activity_dates.items()}
         active_users_daily_series = [float(sum(1 for dates in activity_dates_str.values() if day_label in dates)) for day_label in labels_30]
         vip_share_pct = _safe_div(vip_users * 100, total_users)
@@ -1074,24 +1075,24 @@ async def collect_bot_report_data() -> dict:
         dormant_30_pct = _safe_div(len(sleeper_ids) * 100, total_users)
 
         segment_rows = [
-            {"label": "Активны за 30 дней", "count": len(recent_active_ids), "share": _safe_div(len(recent_active_ids) * 100, total_users)},
-            {"label": "Плательщики", "count": len(payer_ids), "share": _safe_div(len(payer_ids) * 100, total_users)},
-            {"label": "Авторы контента", "count": len(creator_ids), "share": _safe_div(len(creator_ids) * 100, total_users)},
-            {"label": "Зрители", "count": len(viewer_ids), "share": _safe_div(len(viewer_ids) * 100, total_users)},
-            {"label": "Игроки Секслото", "count": len(lottery_player_ids), "share": _safe_div(len(lottery_player_ids) * 100, total_users)},
-            {"label": "Пользователи ИИ", "count": len(ai_user_ids), "share": _safe_div(len(ai_user_ids) * 100, total_users)},
-            {"label": "Пришедшие по рефералке", "count": len(referred_user_ids), "share": _safe_div(len(referred_user_ids) * 100, total_users)},
-            {"label": "Спящие 30+ дней", "count": len(sleeper_ids), "share": _safe_div(len(sleeper_ids) * 100, total_users)},
+            {"label": t('Активны за 30 дней'), "count": len(recent_active_ids), "share": _safe_div(len(recent_active_ids) * 100, total_users)},
+            {"label": t('Плательщики'), "count": len(payer_ids), "share": _safe_div(len(payer_ids) * 100, total_users)},
+            {"label": t('Авторы контента'), "count": len(creator_ids), "share": _safe_div(len(creator_ids) * 100, total_users)},
+            {"label": t('Зрители'), "count": len(viewer_ids), "share": _safe_div(len(viewer_ids) * 100, total_users)},
+            {"label": t('Игроки Секслото'), "count": len(lottery_player_ids), "share": _safe_div(len(lottery_player_ids) * 100, total_users)},
+            {"label": t('Пользователи ИИ'), "count": len(ai_user_ids), "share": _safe_div(len(ai_user_ids) * 100, total_users)},
+            {"label": t('Пришедшие по рефералке'), "count": len(referred_user_ids), "share": _safe_div(len(referred_user_ids) * 100, total_users)},
+            {"label": t('Спящие 30+ дней'), "count": len(sleeper_ids), "share": _safe_div(len(sleeper_ids) * 100, total_users)},
         ]
         segment_chart = {row["label"]: row["count"] for row in segment_rows if row["count"] > 0}
 
         funnel_rows = []
         current_ids = set(all_user_ids)
         raw_funnel_steps = [
-            ("Регистрация", set(all_user_ids)),
-            ("Приняли правила", agreed_ids),
-            ("Посмотрели контент", viewer_ids),
-            ("Сделали оплату", payer_ids),
+            (t('Регистрация'), set(all_user_ids)),
+            (t('Приняли правила'), agreed_ids),
+            (t('Посмотрели контент'), viewer_ids),
+            (t('Сделали оплату'), payer_ids),
         ]
         previous_count = total_users
         for idx, (label, step_ids) in enumerate(raw_funnel_steps):
@@ -1115,28 +1116,28 @@ async def collect_bot_report_data() -> dict:
         }
 
         churn_rows = [
-            {"label": "Приняли правила, но не смотрели", "count": len(agreed_ids - viewer_ids), "share": _safe_div(len(agreed_ids - viewer_ids) * 100, total_users)},
-            {"label": "Смотрели контент, но не оплатили", "count": len(viewer_ids - payer_ids), "share": _safe_div(len(viewer_ids - payer_ids) * 100, total_users)},
-            {"label": "Платили, но спят 30+ дней", "count": len(payer_ids & sleeper_ids), "share": _safe_div(len(payer_ids & sleeper_ids) * 100, total_users)},
+            {"label": t('Приняли правила, но не смотрели'), "count": len(agreed_ids - viewer_ids), "share": _safe_div(len(agreed_ids - viewer_ids) * 100, total_users)},
+            {"label": t('Смотрели контент, но не оплатили'), "count": len(viewer_ids - payer_ids), "share": _safe_div(len(viewer_ids - payer_ids) * 100, total_users)},
+            {"label": t('Платили, но спят 30+ дней'), "count": len(payer_ids & sleeper_ids), "share": _safe_div(len(payer_ids & sleeper_ids) * 100, total_users)},
         ]
         churn_chart = {row["label"]: row["count"] for row in churn_rows if row["count"] > 0}
 
         biggest_segment = max(segment_rows, key=lambda row: row["count"], default=None)
         weakest_funnel_step = min(funnel_rows[1:], key=lambda row: row["step_rate"], default=None)
         segment_comment = (
-            f"Самый крупный сегмент сейчас — {biggest_segment['label']} ({_fmt_pct(biggest_segment['share'])} базы)"
+            t('Самый крупный сегмент сейчас — {arg0} ({arg1} базы)', arg0=biggest_segment['label'], arg1=_fmt_pct(biggest_segment['share']))
             if biggest_segment else
-            "Сегменты пока не набрали истории"
+            t('Сегменты пока не набрали истории')
         )
         funnel_comment = (
-            f"Главный обрыв продуктовой воронки — этап «{weakest_funnel_step['label']}» ({_fmt_pct(weakest_funnel_step['step_rate'])} от предыдущего шага)"
+            t('Главный обрыв продуктовой воронки — этап «{arg0}» ({arg1} от предыдущего шага)', arg0=weakest_funnel_step['label'], arg1=_fmt_pct(weakest_funnel_step['step_rate']))
             if weakest_funnel_step else
-            "Воронка пока недостаточно заполнена"
+            t('Воронка пока недостаточно заполнена')
         )
         churn_comment = (
-            f"Самая крупная зона потерь — «{max(churn_rows, key=lambda row: row['count'])['label']}»"
+            t('Самая крупная зона потерь — «{arg0}»', arg0=max(churn_rows, key=lambda row: row['count'])['label'])
             if churn_rows else
-            "Зоны оттока пока не набрали истории"
+            t('Зоны оттока пока не набрали истории')
         )
         heatmap_comment = _heatmap_peak_comment(activity_heatmap)
 
@@ -1162,19 +1163,19 @@ async def collect_bot_report_data() -> dict:
 
 def _user_summary_table(data: dict):
     user = data["user"]
-    vip_text = "Да" if data["is_vip"] else "Нет"
+    vip_text = t('Да') if data["is_vip"] else t('Нет')
     rows = [
-        ["Параметр", "Значение"],
-        ["Ник", data["display_name"]],
+        [t('Параметр'), t('Значение')],
+        [t('Ник'), data["display_name"]],
         ["Telegram ID", str(user.telegram_id)],
-        ["Статус доступа", str(data["role"]["label"])],
-        ["Дата регистрации", user.created_at.strftime("%d.%m.%Y %H:%M")],
-        ["Возраст профиля", f"{data['profile']['registration_days']} дн."],
-        ["Текущий баланс", _fmt_dec(user.balance)],
+        [t('Статус доступа'), str(data["role"]["label"])],
+        [t('Дата регистрации'), user.created_at.strftime("%d.%m.%Y %H:%M")],
+        [t('Возраст профиля'), t('{arg0} дн.', arg0=data['profile']['registration_days'])],
+        [t('Текущий баланс'), _fmt_dec(user.balance)],
         ["VIP", vip_text],
-        ["Уровень / XP", f"{user.level} / {user.xp}"],
-        ["Активных дней за 30", str(data["profile"]["active_days_30"])],
-        ["Сегмент активности", data["profile"]["activity_segment"]],
+        [t('Уровень / XP'), f"{user.level} / {user.xp}"],
+        [t('Активных дней за 30'), str(data["profile"]["active_days_30"])],
+        [t('Сегмент активности'), data["profile"]["activity_segment"]],
     ]
     return rows
 
@@ -1182,22 +1183,22 @@ def _user_summary_table(data: dict):
 
 def _bot_summary_table(data: dict):
     summary = data["summary"]
-    rows = [["Параметр", "Значение"]]
+    rows = [[t('Параметр'), t('Значение')]]
     rows.extend([
-        ["Всего пользователей", str(summary["total_users"])],
-        ["Активных пользователей", str(summary["active_users"])],
+        [t('Всего пользователей'), str(summary["total_users"])],
+        [t('Активных пользователей'), str(summary["active_users"])],
         ["VIP", f"{summary['vip_users']} ({_fmt_pct(summary['vip_share_pct'])})"],
-        ["Супер-админы", str(summary["super_admin_users"])],
-        ["Админы в БД", str(summary["admin_users_db"])],
-        ["Поставили ник", _fmt_pct(summary["nickname_set_pct"])],
-        ["Приняли правила", _fmt_pct(summary["rules_accept_pct"])],
-        ["Спящие 30+ дней", _fmt_pct(summary["dormant_30_pct"])],
-        ["Доверенные авторы", str(summary["trusted_uploaders"])],
-        ["Средний баланс", _fmt_dec(summary["avg_balance"])],
-        ["Монет в системе", _fmt_dec(summary["total_balance"])],
-        ["Оплачено Stars", _fmt_dec(summary["paid_stars_total"])],
-        ["Платящих пользователей", str(summary["payer_count"])],
-        ["Платёжная конверсия", _fmt_pct(summary["payment_conversion_pct"])],
+        [t('Супер-админы'), str(summary["super_admin_users"])],
+        [t('Админы в БД'), str(summary["admin_users_db"])],
+        [t('Поставили ник'), _fmt_pct(summary["nickname_set_pct"])],
+        [t('Приняли правила'), _fmt_pct(summary["rules_accept_pct"])],
+        [t('Спящие 30+ дней'), _fmt_pct(summary["dormant_30_pct"])],
+        [t('Доверенные авторы'), str(summary["trusted_uploaders"])],
+        [t('Средний баланс'), _fmt_dec(summary["avg_balance"])],
+        [t('Монет в системе'), _fmt_dec(summary["total_balance"])],
+        [t('Оплачено Stars'), _fmt_dec(summary["paid_stars_total"])],
+        [t('Платящих пользователей'), str(summary["payer_count"])],
+        [t('Платёжная конверсия'), _fmt_pct(summary["payment_conversion_pct"])],
         ["DAU / WAU / MAU", f"{summary['dau']} / {summary['wau']} / {summary['mau']}"],
         ["Sticky factor DAU/MAU", _fmt_pct(summary["sticky_pct"])],
     ])
@@ -1213,152 +1214,152 @@ def _render_user_report_sync(data: dict, output_path: Path):
     with tempfile.TemporaryDirectory(prefix="user_report_assets_") as tmpdir:
         tmp = Path(tmpdir)
         hero_meta = [
-            f"Собран: {data['generated_at']}",
-            f"Пользователь: {data['display_name']}",
+            t('Собран: {arg0}', arg0=data['generated_at']),
+            t('Пользователь: {arg0}', arg0=data['display_name']),
             f"Telegram ID: {data['user'].telegram_id}",
         ]
-        story.append(_hero_block("Отчёт по пользователю", "Подробный mini-dashboard по активности, экономике и игровому поведению", hero_meta, font_name, styles, bg="#111827"))
+        story.append(_hero_block(t('Отчёт по пользователю'), t('Подробный mini-dashboard по активности, экономике и игровому поведению'), hero_meta, font_name, styles, bg="#111827"))
         story.append(Spacer(1, 0.22 * cm))
         story.append(_kpi_cards([
-            {"label": "Текущий баланс", "value": _fmt_dec(data['user'].balance), "foot": "монет на счёте", "accent": "#2563EB", "bg": "#EFF6FF"},
-            {"label": "Активных дней / 30", "value": str(data['profile']['active_days_30']), "foot": data['profile']['activity_segment'], "accent": "#10B981", "bg": "#ECFDF5"},
-            {"label": "Уровень / XP", "value": f"{data['user'].level} / {data['user'].xp}", "foot": "уровень прогресса", "accent": "#8B5CF6", "bg": "#F5F3FF"},
-            {"label": "Потрачено Stars", "value": _fmt_dec(data['payments']['stars_total']), "foot": f"оплат: {data['payments']['count']}", "accent": "#F59E0B", "bg": "#FFFBEB"},
-            {"label": "Билеты Секслото", "value": str(data['lottery']['tickets_total']), "foot": f"ROI: {_fmt_pct(data['lottery']['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
-            {"label": "Рефералы", "value": str(data['referrals']['total']), "foot": f"активных: {data['referrals']['active']}", "accent": "#14B8A6", "bg": "#F0FDFA"},
+            {"label": t('Текущий баланс'), "value": _fmt_dec(data['user'].balance), "foot": t('монет на счёте'), "accent": "#2563EB", "bg": "#EFF6FF"},
+            {"label": t('Активных дней / 30'), "value": str(data['profile']['active_days_30']), "foot": data['profile']['activity_segment'], "accent": "#10B981", "bg": "#ECFDF5"},
+            {"label": t('Уровень / XP'), "value": f"{data['user'].level} / {data['user'].xp}", "foot": t('уровень прогресса'), "accent": "#8B5CF6", "bg": "#F5F3FF"},
+            {"label": t('Потрачено Stars'), "value": _fmt_dec(data['payments']['stars_total']), "foot": t('оплат: {arg0}', arg0=data['payments']['count']), "accent": "#F59E0B", "bg": "#FFFBEB"},
+            {"label": t('Билеты Секслото'), "value": str(data['lottery']['tickets_total']), "foot": f"ROI: {_fmt_pct(data['lottery']['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
+            {"label": t('Рефералы'), "value": str(data['referrals']['total']), "foot": t('активных: {arg0}', arg0=data['referrals']['active']), "accent": "#14B8A6", "bg": "#F0FDFA"},
         ], font_name, styles, columns=3))
         story.append(Spacer(1, 0.22 * cm))
-        story.append(_section_banner("Сводка профиля", font_name, bg="#1E293B"))
+        story.append(_section_banner(t('Сводка профиля'), font_name, bg="#1E293B"))
         story.append(Spacer(1, 0.12 * cm))
         story.append(_table(_user_summary_table(data), font_name, col_widths=[5 * cm, 10.5 * cm]))
         story.append(Spacer(1, 0.18 * cm))
-        story.append(_table([["Платёжная сводка", "Значение"], ["Успешных оплат", str(data["payments"]["count"])], ["Успешных оплат за 30 дней", str(data["payments"]["count_30"])], ["Всего потрачено Stars", _fmt_dec(data["payments"]["stars_total"])], ["Stars за 30 дней", _fmt_dec(data["payments"]["stars_30"])], ["Монет начислено покупками", _fmt_dec(data["payments"]["coins_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Платёжная сводка'), t('Значение')], [t('Успешных оплат'), str(data["payments"]["count"])], [t('Успешных оплат за 30 дней'), str(data["payments"]["count_30"])], [t('Всего потрачено Stars'), _fmt_dec(data["payments"]["stars_total"])], [t('Stars за 30 дней'), _fmt_dec(data["payments"]["stars_30"])], [t('Монет начислено покупками'), _fmt_dec(data["payments"]["coins_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.18 * cm))
-        story.append(_section_banner("Короткие выводы", font_name, bg="#334155"))
+        story.append(_section_banner(t('Короткие выводы'), font_name, bg="#334155"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_bullet(f"Главный паттерн поведения: <b>{data['insights']['dominant']}</b>", styles))
-        story.append(_bullet(f"Сегмент активности: <b>{data['insights']['activity_segment']}</b>", styles))
+        story.append(_bullet(t('Главный паттерн поведения: <b>{arg0}</b>', arg0=data['insights']['dominant']), styles))
+        story.append(_bullet(t('Сегмент активности: <b>{arg0}</b>', arg0=data['insights']['activity_segment']), styles))
         story.append(_bullet(data['insights']['balance_comment'], styles))
         story.append(_bullet(data['insights']['purchase_comment'], styles))
         story.append(PageBreak())
 
-        story.append(_section_banner("2. Экономика", font_name, bg="#0F172A"))
+        story.append(_section_banner(t('2. Экономика'), font_name, bg="#0F172A"))
         story.append(Spacer(1, 0.1 * cm))
-        eco_table = [["Период", "Заработано", "Потрачено", "Чистый результат", "Средний день"]]
+        eco_table = [[t('Период'), t('Заработано'), t('Потрачено'), t('Чистый результат'), t('Средний день')]]
         for row in data["economy_rows"]:
             eco_table.append([row["period"], _fmt_dec(row["earned"]), _fmt_dec(row["spent"]), _fmt_dec(row["net"]), _fmt_dec(row["avg_daily"])])
         story.append(_table(eco_table, font_name, col_widths=[3 * cm, 3 * cm, 3 * cm, 3.5 * cm, 3 * cm]))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Image(_chart_line("Динамика баланса за 30 дней", data["balance_labels_30"], data["balance_series_30"], tmp / "balance.png"), width=17 * cm, height=6.5 * cm))
+        story.append(Image(_chart_line(t('Динамика баланса за 30 дней'), data["balance_labels_30"], data["balance_series_30"], tmp / "balance.png"), width=17 * cm, height=6.5 * cm))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_dual_bar("Доходы и расходы по дням", data["balance_labels_30"], data["income_series_30"], data["expense_series_30"], tmp / "income_expense.png"), width=17 * cm, height=6.5 * cm))
+        story.append(Image(_chart_dual_bar(t('Доходы и расходы по дням'), data["balance_labels_30"], data["income_series_30"], data["expense_series_30"], tmp / "income_expense.png"), width=17 * cm, height=6.5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("на графике баланса линия выше — баланс больше; на столбцах по дням зелёный показывает начисления, красный — траты. Чем выше столбец, тем сильнее движение монет в этот день.", styles))
+        story.append(_chart_hint(t('на графике баланса линия выше — баланс больше; на столбцах по дням зелёный показывает начисления, красный — траты. Чем выше столбец, тем сильнее движение монет в этот день.'), styles))
         story.append(Spacer(1, 0.15 * cm))
         if data["source_income"]:
-            story.append(Image(_chart_horizontal_bar("Топ источников дохода", data["source_income"], tmp / "income_sources.png", color="#16A34A"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Топ источников дохода'), data["source_income"], tmp / "income_sources.png", color="#16A34A"), width=17 * cm, height=6 * cm))
             story.append(Spacer(1, 0.15 * cm))
         if data["source_expense"]:
-            story.append(Image(_chart_horizontal_bar("Топ источников расходов", data["source_expense"], tmp / "expense_sources.png", color="#DC2626"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Топ источников расходов'), data["source_expense"], tmp / "expense_sources.png", color="#DC2626"), width=17 * cm, height=6 * cm))
         if any(data["payments"]["stars_series_30"]):
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_line("Stars по покупкам за 30 дней", data["balance_labels_30"], data["payments"]["stars_series_30"], tmp / "payment_stars.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_line(t('Stars по покупкам за 30 дней'), data["balance_labels_30"], data["payments"]["stars_series_30"], tmp / "payment_stars.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
         if any(data["payments"]["count_series_30"]):
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_line("Количество оплат по дням", data["balance_labels_30"], data["payments"]["count_series_30"], tmp / "payment_counts.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_line(t('Количество оплат по дням'), data["balance_labels_30"], data["payments"]["count_series_30"], tmp / "payment_counts.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
         if data["payments"]["types"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Структура платных покупок", data["payments"]["types"], tmp / "payment_types.png", color="#F97316"), width=17 * cm, height=5.6 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Структура платных покупок'), data["payments"]["types"], tmp / "payment_types.png", color="#F97316"), width=17 * cm, height=5.6 * cm))
         story.append(PageBreak())
 
         content = data["content"]
-        story.append(_section_banner("3. Контент и активность", font_name, bg="#1D4ED8"))
+        story.append(_section_banner(t('3. Контент и активность'), font_name, bg="#1D4ED8"))
         story.append(Spacer(1, 0.1 * cm))
-        content_table = [["Метрика", "Значение"], ["Загружено видео", str(content["videos"])], ["Загружено фото", str(content["photos"])], ["Одобрено", str(content["approved"])], ["Отклонено", str(content["rejected"])], ["На модерации", str(content["pending"])], ["Доля одобрения", _fmt_pct(content["approval_rate_pct"])], ["Средний рейтинг", str(content["avg_rating"])], ["Просмотры твоего контента", str(content["own_content_views"])], ["Твои просмотры", str(content["own_views"])], ["Комментарии", str(content["comments"])], ["Реакции", str(content["reactions"])]]
+        content_table = [[t('Метрика'), t('Значение')], [t('Загружено видео'), str(content["videos"])], [t('Загружено фото'), str(content["photos"])], [t('Одобрено'), str(content["approved"])], [t('Отклонено'), str(content["rejected"])], [t('На модерации'), str(content["pending"])], [t('Доля одобрения'), _fmt_pct(content["approval_rate_pct"])], [t('Средний рейтинг'), str(content["avg_rating"])], [t('Просмотры твоего контента'), str(content["own_content_views"])], [t('Твои просмотры'), str(content["own_views"])], [t('Комментарии'), str(content["comments"])], [t('Реакции'), str(content["reactions"])]]
         story.append(_table(content_table, font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(_table([["Эффективность контента", "Значение"], ["Всего загрузок", str(content["efficiency"]["uploads_total"])], ["Одобрено", _fmt_pct(content["efficiency"]["approved_share_pct"])], ["Просмотров на загрузку", _fmt_dec(content["efficiency"]["views_per_upload"])], ["Просмотров на одобренную загрузку", _fmt_dec(content["efficiency"]["views_per_approved_upload"])]], font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Эффективность контента'), t('Значение')], [t('Всего загрузок'), str(content["efficiency"]["uploads_total"])], [t('Одобрено'), _fmt_pct(content["efficiency"]["approved_share_pct"])], [t('Просмотров на загрузку'), _fmt_dec(content["efficiency"]["views_per_upload"])], [t('Просмотров на одобренную загрузку'), _fmt_dec(content["efficiency"]["views_per_approved_upload"])]], font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['content_comment'], styles))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_stacked("Загрузки по дням", data["balance_labels_30"], data["upload_series"], tmp / "uploads.png"), width=17 * cm, height=6.5 * cm))
+        story.append(Image(_chart_stacked(t('Загрузки по дням'), data["balance_labels_30"], data["upload_series"], tmp / "uploads.png"), width=17 * cm, height=6.5 * cm))
         story.append(Spacer(1, 0.15 * cm))
         if data["status_counts"]:
-            story.append(Image(_chart_distribution("Статусы загруженного контента", data["status_counts"], tmp / "content_status.png"), width=16 * cm, height=5 * cm))
+            story.append(Image(_chart_distribution(t('Статусы загруженного контента'), data["status_counts"], tmp / "content_status.png"), width=16 * cm, height=5 * cm))
         if data["action_counts"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Активность по типам действий (30 дней)", data["action_counts"], tmp / "actions.png", color="#0EA5E9"), width=17 * cm, height=5.5 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Активность по типам действий (30 дней)'), data["action_counts"], tmp / "actions.png", color="#0EA5E9"), width=17 * cm, height=5.5 * cm))
         if data["activity_mix_30"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Микс активности за 30 дней", data["activity_mix_30"], tmp / "activity_mix.png", color="#8B5CF6"), width=17 * cm, height=5.8 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Микс активности за 30 дней'), data["activity_mix_30"], tmp / "activity_mix.png", color="#8B5CF6"), width=17 * cm, height=5.8 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("в stacked-графике загрузок каждый цвет — свой тип контента; чем выше суммарный столбец, тем активнее день. На горизонтальных диаграммах длиннее полоса = заметно больший вклад метрики.", styles))
+        story.append(_chart_hint(t('в stacked-графике загрузок каждый цвет — свой тип контента; чем выше суммарный столбец, тем активнее день. На горизонтальных диаграммах длиннее полоса = заметно больший вклад метрики.'), styles))
         story.append(PageBreak())
 
         lottery = data["lottery"]
-        story.append(_section_banner("4. Секслото", font_name, bg="#7C3AED"))
+        story.append(_section_banner(t('4. Секслото'), font_name, bg="#7C3AED"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Раундов участия", str(lottery["rounds_played"])], ["Куплено билетов", str(lottery["tickets_total"])], ["Выигрышных билетов (4+)", str(lottery["win_tickets"])], ["Частота выигрыша", _fmt_pct(lottery["win_rate_pct"])], ["Среднее совпадений на билет", _fmt_dec(lottery["avg_matches"])], ["Потрачено всего", _fmt_dec(lottery["spent_total"])], ["Выиграно всего", _fmt_dec(lottery["won_total"])], ["ROI", _fmt_pct(lottery["roi_pct"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Метрика'), t('Значение')], [t('Раундов участия'), str(lottery["rounds_played"])], [t('Куплено билетов'), str(lottery["tickets_total"])], [t('Выигрышных билетов (4+)'), str(lottery["win_tickets"])], [t('Частота выигрыша'), _fmt_pct(lottery["win_rate_pct"])], [t('Среднее совпадений на билет'), _fmt_dec(lottery["avg_matches"])], [t('Потрачено всего'), _fmt_dec(lottery["spent_total"])], [t('Выиграно всего'), _fmt_dec(lottery["won_total"])], ["ROI", _fmt_pct(lottery["roi_pct"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        lot_table = [["Период", "Билетов", "Потрачено", "Выиграно", "Результат"]]
+        lot_table = [[t('Период'), t('Билетов'), t('Потрачено'), t('Выиграно'), t('Результат')]]
         for row in data["lottery_rows"]:
             lot_table.append([row["period"], str(row["tickets"]), _fmt_dec(row["spent"]), _fmt_dec(row["won"]), _fmt_dec(row["net"])])
         story.append(_table(lot_table, font_name, col_widths=[3 * cm, 2 * cm, 3.5 * cm, 3.5 * cm, 3.5 * cm]))
         if data.get("best_ticket"):
             ticket = data["best_ticket"]
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Paragraph(f"Лучший билет: <b>#{ticket.id}</b> — <code>{ticket.numbers}</code>, совпадений: <b>{ticket.matched_count}</b>", styles["BodyCustom"]))
+            story.append(Paragraph(t('Лучший билет: <b>#{id}</b> — <code>{numbers}</code>, совпадений: <b>{matched_count}</b>', id=ticket.id, numbers=ticket.numbers, matched_count=ticket.matched_count), styles["BodyCustom"]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['lottery_comment'], styles))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_line("Билеты по дням", data["balance_labels_30"], data["ticket_series_30"], tmp / "lottery_tickets.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Билеты по дням'), data["balance_labels_30"], data["ticket_series_30"], tmp / "lottery_tickets.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_line("Чистый результат Секслото по дням", data["balance_labels_30"], data["lottery_net_series_30"], tmp / "lottery_net.png", color="#7C3AED"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Чистый результат Секслото по дням'), data["balance_labels_30"], data["lottery_net_series_30"], tmp / "lottery_net.png", color="#7C3AED"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_distribution("Распределение совпадений", data["match_distribution"], tmp / "lottery_dist.png"), width=16 * cm, height=5 * cm))
+        story.append(Image(_chart_distribution(t('Распределение совпадений'), data["match_distribution"], tmp / "lottery_dist.png"), width=16 * cm, height=5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("линия «билеты по дням» показывает, когда пользователь входил в игру чаще. График чистого результата выше нуля означает прибыль, ниже нуля — убыток. В распределении совпадений самые высокие столбцы — самые частые исходы.", styles))
+        story.append(_chart_hint(t('линия «билеты по дням» показывает, когда пользователь входил в игру чаще. График чистого результата выше нуля означает прибыль, ниже нуля — убыток. В распределении совпадений самые высокие столбцы — самые частые исходы.'), styles))
         story.append(PageBreak())
 
         ref = data["referrals"]
-        story.append(_section_banner("5. Рефералы", font_name, bg="#0F766E"))
+        story.append(_section_banner(t('5. Рефералы'), font_name, bg="#0F766E"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Приглашено всего", str(ref["total"])], ["Активных рефералов", str(ref["active"])], ["Доля активных", _fmt_pct(ref["activation_rate_pct"])], ["Заработано с рефералов", _fmt_dec(ref["earned_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Метрика'), t('Значение')], [t('Приглашено всего'), str(ref["total"])], [t('Активных рефералов'), str(ref["active"])], [t('Доля активных'), _fmt_pct(ref["activation_rate_pct"])], [t('Заработано с рефералов'), _fmt_dec(ref["earned_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['referral_comment'], styles))
-        ref_period_table = [["Период", "Новых рефералов", "Доход"]]
+        ref_period_table = [[t('Период'), t('Новых рефералов'), t('Доход')]]
         for row in ref["rows"]:
             ref_period_table.append([row["period"], str(row["count"]), _fmt_dec(row["income"])])
         story.append(Spacer(1, 0.15 * cm))
         story.append(_table(ref_period_table, font_name, col_widths=[4 * cm, 4 * cm, 4 * cm]))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Image(_chart_dual_bar("Рефералы и доход от них (30 дней)", data["referral_labels_30"], data["referral_series_30"], data["referral_income_series_30"], tmp / "referrals.png", left_label="Новые рефералы", right_label="Доход"), width=17 * cm, height=6.5 * cm))
+        story.append(Image(_chart_dual_bar(t('Рефералы и доход от них (30 дней)'), data["referral_labels_30"], data["referral_series_30"], data["referral_income_series_30"], tmp / "referrals.png", left_label=t('Новые рефералы'), right_label=t('Доход')), width=17 * cm, height=6.5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("синий/левый столбец — сколько новых людей пришло по реферальной ссылке, соседний столбец — сколько монет это принесло. Ищи дни, где людей мало, а доход высокий — это признак более качественных рефералов.", styles))
+        story.append(_chart_hint(t('синий/левый столбец — сколько новых людей пришло по реферальной ссылке, соседний столбец — сколько монет это принесло. Ищи дни, где людей мало, а доход высокий — это признак более качественных рефералов.'), styles))
         story.append(PageBreak())
 
         ai = data["ai"]
-        story.append(_section_banner("6. ИИ-общение", font_name, bg="#DB2777"))
+        story.append(_section_banner(t('6. ИИ-общение'), font_name, bg="#DB2777"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Чатов", str(ai["chat_count"])], ["Сообщений пользователя", str(ai["user_messages"])], ["Ответов ассистента", str(ai["assistant_messages"])], ["Среднее сообщений на чат", _fmt_dec(ai["avg_messages_per_chat"])], ["Средняя стоимость сообщения пользователя", _fmt_dec(ai["avg_cost_per_user_message"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
-        ai_table = [["Период", "Сообщений", "Потрачено"]]
+        story.append(_table([[t('Метрика'), t('Значение')], [t('Чатов'), str(ai["chat_count"])], [t('Сообщений пользователя'), str(ai["user_messages"])], [t('Ответов ассистента'), str(ai["assistant_messages"])], [t('Среднее сообщений на чат'), _fmt_dec(ai["avg_messages_per_chat"])], [t('Средняя стоимость сообщения пользователя'), _fmt_dec(ai["avg_cost_per_user_message"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        ai_table = [[t('Период'), t('Сообщений'), t('Потрачено')]]
         for row in ai["rows"]:
             ai_table.append([row["period"], str(row["messages"]), _fmt_dec(row["spent"])])
         story.append(Spacer(1, 0.15 * cm))
         story.append(_table(ai_table, font_name, col_widths=[4 * cm, 4 * cm, 4 * cm]))
         if ai["character_counts"]:
             story.append(Spacer(1, 0.2 * cm))
-            story.append(Image(_chart_horizontal_bar("Активность по персонажам", ai["character_counts"], tmp / "ai_characters.png", color="#EC4899"), width=17 * cm, height=5 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Активность по персонажам'), ai["character_counts"], tmp / "ai_characters.png", color="#EC4899"), width=17 * cm, height=5 * cm))
         if any(ai["daily_series_30"]):
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_line("Сообщения по дням", data["balance_labels_30"], ai["daily_series_30"], tmp / "ai_daily.png", color="#EC4899"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_line(t('Сообщения по дням'), data["balance_labels_30"], ai["daily_series_30"], tmp / "ai_daily.png", color="#EC4899"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("по персонажам видно, кого выбирали чаще всего: длиннее полоса — выше интерес. Линия по дням показывает, в какие дни пользователь сильнее всего общался с ИИ.", styles))
+        story.append(_chart_hint(t('по персонажам видно, кого выбирали чаще всего: длиннее полоса — выше интерес. Линия по дням показывает, в какие дни пользователь сильнее всего общался с ИИ.'), styles))
         story.append(PageBreak())
 
-        story.append(_section_banner("7. Сравнение с базой", font_name, bg="#0F766E"))
+        story.append(_section_banner(t('7. Сравнение с базой'), font_name, bg="#0F766E"))
         story.append(Spacer(1, 0.1 * cm))
-        comparison_rows = [["Метрика", "Пользователь", "Среднее", "Медиана", "Позиция"]]
+        comparison_rows = [[t('Метрика'), t('Пользователь'), t('Среднее'), t('Медиана'), t('Позиция')]]
         for row in data["comparison"]["rows"]:
             comparison_rows.append([
                 row["label"],
@@ -1371,26 +1372,26 @@ def _render_user_report_sync(data: dict, output_path: Path):
         percentile_chart = {row["label"]: row["percentile"] for row in data["comparison"]["rows"]}
         if percentile_chart:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Процентили относительно базы", percentile_chart, tmp / "comparison_percentiles.png", color="#14B8A6"), width=17 * cm, height=5.8 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Процентили относительно базы'), percentile_chart, tmp / "comparison_percentiles.png", color="#14B8A6"), width=17 * cm, height=5.8 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("процентиль показывает положение относительно всей базы: чем он выше, тем лучше пользователь выглядит по этой метрике по сравнению с большинством остальных.", styles))
+        story.append(_chart_hint(t('процентиль показывает положение относительно всей базы: чем он выше, тем лучше пользователь выглядит по этой метрике по сравнению с большинством остальных.'), styles))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(_bullet(f"Сильнее всего пользователь выделяется по метрике: <b>{data['comparison']['strongest']}</b>", styles))
-        story.append(_bullet(f"Слабее всего относительно базы выглядит метрика: <b>{data['comparison']['weakest']}</b>", styles))
-        story.append(_bullet(f"Размер базы для сравнения: <b>{data['comparison']['population']}</b> пользователей", styles))
+        story.append(_bullet(t('Сильнее всего пользователь выделяется по метрике: <b>{arg0}</b>', arg0=data['comparison']['strongest']), styles))
+        story.append(_bullet(t('Слабее всего относительно базы выглядит метрика: <b>{arg0}</b>', arg0=data['comparison']['weakest']), styles))
+        story.append(_bullet(t('Размер базы для сравнения: <b>{arg0}</b> пользователей', arg0=data['comparison']['population']), styles))
         story.append(PageBreak())
 
-        story.append(_section_banner("8. Итоговый профиль", font_name, bg="#1E293B"))
+        story.append(_section_banner(t('8. Итоговый профиль'), font_name, bg="#1E293B"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_bullet(f"Ты больше похожи на: <b>{data['insights']['dominant']}</b>", styles))
-        story.append(_bullet(f"Основной источник дохода: <b>{data['insights']['top_income']}</b>", styles))
-        story.append(_bullet(f"Основной источник расходов: <b>{data['insights']['top_expense']}</b>", styles))
+        story.append(_bullet(t('Ты больше похожи на: <b>{arg0}</b>', arg0=data['insights']['dominant']), styles))
+        story.append(_bullet(t('Основной источник дохода: <b>{arg0}</b>', arg0=data['insights']['top_income']), styles))
+        story.append(_bullet(t('Основной источник расходов: <b>{arg0}</b>', arg0=data['insights']['top_expense']), styles))
         story.append(_bullet(data['insights']['balance_comment'], styles))
         story.append(_bullet(data['insights']['purchase_comment'], styles))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Paragraph("Этот отчёт собран автоматически на основе действий пользователя в боте. Он помогает быстро увидеть монетизацию, вклад в контент, вовлечённость и игровые привычки.", styles["BodyCustom"]))
+        story.append(Paragraph(t('Этот отчёт собран автоматически на основе действий пользователя в боте. Он помогает быстро увидеть монетизацию, вклад в контент, вовлечённость и игровые привычки.'), styles["BodyCustom"]))
         doc = SimpleDocTemplate(str(output_path), pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.2 * cm, bottomMargin=1.4 * cm)
-        footer = lambda canvas, doc: _report_footer(canvas, doc, title="Отчёт по пользователю", generated_at=data["generated_at"], font_name=font_name)
+        footer = lambda canvas, doc: _report_footer(canvas, doc, title=t('Отчёт по пользователю'), generated_at=data["generated_at"], font_name=font_name)
         doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
 
@@ -1403,30 +1404,30 @@ def _render_bot_report_sync(data: dict, output_path: Path):
     with tempfile.TemporaryDirectory(prefix="bot_report_assets_") as tmpdir:
         tmp = Path(tmpdir)
         hero_meta = [
-            f"Собран: {data['generated_at']}",
-            f"Пользователей: {data['summary']['total_users']}",
-            f"Платящая конверсия: {_fmt_pct(data['summary']['payment_conversion_pct'])}",
+            t('Собран: {arg0}', arg0=data['generated_at']),
+            t('Пользователей: {arg0}', arg0=data['summary']['total_users']),
+            t('Платящая конверсия: {arg0}', arg0=_fmt_pct(data['summary']['payment_conversion_pct'])),
         ]
-        story.append(_hero_block("Отчёт по боту", "Mini-dashboard по росту, монетизации, удержанию и игровым механикам", hero_meta, font_name, styles, bg="#0B1220"))
+        story.append(_hero_block(t('Отчёт по боту'), t('Mini-dashboard по росту, монетизации, удержанию и игровым механикам'), hero_meta, font_name, styles, bg="#0B1220"))
         story.append(Spacer(1, 0.22 * cm))
         story.append(_kpi_cards([
-            {"label": "Всего пользователей", "value": str(data['summary']['total_users']), "foot": f"VIP: {_fmt_pct(data['summary']['vip_share_pct'])}", "accent": "#2563EB", "bg": "#EFF6FF"},
-            {"label": "Платящих пользователей", "value": str(data['summary']['payer_count']), "foot": _fmt_pct(data['summary']['payment_conversion_pct']), "accent": "#F59E0B", "bg": "#FFFBEB"},
+            {"label": t('Всего пользователей'), "value": str(data['summary']['total_users']), "foot": f"VIP: {_fmt_pct(data['summary']['vip_share_pct'])}", "accent": "#2563EB", "bg": "#EFF6FF"},
+            {"label": t('Платящих пользователей'), "value": str(data['summary']['payer_count']), "foot": _fmt_pct(data['summary']['payment_conversion_pct']), "accent": "#F59E0B", "bg": "#FFFBEB"},
             {"label": "DAU / MAU", "value": f"{data['summary']['dau']} / {data['summary']['mau']}", "foot": f"Sticky: {_fmt_pct(data['summary']['sticky_pct'])}", "accent": "#10B981", "bg": "#ECFDF5"},
-            {"label": "Оплачено Stars", "value": _fmt_dec(data['summary']['paid_stars_total']), "foot": f"оплат: {data['summary']['payments_count']}", "accent": "#8B5CF6", "bg": "#F5F3FF"},
-            {"label": "Монет в системе", "value": _fmt_dec(data['summary']['total_balance']), "foot": f"средний баланс: {_fmt_dec(data['summary']['avg_balance'])}", "accent": "#14B8A6", "bg": "#F0FDFA"},
-            {"label": "Спящие 30+ дней", "value": _fmt_pct(data['summary']['dormant_30_pct']), "foot": "пользователи без недавней активности", "accent": "#EF4444", "bg": "#FEF2F2"},
+            {"label": t('Оплачено Stars'), "value": _fmt_dec(data['summary']['paid_stars_total']), "foot": t('оплат: {arg0}', arg0=data['summary']['payments_count']), "accent": "#8B5CF6", "bg": "#F5F3FF"},
+            {"label": t('Монет в системе'), "value": _fmt_dec(data['summary']['total_balance']), "foot": t('средний баланс: {arg0}', arg0=_fmt_dec(data['summary']['avg_balance'])), "accent": "#14B8A6", "bg": "#F0FDFA"},
+            {"label": t('Спящие 30+ дней'), "value": _fmt_pct(data['summary']['dormant_30_pct']), "foot": t('пользователи без недавней активности'), "accent": "#EF4444", "bg": "#FEF2F2"},
         ], font_name, styles, columns=3))
         story.append(Spacer(1, 0.22 * cm))
-        story.append(_section_banner("1. Общая сводка", font_name, bg="#0F172A"))
+        story.append(_section_banner(t('1. Общая сводка'), font_name, bg="#0F172A"))
         story.append(Spacer(1, 0.12 * cm))
         story.append(_table(_bot_summary_table(data), font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.18 * cm))
-        story.append(_table([["Монетизация", "Значение"], ["Оплат всего", str(data["summary"]["payments_count"])], ["Средний чек на плательщика (Stars)", _fmt_dec(data["summary"]["avg_stars_per_payer"])], ["Средний чек на оплату (Stars)", _fmt_dec(data["summary"]["avg_stars_per_payment"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Монетизация'), t('Значение')], [t('Оплат всего'), str(data["summary"]["payments_count"])], [t('Средний чек на плательщика (Stars)'), _fmt_dec(data["summary"]["avg_stars_per_payer"])], [t('Средний чек на оплату (Stars)'), _fmt_dec(data["summary"]["avg_stars_per_payment"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.18 * cm))
-        story.append(_table([["Период", "Новых пользователей"]] + [[row["period"], str(row["count"])] for row in data["summary"]["new_users"]], font_name, col_widths=[5 * cm, 5 * cm]))
+        story.append(_table([[t('Период'), t('Новых пользователей')]] + [[row["period"], str(row["count"])] for row in data["summary"]["new_users"]], font_name, col_widths=[5 * cm, 5 * cm]))
         story.append(Spacer(1, 0.18 * cm))
-        story.append(_section_banner("Ключевые выводы", font_name, bg="#334155"))
+        story.append(_section_banner(t('Ключевые выводы'), font_name, bg="#334155"))
         story.append(Spacer(1, 0.1 * cm))
         story.append(_bullet(data['insights']['growth_comment'], styles))
         story.append(_bullet(data['insights']['monetization_comment'], styles))
@@ -1441,166 +1442,166 @@ def _render_bot_report_sync(data: dict, output_path: Path):
 
         segments = data["segments"]
         funnel = data["funnel"]
-        story.append(_section_banner("2. Сегменты и воронка", font_name, bg="#1D4ED8"))
+        story.append(_section_banner(t('2. Сегменты и воронка'), font_name, bg="#1D4ED8"))
         story.append(Spacer(1, 0.1 * cm))
-        segment_table = [["Сегмент", "Пользователей", "Доля базы"]]
+        segment_table = [[t('Сегмент'), t('Пользователей'), t('Доля базы')]]
         for row in segments["rows"]:
             segment_table.append([row["label"], str(row["count"]), _fmt_pct(row["share"])])
         story.append(_table(segment_table, font_name, col_widths=[7 * cm, 4 * cm, 4 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Paragraph("Сегменты пересекаются: один и тот же пользователь может входить сразу в несколько категорий.", styles["SmallCustom"]))
+        story.append(Paragraph(t('Сегменты пересекаются: один и тот же пользователь может входить сразу в несколько категорий.'), styles["SmallCustom"]))
         if segments["chart"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Крупные пользовательские сегменты", segments["chart"], tmp / "segments.png", color="#2563EB"), width=17 * cm, height=6.2 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Крупные пользовательские сегменты'), segments["chart"], tmp / "segments.png", color="#2563EB"), width=17 * cm, height=6.2 * cm))
         story.append(Spacer(1, 0.2 * cm))
-        funnel_table = [["Этап", "Пользователей", "От прошлого шага", "От всей базы"]]
+        funnel_table = [[t('Этап'), t('Пользователей'), t('От прошлого шага'), t('От всей базы')]]
         for row in funnel["rows"]:
             funnel_table.append([row["label"], str(row["count"]), _fmt_pct(row["step_rate"]), _fmt_pct(row["total_rate"])])
         story.append(_table(funnel_table, font_name, col_widths=[6 * cm, 3 * cm, 3.2 * cm, 3.2 * cm]))
         if funnel["chart"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Базовая продуктовая воронка", funnel["chart"], tmp / "funnel.png", color="#7C3AED"), width=17 * cm, height=5.8 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Базовая продуктовая воронка'), funnel["chart"], tmp / "funnel.png", color="#7C3AED"), width=17 * cm, height=5.8 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("в сегментах длиннее полоса = больше пользователей в категории. Ник необязателен, лотерея — отдельный сегмент. Воронка показывает пересечение групп, а не порядок событий. Во воронке смотри не только абсолютные значения, но и столбцы «от прошлого шага»: именно они показывают, где сильнее всего теряется аудитория.", styles))
+        story.append(_chart_hint(t('в сегментах длиннее полоса = больше пользователей в категории. Ник необязателен, лотерея — отдельный сегмент. Воронка показывает пересечение групп, а не порядок событий. Во воронке смотри не только абсолютные значения, но и столбцы «от прошлого шага»: именно они показывают, где сильнее всего теряется аудитория.'), styles))
         story.append(PageBreak())
 
-        story.append(_section_banner("3. Рост аудитории", font_name, bg="#0F766E"))
+        story.append(_section_banner(t('3. Рост аудитории'), font_name, bg="#0F766E"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Регистраций за последние 7 дней", str(data["growth"]["registrations_last_7"])], ["Регистраций за предыдущие 7 дней", str(data["growth"]["registrations_prev_7"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Метрика'), t('Значение')], [t('Регистраций за последние 7 дней'), str(data["growth"]["registrations_last_7"])], [t('Регистраций за предыдущие 7 дней'), str(data["growth"]["registrations_prev_7"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Image(_chart_dual_bar("Новые пользователи и размер базы (30 дней)", data["growth"]["labels_30"], data["growth"]["registrations_30"], data["growth"]["cumulative_30"], tmp / "growth.png", left_label="Новые", right_label="Всего"), width=17 * cm, height=6.5 * cm))
+        story.append(Image(_chart_dual_bar(t('Новые пользователи и размер базы (30 дней)'), data["growth"]["labels_30"], data["growth"]["registrations_30"], data["growth"]["cumulative_30"], tmp / "growth.png", left_label=t('Новые'), right_label=t('Всего')), width=17 * cm, height=6.5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("левые столбцы показывают новых пользователей за день, правые — накопленный размер базы. Если новые регистрации падают, а общая база растёт медленнее, значит темп набора аудитории замедляется.", styles))
+        story.append(_chart_hint(t('левые столбцы показывают новых пользователей за день, правые — накопленный размер базы. Если новые регистрации падают, а общая база растёт медленнее, значит темп набора аудитории замедляется.'), styles))
         story.append(PageBreak())
 
         content = data["content"]
-        story.append(_section_banner("4. Контент", font_name, bg="#2563EB"))
+        story.append(_section_banner(t('4. Контент'), font_name, bg="#2563EB"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Загружено всего", str(content["total"])], ["Одобрено", str(content["approved"])], ["Отклонено", str(content["rejected"])], ["На модерации", str(content["pending"])], ["Автоодобрено", str(content["auto_approved"])], ["Доля одобрения", _fmt_pct(content["approval_rate_pct"])], ["Просмотров", str(content["views"])], ["Средний рейтинг", str(content["avg_rating"])], ["Авторов всего", str(content["creators_total"])], ["Авторов за 30 дней", str(content["creators_30"])], ["Зрителей за 30 дней", str(content["viewers_30"])], ["Средне просмотров на загрузку", _fmt_dec(content["avg_views_per_upload"])], ["Средне загрузок на автора", _fmt_dec(content["avg_uploads_per_creator"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Метрика'), t('Значение')], [t('Загружено всего'), str(content["total"])], [t('Одобрено'), str(content["approved"])], [t('Отклонено'), str(content["rejected"])], [t('На модерации'), str(content["pending"])], [t('Автоодобрено'), str(content["auto_approved"])], [t('Доля одобрения'), _fmt_pct(content["approval_rate_pct"])], [t('Просмотров'), str(content["views"])], [t('Средний рейтинг'), str(content["avg_rating"])], [t('Авторов всего'), str(content["creators_total"])], [t('Авторов за 30 дней'), str(content["creators_30"])], [t('Зрителей за 30 дней'), str(content["viewers_30"])], [t('Средне просмотров на загрузку'), _fmt_dec(content["avg_views_per_upload"])], [t('Средне загрузок на автора'), _fmt_dec(content["avg_uploads_per_creator"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['content_comment'], styles))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Image(_chart_line("Загрузки по дням", data["growth"]["labels_30"], content["uploads_30"], tmp / "uploads_bot.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
-        status_map = {"Одобрено": float(content["approved"]), "Отклонено": float(content["rejected"]), "На модерации": float(content["pending"]), "Автоодобрено": float(content["auto_approved"])}
+        story.append(Image(_chart_line(t('Загрузки по дням'), data["growth"]["labels_30"], content["uploads_30"], tmp / "uploads_bot.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
+        status_map = {t('Одобрено'): float(content["approved"]), t('Отклонено'): float(content["rejected"]), t('На модерации'): float(content["pending"]), t('Автоодобрено'): float(content["auto_approved"])}
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_distribution("Статусы контента", status_map, tmp / "content_status_bot.png"), width=16 * cm, height=5 * cm))
+        story.append(Image(_chart_distribution(t('Статусы контента'), status_map, tmp / "content_status_bot.png"), width=16 * cm, height=5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("линия загрузок показывает ритм публикаций по дням. В столбцах статусов высокий «На модерации» — сигнал о хвосте очереди, высокий «Отклонено» — возможная проблема качества входящего контента.", styles))
+        story.append(_chart_hint(t('линия загрузок показывает ритм публикаций по дням. В столбцах статусов высокий «На модерации» — сигнал о хвосте очереди, высокий «Отклонено» — возможная проблема качества входящего контента.'), styles))
         story.append(PageBreak())
 
         econ = data["economy"]
-        story.append(_section_banner("5. Экономика бота", font_name, bg="#059669"))
+        story.append(_section_banner(t('5. Экономика бота'), font_name, bg="#059669"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Показатель", "Значение"], ["Сгенерировано монет", _fmt_dec(econ["positive_total"])], ["Сожжено монет", _fmt_dec(econ["negative_total"])], ["Чистый баланс экономики", _fmt_dec(econ["net_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Показатель'), t('Значение')], [t('Сгенерировано монет'), _fmt_dec(econ["positive_total"])], [t('Сожжено монет'), _fmt_dec(econ["negative_total"])], [t('Чистый баланс экономики'), _fmt_dec(econ["net_total"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Image(_chart_line("Чистая динамика экономики (30 дней)", econ["labels_30"], econ["daily_net_30"], tmp / "economy_net.png", color="#10B981"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Чистая динамика экономики (30 дней)'), econ["labels_30"], econ["daily_net_30"], tmp / "economy_net.png", color="#10B981"), width=17 * cm, height=6 * cm))
         if econ["source_income"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Топ источников притока", econ["source_income"], tmp / "econ_income.png", color="#16A34A"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Топ источников притока'), econ["source_income"], tmp / "econ_income.png", color="#16A34A"), width=17 * cm, height=6 * cm))
         if econ["source_expense"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Топ источников списаний", econ["source_expense"], tmp / "econ_expense.png", color="#DC2626"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Топ источников списаний'), econ["source_expense"], tmp / "econ_expense.png", color="#DC2626"), width=17 * cm, height=6 * cm))
         if any(econ["payment_stars_series_30"]):
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_line("Stars-платежи по дням", econ["labels_30"], econ["payment_stars_series_30"], tmp / "bot_payment_stars.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_line(t('Stars-платежи по дням'), econ["labels_30"], econ["payment_stars_series_30"], tmp / "bot_payment_stars.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
         if any(econ["payment_count_series_30"]):
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_line("Количество оплат по дням", econ["labels_30"], econ["payment_count_series_30"], tmp / "bot_payment_counts.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
+            story.append(Image(_chart_line(t('Количество оплат по дням'), econ["labels_30"], econ["payment_count_series_30"], tmp / "bot_payment_counts.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
         if econ["payment_type_counts"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Структура платных продуктов", econ["payment_type_counts"], tmp / "bot_payment_types.png", color="#F97316"), width=17 * cm, height=5.8 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Структура платных продуктов'), econ["payment_type_counts"], tmp / "bot_payment_types.png", color="#F97316"), width=17 * cm, height=5.8 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("чистая динамика экономики выше нуля означает, что за день монет пришло больше, чем ушло. В продуктовых диаграммах длиннее полоса = больший вклад продукта в выручку или число оплат.", styles))
+        story.append(_chart_hint(t('чистая динамика экономики выше нуля означает, что за день монет пришло больше, чем ушло. В продуктовых диаграммах длиннее полоса = больший вклад продукта в выручку или число оплат.'), styles))
         story.append(PageBreak())
 
         payments_analytics = data["payments_analytics"]
-        story.append(_section_banner("6. Платежи и продукты", font_name, bg="#C2410C"))
+        story.append(_section_banner(t('6. Платежи и продукты'), font_name, bg="#C2410C"))
         story.append(Spacer(1, 0.1 * cm))
-        payment_rows = [["Продукт", "Оплат", "Stars", "Монет начислено", "Средний чек"]]
+        payment_rows = [[t('Продукт'), t('Оплат'), "Stars", t('Монет начислено'), t('Средний чек')]]
         for row in payments_analytics["rows"]:
             payment_rows.append([row["label"], str(row["count"]), _fmt_dec(row["stars_total"]), _fmt_dec(row["coins_total"]), _fmt_dec(row["avg_stars"])])
         story.append(_table(payment_rows, font_name, col_widths=[4.8 * cm, 2.2 * cm, 2.4 * cm, 3.5 * cm, 2.6 * cm]))
         if payments_analytics["stars_chart"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Stars по типам продуктов", payments_analytics["stars_chart"], tmp / "payment_stars_breakdown.png", color="#F97316"), width=17 * cm, height=5.8 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Stars по типам продуктов'), payments_analytics["stars_chart"], tmp / "payment_stars_breakdown.png", color="#F97316"), width=17 * cm, height=5.8 * cm))
         if payments_analytics["count_chart"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Количество оплат по продуктам", payments_analytics["count_chart"], tmp / "payment_count_breakdown.png", color="#0EA5E9"), width=17 * cm, height=5.8 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Количество оплат по продуктам'), payments_analytics["count_chart"], tmp / "payment_count_breakdown.png", color="#0EA5E9"), width=17 * cm, height=5.8 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("таблица показывает не только выручку в Stars, но и сколько монет реально начислялось пользователям. Это помогает видеть продукты с частыми дешёвыми покупками и продукты с редкими, но крупными чеками.", styles))
+        story.append(_chart_hint(t('таблица показывает не только выручку в Stars, но и сколько монет реально начислялось пользователям. Это помогает видеть продукты с частыми дешёвыми покупками и продукты с редкими, но крупными чеками.'), styles))
         story.append(PageBreak())
 
         lottery = data["lottery"]
-        story.append(_section_banner("7. Секслото", font_name, bg="#7C3AED"))
+        story.append(_section_banner(t('7. Секслото'), font_name, bg="#7C3AED"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Раундов в истории", str(lottery["rounds_total"])], ["Билетов всего", str(lottery["total_tickets"])], ["Игроков всего", str(lottery["players_total"])], ["Игроков за 30 дней", str(lottery["players_30"])], ["Проникновение в базу", _fmt_pct(lottery["penetration_pct"])], ["Среднее билетов на игрока", _fmt_dec(lottery["avg_tickets_per_player"])], ["RTP билетов (без ставок и рейтинга)", _fmt_pct(lottery["rtp"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Метрика'), t('Значение')], [t('Раундов в истории'), str(lottery["rounds_total"])], [t('Билетов всего'), str(lottery["total_tickets"])], [t('Игроков всего'), str(lottery["players_total"])], [t('Игроков за 30 дней'), str(lottery["players_30"])], [t('Проникновение в базу'), _fmt_pct(lottery["penetration_pct"])], [t('Среднее билетов на игрока'), _fmt_dec(lottery["avg_tickets_per_player"])], [t('RTP билетов (без ставок и рейтинга)'), _fmt_pct(lottery["rtp"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(_table([["Период", "Билетов"]] + [[row["period"], str(row["tickets"])] for row in lottery["rows"]], font_name, col_widths=[5 * cm, 5 * cm]))
+        story.append(_table([[t('Период'), t('Билетов')]] + [[row["period"], str(row["tickets"])] for row in lottery["rows"]], font_name, col_widths=[5 * cm, 5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(_table([["Метрика", "Значение"], ["Средний призовой фонд", _fmt_dec(lottery["avg_prize_pool"])], ["Среднее билетов на розыгрыш", _fmt_dec(lottery["avg_tickets_per_round"])], ["Потрачено на билеты", _fmt_dec(lottery["spent"])], ["Выплачено игрокам", _fmt_dec(lottery["paid"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Метрика'), t('Значение')], [t('Средний призовой фонд'), _fmt_dec(lottery["avg_prize_pool"])], [t('Среднее билетов на розыгрыш'), _fmt_dec(lottery["avg_tickets_per_round"])], [t('Потрачено на билеты'), _fmt_dec(lottery["spent"])], [t('Выплачено игрокам'), _fmt_dec(lottery["paid"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['lottery_comment'], styles))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Image(_chart_line("Билеты по дням", lottery["labels_30"], lottery["ticket_series_30"], tmp / "lottery_tickets_bot.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Билеты по дням'), lottery["labels_30"], lottery["ticket_series_30"], tmp / "lottery_tickets_bot.png", color="#F59E0B"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_line("Игроки Секслото по дням", lottery["labels_30"], lottery["player_series_30"], tmp / "lottery_players_bot.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Игроки Секслото по дням'), lottery["labels_30"], lottery["player_series_30"], tmp / "lottery_players_bot.png", color="#0EA5E9"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_line("Средний призовой фонд по дням", lottery["labels_30"], lottery["prize_pool_series_30"], tmp / "lottery_pool_bot.png", color="#7C3AED"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Средний призовой фонд по дням'), lottery["labels_30"], lottery["prize_pool_series_30"], tmp / "lottery_pool_bot.png", color="#7C3AED"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_distribution("Распределение совпадений", lottery["match_distribution"], tmp / "lottery_match_bot.png"), width=16 * cm, height=5 * cm))
+        story.append(Image(_chart_distribution(t('Распределение совпадений'), lottery["match_distribution"], tmp / "lottery_match_bot.png"), width=16 * cm, height=5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("график билетов показывает игровой объём, график игроков — реальный охват аудитории, а график призового фонда — насколько крупными были розыгрыши. В распределении совпадений самые высокие столбцы — самые типичные исходы игры.", styles))
+        story.append(_chart_hint(t('график билетов показывает игровой объём, график игроков — реальный охват аудитории, а график призового фонда — насколько крупными были розыгрыши. В распределении совпадений самые высокие столбцы — самые типичные исходы игры.'), styles))
         story.append(PageBreak())
 
         retention = data["retention"]
         cohorts = data["cohorts"]
-        story.append(_section_banner("8. Рефералы, удержание и когорты", font_name, bg="#0F766E"))
+        story.append(_section_banner(t('8. Рефералы, удержание и когорты'), font_name, bg="#0F766E"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_table([["Показатель", "Значение"], ["Retention push-уведомлений", str(retention["retention_pushes"])], ["Активаций weekly promo", str(retention["weekly_promo_activations"])], ["Пользователей по рефералке", str(retention["referred_total"])], ["Доля реферальной базы", _fmt_pct(retention["referred_share_pct"])], ["Sticky factor DAU/MAU", _fmt_pct(data["summary"]["sticky_pct"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
+        story.append(_table([[t('Показатель'), t('Значение')], [t('Retention push-уведомлений'), str(retention["retention_pushes"])], [t('Активаций weekly promo'), str(retention["weekly_promo_activations"])], [t('Пользователей по рефералке'), str(retention["referred_total"])], [t('Доля реферальной базы'), _fmt_pct(retention["referred_share_pct"])], ["Sticky factor DAU/MAU", _fmt_pct(data["summary"]["sticky_pct"])]] , font_name, col_widths=[7 * cm, 8.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['retention_comment'], styles))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(_table([["Период", "Новых пользователей по рефералке"]] + [[row["period"], str(row["count"])] for row in retention["rows"]], font_name, col_widths=[6 * cm, 6 * cm]))
+        story.append(_table([[t('Период'), t('Новых пользователей по рефералке')]] + [[row["period"], str(row["count"])] for row in retention["rows"]], font_name, col_widths=[6 * cm, 6 * cm]))
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Image(_chart_line("Новые пользователи по рефералке (30 дней)", retention["labels_30"], retention["referred_daily_30"], tmp / "retention_referrals.png", color="#2563EB"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Новые пользователи по рефералке (30 дней)'), retention["labels_30"], retention["referred_daily_30"], tmp / "retention_referrals.png", color="#2563EB"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_line("Активные пользователи по дням", retention["labels_30"], retention["active_users_daily_30"], tmp / "active_users_daily.png", color="#10B981"), width=17 * cm, height=6 * cm))
+        story.append(Image(_chart_line(t('Активные пользователи по дням'), retention["labels_30"], retention["active_users_daily_30"], tmp / "active_users_daily.png", color="#10B981"), width=17 * cm, height=6 * cm))
         story.append(Spacer(1, 0.2 * cm))
         story.append(_table([
-            ["Когорта", "Удержание", "Вернулось", "Подходящая база"],
+            [t('Когорта'), t('Удержание'), t('Вернулось'), t('Подходящая база')],
             ["D1", _fmt_pct(cohorts["d1"]["rate"]), str(cohorts["d1"]["retained"]), str(cohorts["d1"]["eligible"])],
             ["D7", _fmt_pct(cohorts["d7"]["rate"]), str(cohorts["d7"]["retained"]), str(cohorts["d7"]["eligible"])],
             ["D30", _fmt_pct(cohorts["d30"]["rate"]), str(cohorts["d30"]["retained"]), str(cohorts["d30"]["eligible"])],
         ], font_name, col_widths=[3 * cm, 4 * cm, 4 * cm, 4 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_distribution("D1 / D7 / D30 удержание", {"D1": cohorts["d1"]["rate"], "D7": cohorts["d7"]["rate"], "D30": cohorts["d30"]["rate"]}, tmp / "cohorts_overall.png"), width=16 * cm, height=5 * cm))
+        story.append(Image(_chart_distribution(t('D1 / D7 / D30 удержание'), {"D1": cohorts["d1"]["rate"], "D7": cohorts["d7"]["rate"], "D30": cohorts["d30"]["rate"]}, tmp / "cohorts_overall.png"), width=16 * cm, height=5 * cm))
         if cohorts["weekly_rows"]:
             story.append(Spacer(1, 0.15 * cm))
-            weekly_rows_table = [["Когорта", "Размер", "Вернулось на D7", "D7 retention"]]
+            weekly_rows_table = [[t('Когорта'), t('Размер'), t('Вернулось на D7'), "D7 retention"]]
             for row in cohorts["weekly_rows"]:
                 weekly_rows_table.append([row["cohort"], str(row["size"]), str(row["retained_d7"]), _fmt_pct(row["d7_rate"])])
             story.append(_table(weekly_rows_table, font_name, col_widths=[4 * cm, 3 * cm, 4 * cm, 4 * cm]))
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_distribution("D7 retention по последним когортам", cohorts["weekly_chart"], tmp / "cohorts_weekly.png"), width=16 * cm, height=5 * cm))
+            story.append(Image(_chart_distribution(t('D7 retention по последним когортам'), cohorts["weekly_chart"], tmp / "cohorts_weekly.png"), width=16 * cm, height=5 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("линия активных пользователей показывает, как меняется ядро аудитории день ко дню. Когортные таблицы D1/D7/D30 отвечают на вопрос: какой процент людей вернулся именно на 1-й, 7-й или 30-й день. Знаменатель каждого показателя — только пользователи достаточного возраста; D30 может быть выше D7.", styles))
+        story.append(_chart_hint(t('линия активных пользователей показывает, как меняется ядро аудитории день ко дню. Когортные таблицы D1/D7/D30 отвечают на вопрос: какой процент людей вернулся именно на 1-й, 7-й или 30-й день. Знаменатель каждого показателя — только пользователи достаточного возраста; D30 может быть выше D7.'), styles))
         story.append(PageBreak())
 
         leaders = data["leaders"]
-        story.append(_section_banner("9. Топ-10 пользователей", font_name, bg="#1E293B"))
+        story.append(_section_banner(t('9. Топ-10 пользователей'), font_name, bg="#1E293B"))
         story.append(Spacer(1, 0.1 * cm))
         leader_sections = [
-            ("По балансу", leaders["balance"]),
-            ("По XP", leaders["xp"]),
-            ("По потраченным Stars", leaders["payments"]),
-            ("По загрузкам", leaders["uploads"]),
-            ("По рефералам", leaders["referrals"]),
+            (t('По балансу'), leaders["balance"]),
+            (t('По XP'), leaders["xp"]),
+            (t('По потраченным Stars'), leaders["payments"]),
+            (t('По загрузкам'), leaders["uploads"]),
+            (t('По рефералам'), leaders["referrals"]),
         ]
         for title, rows in leader_sections:
             if not rows:
                 continue
             story.append(Paragraph(title, styles["H3Custom"]))
-            table_rows = [["#", "Пользователь", "Telegram ID", "Значение"]]
+            table_rows = [["#", t('Пользователь'), "Telegram ID", t('Значение')]]
             for idx, row in enumerate(rows, start=1):
                 table_rows.append([str(idx), row["name"], str(row["telegram_id"]), _fmt_dec(row["value"])])
             story.append(_table(table_rows, font_name, col_widths=[1 * cm, 7 * cm, 4 * cm, 3.5 * cm]))
@@ -1608,10 +1609,10 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         story.append(PageBreak())
 
         churn = data["churn"]
-        story.append(_section_banner("10. Отток и провалы", font_name, bg="#B91C1C"))
+        story.append(_section_banner(t('10. Отток и провалы'), font_name, bg="#B91C1C"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(Paragraph("Здесь показаны зоны, где пользователи доходят до одного шага, но не переходят к следующему важному действию.", styles["SmallCustom"]))
-        churn_table = [["Зона риска", "Пользователей", "Доля базы"]]
+        story.append(Paragraph(t('Здесь показаны зоны, где пользователи доходят до одного шага, но не переходят к следующему важному действию.'), styles["SmallCustom"]))
+        churn_table = [[t('Зона риска'), t('Пользователей'), t('Доля базы')]]
         for row in churn["rows"]:
             churn_table.append([row["label"], str(row["count"]), _fmt_pct(row["share"])])
         story.append(_table(churn_table, font_name, col_widths=[8.5 * cm, 3 * cm, 3 * cm]))
@@ -1619,37 +1620,37 @@ def _render_bot_report_sync(data: dict, output_path: Path):
         story.append(_bullet(data['insights']['churn_comment'], styles))
         if churn["chart"]:
             story.append(Spacer(1, 0.15 * cm))
-            story.append(Image(_chart_horizontal_bar("Крупнейшие зоны продуктового оттока", churn["chart"], tmp / "churn.png", color="#DC2626"), width=17 * cm, height=6.2 * cm))
+            story.append(Image(_chart_horizontal_bar(t('Крупнейшие зоны продуктового оттока'), churn["chart"], tmp / "churn.png", color="#DC2626"), width=17 * cm, height=6.2 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("здесь длинная полоса — это большой пласт пользователей, который застрял между соседними шагами. Этот раздел лучше читать вместе с воронкой: воронка показывает общий поток, а отток — конкретную проблемную группу.", styles))
+        story.append(_chart_hint(t('здесь длинная полоса — это большой пласт пользователей, который застрял между соседними шагами. Этот раздел лучше читать вместе с воронкой: воронка показывает общий поток, а отток — конкретную проблемную группу.'), styles))
         story.append(PageBreak())
 
         heatmap = data["activity_heatmap"]
-        story.append(_section_banner("11. Тепловая карта активности", font_name, bg="#0F172A"))
+        story.append(_section_banner(t('11. Тепловая карта активности'), font_name, bg="#0F172A"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(Paragraph("Чем ярче ячейка, тем больше действий пользователей в этот день недели и час суток за последние 30 дней.", styles["SmallCustom"]))
+        story.append(Paragraph(t('Чем ярче ячейка, тем больше действий пользователей в этот день недели и час суток за последние 30 дней.'), styles["SmallCustom"]))
         story.append(Spacer(1, 0.15 * cm))
         story.append(_bullet(data['insights']['heatmap_comment'], styles))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(Image(_chart_heatmap("Активность по дням недели и часам", heatmap["matrix"], heatmap["hours"], heatmap["weekdays"], tmp / "activity_heatmap.png"), width=18 * cm, height=6.8 * cm))
+        story.append(Image(_chart_heatmap(t('Активность по дням недели и часам'), heatmap["matrix"], heatmap["hours"], heatmap["weekdays"], tmp / "activity_heatmap.png"), width=18 * cm, height=6.8 * cm))
         story.append(Spacer(1, 0.08 * cm))
-        story.append(_chart_hint("по горизонтали — часы суток, по вертикали — дни недели. Чем темнее/ярче клетка, тем больше действий пользователей в этот слот времени. Это удобно для поиска лучшего времени рассылок и пиков нагрузки.", styles))
+        story.append(_chart_hint(t('по горизонтали — часы суток, по вертикали — дни недели. Чем темнее/ярче клетка, тем больше действий пользователей в этот слот времени. Это удобно для поиска лучшего времени рассылок и пиков нагрузки.'), styles))
         doc = SimpleDocTemplate(str(output_path), pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.2 * cm, bottomMargin=1.4 * cm)
-        footer = lambda canvas, doc: _report_footer(canvas, doc, title="Отчёт по боту", generated_at=data["generated_at"], font_name=font_name)
+        footer = lambda canvas, doc: _report_footer(canvas, doc, title=t('Отчёт по боту'), generated_at=data["generated_at"], font_name=font_name)
         doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
 
 def _all_users_overview_table(data: dict):
-    rows = [["Параметр", "Значение"]]
+    rows = [[t('Параметр'), t('Значение')]]
     rows.extend([
-        ["Пользователей в выгрузке", str(data["users_count"])],
-        ["Супер-админов", str(data["super_admin_count"])],
-        ["Админов", str(data["admin_count"])],
-        ["VIP-пользователей", str(data["vip_count"])],
-        ["С покупками", str(data["payers_count"])],
-        ["С загрузками контента", str(data["creators_count"])],
-        ["С билетами Секслото", str(data["lottery_players_count"])],
-        ["С чатами ИИ", str(data["ai_users_count"])],
+        [t('Пользователей в выгрузке'), str(data["users_count"])],
+        [t('Супер-админов'), str(data["super_admin_count"])],
+        [t('Админов'), str(data["admin_count"])],
+        [t('VIP-пользователей'), str(data["vip_count"])],
+        [t('С покупками'), str(data["payers_count"])],
+        [t('С загрузками контента'), str(data["creators_count"])],
+        [t('С билетами Секслото'), str(data["lottery_players_count"])],
+        [t('С чатами ИИ'), str(data["ai_users_count"])],
     ])
     return rows
 
@@ -1660,32 +1661,32 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
     story = []
 
     hero_meta = [
-        f"Собран: {data['generated_at']}",
-        f"Пользователей в выгрузке: {data['users_count']}",
-        "Формат: единый dashboard-документ по всем пользователям",
+        t('Собран: {arg0}', arg0=data['generated_at']),
+        t('Пользователей в выгрузке: {arg0}', arg0=data['users_count']),
+        t('Формат: единый dashboard-документ по всем пользователям'),
     ]
-    story.append(_hero_block("Отчёт по всем пользователям", "Сводный mini-dashboard: одна выгрузка, внутри — карточки всех пользователей базы", hero_meta, font_name, styles, bg="#0B1220"))
+    story.append(_hero_block(t('Отчёт по всем пользователям'), t('Сводный mini-dashboard: одна выгрузка, внутри — карточки всех пользователей базы'), hero_meta, font_name, styles, bg="#0B1220"))
     story.append(Spacer(1, 0.22 * cm))
     story.append(_kpi_cards([
-        {"label": "Пользователей в выгрузке", "value": str(data['users_count']), "foot": "полный состав PDF", "accent": "#2563EB", "bg": "#EFF6FF"},
-        {"label": "Супер-админы", "value": str(data['super_admin_count']), "foot": "по списку ADMINS", "accent": "#7C3AED", "bg": "#F5F3FF"},
-        {"label": "Админы", "value": str(data['admin_count']), "foot": "с учётом супер-админов", "accent": "#0F766E", "bg": "#F0FDFA"},
-        {"label": "VIP-пользователей", "value": str(data['vip_count']), "foot": "активный VIP в момент выгрузки", "accent": "#8B5CF6", "bg": "#F5F3FF"},
-        {"label": "С покупками", "value": str(data['payers_count']), "foot": "хотя бы одна успешная оплата", "accent": "#F59E0B", "bg": "#FFFBEB"},
-        {"label": "Создатели контента", "value": str(data['creators_count']), "foot": "загружали видео или фото", "accent": "#10B981", "bg": "#ECFDF5"},
-        {"label": "Игроки Секслото", "value": str(data['lottery_players_count']), "foot": "есть хотя бы 1 билет", "accent": "#EC4899", "bg": "#FDF2F8"},
-        {"label": "Пользователи ИИ", "value": str(data['ai_users_count']), "foot": "есть хотя бы один чат", "accent": "#14B8A6", "bg": "#F0FDFA"},
+        {"label": t('Пользователей в выгрузке'), "value": str(data['users_count']), "foot": t('полный состав PDF'), "accent": "#2563EB", "bg": "#EFF6FF"},
+        {"label": t('Супер-админы'), "value": str(data['super_admin_count']), "foot": t('по списку ADMINS'), "accent": "#7C3AED", "bg": "#F5F3FF"},
+        {"label": t('Админы'), "value": str(data['admin_count']), "foot": t('с учётом супер-админов'), "accent": "#0F766E", "bg": "#F0FDFA"},
+        {"label": t('VIP-пользователей'), "value": str(data['vip_count']), "foot": t('активный VIP в момент выгрузки'), "accent": "#8B5CF6", "bg": "#F5F3FF"},
+        {"label": t('С покупками'), "value": str(data['payers_count']), "foot": t('хотя бы одна успешная оплата'), "accent": "#F59E0B", "bg": "#FFFBEB"},
+        {"label": t('Создатели контента'), "value": str(data['creators_count']), "foot": t('загружали видео или фото'), "accent": "#10B981", "bg": "#ECFDF5"},
+        {"label": t('Игроки Секслото'), "value": str(data['lottery_players_count']), "foot": t('есть хотя бы 1 билет'), "accent": "#EC4899", "bg": "#FDF2F8"},
+        {"label": t('Пользователи ИИ'), "value": str(data['ai_users_count']), "foot": t('есть хотя бы один чат'), "accent": "#14B8A6", "bg": "#F0FDFA"},
     ], font_name, styles, columns=4))
     story.append(Spacer(1, 0.22 * cm))
-    story.append(_section_banner("1. Общая сводка по выгрузке", font_name, bg="#0F172A"))
+    story.append(_section_banner(t('1. Общая сводка по выгрузке'), font_name, bg="#0F172A"))
     story.append(Spacer(1, 0.12 * cm))
     story.append(_table(_all_users_overview_table(data), font_name, col_widths=[7 * cm, 8.5 * cm]))
     story.append(Spacer(1, 0.18 * cm))
-    story.append(_section_banner("Как читать документ", font_name, bg="#334155"))
+    story.append(_section_banner(t('Как читать документ'), font_name, bg="#334155"))
     story.append(Spacer(1, 0.1 * cm))
-    story.append(_bullet("Это не агрегированный отчёт по боту, а общий PDF, где дальше идут последовательные user-card блоки по каждому пользователю.", styles))
-    story.append(_bullet("Внутри каждой карточки сначала смотри KPI, затем профиль и сводную таблицу, после этого — ключевые выводы по поведению пользователя.", styles))
-    story.append(_bullet("Если нужен более глубокий разбор по графикам и периодам, для конкретного человека лучше открывать его отдельный персональный PDF-отчёт.", styles))
+    story.append(_bullet(t('Это не агрегированный отчёт по боту, а общий PDF, где дальше идут последовательные user-card блоки по каждому пользователю.'), styles))
+    story.append(_bullet(t('Внутри каждой карточки сначала смотри KPI, затем профиль и сводную таблицу, после этого — ключевые выводы по поведению пользователя.'), styles))
+    story.append(_bullet(t('Если нужен более глубокий разбор по графикам и периодам, для конкретного человека лучше открывать его отдельный персональный PDF-отчёт.'), styles))
 
     for idx, user_data in enumerate(data["users"], start=1):
         story.append(PageBreak())
@@ -1699,57 +1700,57 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
         economy_all = next((row for row in user_data["economy_rows"] if row["period"] == "Всё время"), None)
 
         user_meta = [
-            f"Пользователь #{idx}",
+            t('Пользователь #{idx}', idx=idx),
             f"Telegram ID: {user.telegram_id}",
-            f"Собранный профиль: {user_data['display_name']}",
+            t('Собранный профиль: {arg0}', arg0=user_data['display_name']),
         ]
-        story.append(_hero_block(f"{user_data['display_name']}", "Карточка пользователя внутри общей выгрузки", user_meta, font_name, styles, bg="#111827"))
+        story.append(_hero_block(f"{user_data['display_name']}", t('Карточка пользователя внутри общей выгрузки'), user_meta, font_name, styles, bg="#111827"))
         story.append(Spacer(1, 0.18 * cm))
         story.append(_kpi_cards([
-            {"label": "Баланс", "value": _fmt_dec(user.balance), "foot": "монет на счёте", "accent": "#2563EB", "bg": "#EFF6FF"},
-            {"label": "Уровень / XP", "value": f"{user.level} / {user.xp}", "foot": user_data['profile']['activity_segment'], "accent": "#8B5CF6", "bg": "#F5F3FF"},
-            {"label": "Потрачено Stars", "value": _fmt_dec(user_data['payments']['stars_total']), "foot": f"оплат: {user_data['payments']['count']}", "accent": "#F59E0B", "bg": "#FFFBEB"},
-            {"label": "Контент", "value": str(content['videos'] + content['photos']), "foot": f"одобрено: {_fmt_pct(content['approval_rate_pct'])}", "accent": "#10B981", "bg": "#ECFDF5"},
-            {"label": "Секслото", "value": str(lottery['tickets_total']), "foot": f"ROI: {_fmt_pct(lottery['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
-            {"label": "Рефералы", "value": str(referrals['total']), "foot": f"активных: {referrals['active']}", "accent": "#14B8A6", "bg": "#F0FDFA"},
+            {"label": t('Баланс'), "value": _fmt_dec(user.balance), "foot": t('монет на счёте'), "accent": "#2563EB", "bg": "#EFF6FF"},
+            {"label": t('Уровень / XP'), "value": f"{user.level} / {user.xp}", "foot": user_data['profile']['activity_segment'], "accent": "#8B5CF6", "bg": "#F5F3FF"},
+            {"label": t('Потрачено Stars'), "value": _fmt_dec(user_data['payments']['stars_total']), "foot": t('оплат: {arg0}', arg0=user_data['payments']['count']), "accent": "#F59E0B", "bg": "#FFFBEB"},
+            {"label": t('Контент'), "value": str(content['videos'] + content['photos']), "foot": t('одобрено: {arg0}', arg0=_fmt_pct(content['approval_rate_pct'])), "accent": "#10B981", "bg": "#ECFDF5"},
+            {"label": t('Секслото'), "value": str(lottery['tickets_total']), "foot": f"ROI: {_fmt_pct(lottery['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
+            {"label": t('Рефералы'), "value": str(referrals['total']), "foot": t('активных: {arg0}', arg0=referrals['active']), "accent": "#14B8A6", "bg": "#F0FDFA"},
         ], font_name, styles, columns=3))
         story.append(Spacer(1, 0.18 * cm))
-        story.append(_section_banner(f"2.{idx}. Профиль и сводка", font_name, bg="#1E293B"))
+        story.append(_section_banner(t('2.{idx}. Профиль и сводка', idx=idx), font_name, bg="#1E293B"))
         story.append(Spacer(1, 0.1 * cm))
         story.append(_table(_user_summary_table(user_data), font_name, col_widths=[5 * cm, 10.5 * cm]))
         story.append(Spacer(1, 0.15 * cm))
 
         details_table = [
-            ["Блок", "Метрика", "Значение"],
-            ["Платежи", "Успешных оплат", str(user_data["payments"]["count"])],
-            ["Платежи", "Потрачено Stars", _fmt_dec(user_data["payments"]["stars_total"])],
-            ["Экономика", "Чистый итог за 30 дней", _fmt_dec(economy_30["net"] if economy_30 else 0)],
-            ["Экономика", "Чистый итог за всё время", _fmt_dec(economy_all["net"] if economy_all else 0)],
-            ["Контент", "Загружено", str(content["videos"] + content["photos"])],
-            ["Контент", "Одобрение", _fmt_pct(content["approval_rate_pct"])],
-            ["Контент", "Просмотры", str(content["own_views"])],
-            ["Секслото", "Билетов", str(lottery["tickets_total"])],
-            ["Секслото", "Частота выигрыша", _fmt_pct(lottery["win_rate_pct"])],
-            ["Рефералы", "Приглашено", str(referrals["total"])],
-            ["Рефералы", "Активных", str(referrals["active"])],
-            ["ИИ", "Чатов", str(ai["chat_count"])],
-            ["ИИ", "Сообщений пользователя", str(ai["user_messages"])],
+            [t('Блок'), t('Метрика'), t('Значение')],
+            [t('Платежи'), t('Успешных оплат'), str(user_data["payments"]["count"])],
+            [t('Платежи'), t('Потрачено Stars'), _fmt_dec(user_data["payments"]["stars_total"])],
+            [t('Экономика'), t('Чистый итог за 30 дней'), _fmt_dec(economy_30["net"] if economy_30 else 0)],
+            [t('Экономика'), t('Чистый итог за всё время'), _fmt_dec(economy_all["net"] if economy_all else 0)],
+            [t('Контент'), t('Загружено'), str(content["videos"] + content["photos"])],
+            [t('Контент'), t('Одобрение'), _fmt_pct(content["approval_rate_pct"])],
+            [t('Контент'), t('Просмотры'), str(content["own_views"])],
+            [t('Секслото'), t('Билетов'), str(lottery["tickets_total"])],
+            [t('Секслото'), t('Частота выигрыша'), _fmt_pct(lottery["win_rate_pct"])],
+            [t('Рефералы'), t('Приглашено'), str(referrals["total"])],
+            [t('Рефералы'), t('Активных'), str(referrals["active"])],
+            [t('ИИ'), t('Чатов'), str(ai["chat_count"])],
+            [t('ИИ'), t('Сообщений пользователя'), str(ai["user_messages"])],
         ]
         story.append(_table(details_table, font_name, col_widths=[3.2 * cm, 6 * cm, 6.3 * cm]))
         story.append(Spacer(1, 0.15 * cm))
-        story.append(_section_banner("Ключевые выводы", font_name, bg="#334155"))
+        story.append(_section_banner(t('Ключевые выводы'), font_name, bg="#334155"))
         story.append(Spacer(1, 0.1 * cm))
-        story.append(_bullet(f"Профиль поведения: <b>{user_data['insights']['dominant']}</b>", styles))
+        story.append(_bullet(t('Профиль поведения: <b>{arg0}</b>', arg0=user_data['insights']['dominant']), styles))
         story.append(_bullet(user_data['insights']['balance_comment'], styles))
         story.append(_bullet(user_data['insights']['content_comment'], styles))
         story.append(_bullet(user_data['insights']['lottery_comment'], styles))
         story.append(_bullet(user_data['insights']['purchase_comment'], styles))
         if comparison:
-            story.append(_bullet(f"Сильнее всего выделяется по метрике: <b>{comparison.get('strongest', '—')}</b>", styles))
-            story.append(_bullet(f"Слабее всего выглядит метрика: <b>{comparison.get('weakest', '—')}</b>", styles))
+            story.append(_bullet(t('Сильнее всего выделяется по метрике: <b>{arg0}</b>', arg0=comparison.get('strongest', '—')), styles))
+            story.append(_bullet(t('Слабее всего выглядит метрика: <b>{arg0}</b>', arg0=comparison.get('weakest', '—')), styles))
 
     doc = SimpleDocTemplate(str(output_path), pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.2 * cm, bottomMargin=1.4 * cm)
-    footer = lambda canvas, doc: _report_footer(canvas, doc, title="Отчёт по всем пользователям", generated_at=data["generated_at"], font_name=font_name)
+    footer = lambda canvas, doc: _report_footer(canvas, doc, title=t('Отчёт по всем пользователям'), generated_at=data["generated_at"], font_name=font_name)
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
 

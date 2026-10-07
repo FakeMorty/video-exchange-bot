@@ -11,6 +11,7 @@ from datetime import timedelta
 from decimal import Decimal
 from html import escape
 
+from app.i18n import current_language, t
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -31,20 +32,12 @@ def arcade_webapp_url() -> str:
     """Публичный URL Mini App (как у Live-трансляции Секслото)."""
     from app.config import WEBHOOK_BASE
     base = (WEBHOOK_BASE or "").rstrip("/")
-    return f"{base}/arcade" if base else ""
+    return f"{base}/arcade?lang={current_language()}" if base else ""
 
 
 def _menu_text(cfg) -> str:
     return (
-        "🚀 <b>Космическая Аркада</b>\n\n"
-        "Отбивай волны инопланетного флота 👾 в настоящей аркаде (Mini App) "
-        "и наращивай множитель ставки!\n\n"
-        "🔫 Каждая уничтоженная волна — множитель растёт.\n"
-        "☠️ Рано или поздно флот прорвётся — ставка сгорит.\n"
-        "💰 Забирай выигрыш, пока не поздно!\n\n"
-        f"💵 Ставка: от <b>{_fmt(cfg.min_bet)}</b> до <b>{_fmt(cfg.max_bet)}</b> монет\n"
-        f"📈 Макс. множитель: <b>x{_fmt(cfg.max_multiplier)}</b>\n"
-        f"🛡 Дневной кап чистой прибыли: <b>{_fmt(cfg.daily_profit_cap)}</b> монет"
+        t('🚀 <b>Космическая Аркада</b>\n\nОтбивай волны инопланетного флота 👾 в настоящей аркаде (Mini App) и наращивай множитель ставки!\n\n🔫 Каждая уничтоженная волна — множитель растёт.\n☠️ Рано или поздно флот прорвётся — ставка сгорит.\n💰 Забирай выигрыш, пока не поздно!\n\n💵 Ставка: от <b>{arg0}</b> до <b>{arg1}</b> монет\n📈 Макс. множитель: <b>x{arg2}</b>\n🛡 Дневной кап чистой прибыли: <b>{arg3}</b> монет', arg0=_fmt(cfg.min_bet), arg1=_fmt(cfg.max_bet), arg2=_fmt(cfg.max_multiplier), arg3=_fmt(cfg.daily_profit_cap))
     )
 
 
@@ -53,13 +46,13 @@ def _menu_keyboard(cfg) -> InlineKeyboardMarkup:
     url = arcade_webapp_url()
     if url:
         from aiogram.types.web_app_info import WebAppInfo
-        buttons.append([InlineKeyboardButton(text="🎮 Играть (Mini App)", web_app=WebAppInfo(url=url))])
+        buttons.append([InlineKeyboardButton(text=t('🎮 Играть (Mini App)'), web_app=WebAppInfo(url=url))])
     else:
-        buttons.append([InlineKeyboardButton(text="🎮 Как открыть игру", callback_data="arcade_howto")])
+        buttons.append([InlineKeyboardButton(text=t('🎮 Как открыть игру'), callback_data="arcade_howto")])
     buttons.extend([
-        [InlineKeyboardButton(text="🏆 Топ аркады", callback_data="arcade_top")],
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data="arcade_menu")],
-        [InlineKeyboardButton(text="◀️ Игровой центр", callback_data="arcade_to_games")],
+        [InlineKeyboardButton(text=t('🏆 Топ аркады'), callback_data="arcade_top")],
+        [InlineKeyboardButton(text=t('🔄 Обновить'), callback_data="arcade_menu")],
+        [InlineKeyboardButton(text=t('◀️ Игровой центр'), callback_data="arcade_to_games")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -74,11 +67,11 @@ async def arcade_menu(callback: CallbackQuery, state: FSMContext):
     async with async_session() as session:
         cfg = await load_arcade_config(session)
         if not cfg.enabled:
-            await callback.answer("⛔ Аркада временно отключена.", show_alert=True)
+            await callback.answer(t('⛔ Аркада временно отключена.'), show_alert=True)
             return
         user = await get_user(session, callback.from_user.id)
         if user and not has_valid_nickname(user):
-            await callback.answer("⚠️ Сначала установи нормальный ник в Профиле!", show_alert=True)
+            await callback.answer(t('⚠️ Сначала установи нормальный ник в Профиле!'), show_alert=True)
             return
     try:
         await callback.message.edit_text(
@@ -94,12 +87,7 @@ async def arcade_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "arcade_howto")
 async def arcade_howto(callback: CallbackQuery):
     text = (
-        "🎮 <b>Как открыть Космическую аркаду</b>\n\n"
-        "Игра открывается как Telegram Mini App по прямой ссылке:\n"
-        f"<code>/arcade</code> на сервере бота.\n\n"
-        "⚠️ Сейчас публичный адрес не настроен: задайте переменную окружения "
-        "<code>WEBHOOK_BASE</code> (например <code>https://mybot.example.com</code>), "
-        "и кнопка «Играть» появится автоматически."
+        t('🎮 <b>Как открыть Космическую аркаду</b>\n\nИгра открывается как Telegram Mini App по прямой ссылке:\n<code>/arcade</code> на сервере бота.\n\n⚠️ Сейчас публичный адрес не настроен: задайте переменную окружения <code>WEBHOOK_BASE</code> (например <code>https://mybot.example.com</code>), и кнопка «Играть» появится автоматически.')
     )
     try:
         await callback.message.edit_text(text, parse_mode="HTML")
@@ -112,7 +100,7 @@ async def arcade_howto(callback: CallbackQuery):
 async def arcade_to_games(callback: CallbackQuery):
     from app.keyboards import games_menu_keyboard
     await callback.message.answer(
-        "🎮 <b>Игровой центр</b>\n\nВыбери раздел:",
+        t('🎮 <b>Игровой центр</b>\n\nВыбери раздел:'),
         parse_mode="HTML",
         reply_markup=games_menu_keyboard(),
     )
@@ -147,19 +135,19 @@ async def arcade_top(callback: CallbackQuery):
         )).all()
 
     if not rows:
-        text = "🏆 <b>Топ аркады (7 дней)</b>\n\nПока никто не вышел в плюс — будь первым! 🚀"
+        text = t('🏆 <b>Топ аркады (7 дней)</b>\n\nПока никто не вышел в плюс — будь первым! 🚀')
     else:
         medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-        lines = ["🏆 <b>Топ аркады (7 дней)</b>\n"]
+        lines = [t('🏆 <b>Топ аркады (7 дней)</b>\n')]
         for i, (name, net, games) in enumerate(rows):
             medal = medals.get(i, f"{i + 1}.")
             lines.append(
-                f"{medal} <b>{escape(name or 'Игрок')}</b> — +{_fmt(Decimal(net))} монет ({games} заб.)"
+                t('{medal} <b>{arg1}</b> — +{arg2} монет ({games} заб.)', medal=medal, arg1=escape(name or t('Игрок')), arg2=_fmt(Decimal(net)), games=games)
             )
         text = "\n".join(lines)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Меню аркады", callback_data="arcade_menu")],
+        [InlineKeyboardButton(text=t('◀️ Меню аркады'), callback_data="arcade_menu")],
     ])
     try:
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)

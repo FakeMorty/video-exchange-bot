@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select, func, desc, update, delete, or_, and_, Text
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.i18n import t
 from app.logger import get_logger, log_error
 from app.models import (
     utc_now,
@@ -145,25 +146,25 @@ def classify_offer_url(target_url: str) -> dict:
     if first_segment.startswith("+") or first_segment == "joinchat":
         return {
             "kind": "invite",
-            "label": "Группа / чат / приватный инвайт",
+            "label": t('Группа / чат / приватный инвайт'),
             "auto_verify": False,
-            "cta": "🚀 Открыть проект",
-            "claim_text": "✅ Получить награду",
+            "cta": t('🚀 Открыть проект'),
+            "claim_text": t('✅ Получить награду'),
         }
     if first_segment.endswith("bot") or "start=" in lowered or "startapp=" in lowered:
         return {
             "kind": "bot",
-            "label": "Telegram-бот",
+            "label": t('Telegram-бот'),
             "auto_verify": False,
-            "cta": "🤖 Открыть бота",
-            "claim_text": "✅ Я выполнил условие",
+            "cta": t('🤖 Открыть бота'),
+            "claim_text": t('✅ Я выполнил условие'),
         }
     return {
         "kind": "channel_like",
-        "label": "Канал / группа / чат",
+        "label": t('Канал / группа / чат'),
         "auto_verify": True,
-        "cta": "📢 Открыть проект",
-        "claim_text": "✅ Проверить подписку",
+        "cta": t('📢 Открыть проект'),
+        "claim_text": t('✅ Проверить подписку'),
     }
 
 
@@ -215,10 +216,10 @@ def _roll_lootbox_reward_coins(pity_counter: int = 0, kind: str = "common") -> t
 
 async def open_lootbox_for_coins(session: AsyncSession, user_id: int, kind: str = "common") -> tuple[Decimal, str, int] | tuple[None, str, int]:
     if not ENABLE_LOOTBOXES:
-        return None, "Лутбоксы временно отключены.", 0
+        return None, t('Лутбоксы временно отключены.'), 0
     user = await get_user_by_id(session, user_id)
     if not user:
-        return None, "Пользователь не найден.", 0
+        return None, t('Пользователь не найден.'), 0
 
     prices = {
         "common": to_decimal(LOOTBOX_COIN_PRICE),
@@ -235,10 +236,10 @@ async def open_lootbox_for_coins(session: AsyncSession, user_id: int, kind: str 
     req_level = levels.get(kind, 1)
     
     if user.level < req_level:
-        return None, f"Требуется уровень {req_level}.", 0
+        return None, t('Требуется уровень {req_level}.', req_level=req_level), 0
 
     if user.balance < price:
-        return None, "Недостаточно монет.", 0
+        return None, t('Недостаточно монет.'), 0
 
     # Using separate pity per case type could be done, but let's stick to one for simplicity 
     # or just use the common one. User might prefer it reset on any non-common win.
@@ -276,17 +277,17 @@ async def open_lootbox_for_stars(
     Idempotent by payload.
     """
     if not ENABLE_LOOTBOXES:
-        return None, "Лутбоксы временно отключены.", 0
+        return None, t('Лутбоксы временно отключены.'), 0
 
     user = await get_user(session, telegram_user_id)
     if not user:
-        return None, "Пользователь не найден.", 0
+        return None, t('Пользователь не найден.'), 0
 
     existing = (await session.execute(
         select(LootboxOpen).where(LootboxOpen.payment_payload == payment_payload)
     )).scalar_one_or_none()
     if existing:
-        return None, "Этот платёж уже обработан.", 0
+        return None, t('Этот платёж уже обработан.'), 0
 
     reward, rarity, new_pity = _roll_lootbox_reward_coins(user.lootbox_pity_counter)
     user.lootbox_pity_counter = new_pity
@@ -329,17 +330,17 @@ async def open_styles_lootbox(
     remaining_styles = total_styles - len(excluded_style_ids)
     
     if remaining_styles < 1:
-        return None, "Нельзя исключить все стили!", Decimal("0")
+        return None, t('Нельзя исключить все стили!'), Decimal("0")
         
     base_price = Decimal("250")
     price = (base_price * Decimal(total_styles) / Decimal(remaining_styles)).quantize(Decimal("1"), rounding=ROUND_DOWN)
     
     user = await get_user_by_id(session, user_id)
     if not user:
-        return None, "Пользователь не найден.", price
+        return None, t('Пользователь не найден.'), price
         
     if user.balance < price:
-        return None, f"Недостаточно монет. Нужно {price:.0f}.", price
+        return None, t('Недостаточно монет. Нужно {price:.0f}.', price=price), price
         
     await change_balance_atomic(session, user.id, -price, "styles_lootbox_buy", details=f"excl={len(excluded_style_ids)}")
     
@@ -415,19 +416,19 @@ def validate_nickname_format(name: str) -> tuple[bool, str]:
 
     name = (name or "").strip()
     if len(name) < NICKNAME_MIN_LENGTH:
-        return False, f"Ник слишком короткий. Минимум {NICKNAME_MIN_LENGTH} символов."
+        return False, t('Ник слишком короткий. Минимум {NICKNAME_MIN_LENGTH} символов.', NICKNAME_MIN_LENGTH=NICKNAME_MIN_LENGTH)
     if len(name) > NICKNAME_MAX_LENGTH:
-        return False, f"Ник слишком длинный. Максимум {NICKNAME_MAX_LENGTH} символов."
-    if not re.fullmatch(r"[a-zA-Zа-яА-ЯёЁ0-9_\-]+", name):
-        return False, "Ник может содержать только буквы (рус/лат), цифры, _ и -. Без точек, пробелов, ? и спецсимволов."
+        return False, t('Ник слишком длинный. Максимум {NICKNAME_MAX_LENGTH} символов.', NICKNAME_MAX_LENGTH=NICKNAME_MAX_LENGTH)
+    if not re.fullmatch(r"[a-zA-Zа-яА-ЯёЁ0-9_\\-]+", name):
+        return False, t('Ник может содержать только буквы (рус/лат), цифры, _ и -. Без точек, пробелов, ? и спецсимволов.')
     if re.fullmatch(r"[\d_\-]+", name):
-        return False, "Ник не может состоять только из цифр, _ или -. Добавьте буквы."
+        return False, t('Ник не может состоять только из цифр, _ или -. Добавьте буквы.')
     if is_placeholder_nickname(name):
-        return False, "Ник вида User&lt;id&gt; запрещён. Придумайте нормальный ник."
+        return False, t('Ник вида User&lt;id&gt; запрещён. Придумайте нормальный ник.')
     # Запрет слишком «мусорных» ников из 1-2 уникальных символов типа aaaa / ____ / ----
     unique_chars = set(name.lower().replace("_", "").replace("-", ""))
     if len(unique_chars) < 2 and len(name) >= NICKNAME_MIN_LENGTH:
-        return False, "Ник слишком простой. Используй хотя бы 2 разные буквы/цифры."
+        return False, t('Ник слишком простой. Используй хотя бы 2 разные буквы/цифры.')
     return True, ""
 
 
@@ -746,11 +747,11 @@ async def set_display_name(session: AsyncSession, user: "User", name: str,
 
     # Дополнительно: нельзя поставить ник = свой tg id
     if is_placeholder_nickname(name, user.telegram_id):
-        return False, "Ник вида User&lt;id&gt; или равный Telegram ID запрещён. Придумайте нормальный ник."
+        return False, t('Ник вида User&lt;id&gt; или равный Telegram ID запрещён. Придумайте нормальный ник.')
 
     existing = await get_user_by_display_name(session, name)
     if existing and existing.id != user.id:
-        return False, "Этот ник уже занят."
+        return False, t('Этот ник уже занят.')
 
     # Первая установка ИЛИ принудительная замена «битого»/placeholder-ника — бесплатно
     current_invalid = not has_valid_nickname(user)
@@ -758,7 +759,7 @@ async def set_display_name(session: AsyncSession, user: "User", name: str,
     if not is_first and not admin_free:
         cost = to_decimal(NICKNAME_CHANGE_COST)
         if user.balance < cost:
-            return False, f"Недостаточно монет. Нужно: {cost}, у тебя: {user.balance}"
+            return False, t('Недостаточно монет. Нужно: {cost}, у тебя: {balance}', cost=cost, balance=user.balance)
         await change_balance_atomic(session, user.id, -cost, "nickname_change",
                                     details=f"{user.display_name} -> {name}")
 
@@ -769,11 +770,11 @@ async def set_display_name(session: AsyncSession, user: "User", name: str,
     await log_user_action(session, user.id, "set_nickname", f"{old_name} -> {name}")
     if is_first:
         if current_invalid and old_name:
-            return True, f"Ник <b>{name}</b> установлен бесплатно! (старый ник был недопустимым)"
-        return True, f"Ник <b>{name}</b> установлен бесплатно!"
+            return True, t('Ник <b>{name}</b> установлен бесплатно! (старый ник был недопустимым)', name=name)
+        return True, t('Ник <b>{name}</b> установлен бесплатно!', name=name)
     if admin_free:
-        return True, f"Ник изменён на <b>{name}</b>! 🆓 <b>ADMIN FREE — бесплатно!</b>"
-    return True, f"Ник изменён на <b>{name}</b>! Списано {NICKNAME_CHANGE_COST} монет."
+        return True, t('Ник изменён на <b>{name}</b>! 🆓 <b>ADMIN FREE — бесплатно!</b>', name=name)
+    return True, t('Ник изменён на <b>{name}</b>! Списано {NICKNAME_CHANGE_COST} монет.', name=name, NICKNAME_CHANGE_COST=NICKNAME_CHANGE_COST)
 
 
 # ============================
@@ -977,7 +978,7 @@ async def reject_video(
     v.status = "rejected"
     full_reason = reason.strip()
     if admin_comment:
-        full_reason = f"{full_reason}. Комментарий модератора: {admin_comment.strip()}"
+        full_reason = t('{full_reason}. Комментарий модератора: {arg1}', full_reason=full_reason, arg1=admin_comment.strip())
     v.rejection_reason = full_reason
     await session.commit()
     await log_user_action(
@@ -1225,9 +1226,9 @@ async def rate_video(session: AsyncSession, user_id: int, video_id: int, rating:
     """
     video = await get_video_by_id(session, video_id)
     if not video:
-        return False, False, "Видео не найдено."
+        return False, False, t('Видео не найдено.')
     if video.uploader_user_id == user_id:
-        return False, False, "Нельзя оценивать собственный контент."
+        return False, False, t('Нельзя оценивать собственный контент.')
 
     existing = (await session.execute(
         select(VideoRating).where(
@@ -1269,26 +1270,26 @@ async def adjust_balance_by_admin(
     try:
         amount = Decimal(str(amount)).quantize(Decimal("0.01"))
     except Exception as exc:
-        raise AdminBalanceError("Некорректная сумма.") from exc
+        raise AdminBalanceError(t('Некорректная сумма.')) from exc
     if not amount.is_finite() or amount == 0:
-        raise AdminBalanceError("Сумма должна быть ненулевым числом.")
+        raise AdminBalanceError(t('Сумма должна быть ненулевым числом.'))
     if abs(amount) > Decimal("99999999.99"):
-        raise AdminBalanceError("Сумма слишком большая.")
+        raise AdminBalanceError(t('Сумма слишком большая.'))
 
     user = (await session.execute(
         select(User).where(User.id == user_id).with_for_update()
     )).scalar_one_or_none()
     if not user:
-        raise AdminBalanceError("Пользователь не найден.")
+        raise AdminBalanceError(t('Пользователь не найден.'))
 
     before = Decimal(user.balance or 0)
     after = before + amount
     if after < 0:
         raise AdminBalanceError(
-            f"Нельзя списать {abs(amount)}: на балансе только {before} монет."
+            t('Нельзя списать {arg0}: на балансе только {before} монет.', arg0=abs(amount), before=before)
         )
     if after > Decimal("99999999.99"):
-        raise AdminBalanceError("Итоговый баланс превышает допустимый лимит.")
+        raise AdminBalanceError(t('Итоговый баланс превышает допустимый лимит.'))
 
     user.balance = after
     session.add(BalanceLog(
@@ -1337,12 +1338,12 @@ async def set_user_ban_status(session: AsyncSession, user_id: int, is_banned: bo
 async def claim_daily_bonus(session: AsyncSession, user_id: int) -> tuple[bool, str]:
     user = await get_user_by_id(session, user_id)
     if not user:
-        return False, "Пользователь не найден."
+        return False, t('Пользователь не найден.')
     result = await auto_daily_return_bonus(session, user)
     if result is None:
-        return False, "Бонус за сегодня уже получен или отключён."
+        return False, t('Бонус за сегодня уже получен или отключён.')
     reward, streak = result
-    return True, f"Ежедневный бонус: +{reward:.0f} монет! Дней подряд: {streak}"
+    return True, t('Ежедневный бонус: +{reward:.0f} монет! Дней подряд: {streak}', reward=reward, streak=streak)
 
 
 # ============================
@@ -1448,10 +1449,7 @@ async def maybe_send_zalip_upsell(session: AsyncSession, bot, user: "User", *,
         return False
     starter = (await get_shop_star_packages(session)).get(STARTER_PACK_KEY) or {}
     text = (
-        "🔥 <b>Залип? Тогда тебе сюда.</b>\n\n"
-        f"Специально для первого платежа — старт-пак: <b>{starter.get('coins', '?')} монет "
-        f"всего за {starter.get('stars', '?')} Stars</b>. Доступен один раз!\n\n"
-        "Пополни баланс и смотри дальше без остановок. 💸"
+        t('🔥 <b>Залип? Тогда тебе сюда.</b>\n\nСпециально для первого платежа — старт-пак: <b>{arg0} монет всего за {arg1} Stars</b>. Доступен один раз!\n\nПополни баланс и смотри дальше без остановок. 💸', arg0=starter.get('coins', '?'), arg1=starter.get('stars', '?'))
     )
     try:
         await bot.send_message(user.telegram_id, text, parse_mode="HTML", reply_markup=reply_markup)
@@ -1834,7 +1832,7 @@ async def moderate_offer(
         "is_active": bool(approve),
         "reviewed_at": now,
         "reviewed_by_telegram_id": admin_telegram_id,
-        "rejection_reason": None if approve else (reason or "Не прошёл модерацию")[:1000],
+        "rejection_reason": None if approve else (reason or t('Не прошёл модерацию'))[:1000],
     }
     if approve:
         values["approved_at"] = now
@@ -2065,12 +2063,12 @@ async def admin_create_offer(session: AsyncSession, title: str, description: str
                              admin_telegram_id: int | None = None) -> "Offer":
     normalized_url = normalize_telegram_url(channel_url)
     if not normalized_url:
-        raise ValueError("Некорректная ссылка Telegram")
+        raise ValueError(t('Некорректная ссылка Telegram'))
     # Штраф за отписку не должен превышать итоговую награду:
     # иначе пользователя штрафуют больше, чем он мог заработать.
     if to_decimal(penalty_unsubscribe) > to_decimal(reward_final):
         raise ValueError(
-            "Штраф за отписку не может превышать итоговую награду за оффер."
+            t('Штраф за отписку не может превышать итоговую награду за оффер.')
         )
     now = utc_now()
     offer = Offer(
@@ -2402,7 +2400,7 @@ async def get_user_dossier(session: AsyncSession, user_id: int) -> dict | None:
     )).scalar_one() or Decimal("0")
     is_super_admin = user.telegram_id in ADMINS
     is_admin = is_super_admin or bool(user.is_admin)
-    role_label = "Супер-админ" if is_super_admin else ("Админ" if is_admin else "Обычный пользователь")
+    role_label = t('Супер-админ') if is_super_admin else (t('Админ') if is_admin else t('Обычный пользователь'))
     return {
         "user": user, "games_count": games_count,
         "game_profit": game_profit, "suspicious_games": suspicious_games,
@@ -2506,14 +2504,14 @@ async def create_promocode(
     """
     user = await get_user(session, creator_tg_id)
     if not user:
-        return None, 0, "Пользователь не найден."
+        return None, 0, t('Пользователь не найден.')
 
     if coin_amount <= 0 or coin_amount > PROMOCODE_MAX_AMOUNT:
-        return None, 0, f"Сумма от 1 до {PROMOCODE_MAX_AMOUNT} монет."
+        return None, 0, t('Сумма от 1 до {PROMOCODE_MAX_AMOUNT} монет.', PROMOCODE_MAX_AMOUNT=PROMOCODE_MAX_AMOUNT)
     if max_uses < 1 or max_uses > PROMOCODE_MAX_USES:
-        return None, 0, f"Использований от 1 до {PROMOCODE_MAX_USES}."
+        return None, 0, t('Использований от 1 до {PROMOCODE_MAX_USES}.', PROMOCODE_MAX_USES=PROMOCODE_MAX_USES)
     if hours < 1 or hours > PROMOCODE_MAX_HOURS:
-        return None, 0, f"Срок от 1 до {PROMOCODE_MAX_HOURS} часов."
+        return None, 0, t('Срок от 1 до {PROMOCODE_MAX_HOURS} часов.', PROMOCODE_MAX_HOURS=PROMOCODE_MAX_HOURS)
 
     star_cost = await calculate_promocode_star_cost(session, coin_amount, max_uses)
 
@@ -2570,21 +2568,21 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
     """Активация промокода. Возвращает сообщение."""
     user = await get_user_by_id(session, user_id)
     if not user:
-        return "Пользователь не найден."
+        return t('Пользователь не найден.')
     promo = (await session.execute(
         select(Promocode).where(Promocode.code == code.upper().strip())
     )).scalar_one_or_none()
     if not promo:
-        return "Промокод не найден."
+        return t('Промокод не найден.')
     if not promo.is_active:
-        return "Промокод отключён."
+        return t('Промокод отключён.')
     if promo.expires_at and promo.expires_at < utc_now():
-        return "Промокод истёк."
+        return t('Промокод истёк.')
     if promo.used_count >= promo.max_uses:
-        return "Лимит использований исчерпан."
+        return t('Лимит использований исчерпан.')
     # Запрет создателю активировать собственный промокод
     if promo.creator_user_id == user_id:
-        return "❌ Нельзя активировать собственный промокод."
+        return t('❌ Нельзя активировать собственный промокод.')
     # Проверка на повторную активацию
     already = (await session.execute(
         select(PromocodeActivation).where(
@@ -2593,7 +2591,7 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         )
     )).scalar_one_or_none()
     if already:
-        return "Этот промокод уже активирован."
+        return t('Этот промокод уже активирован.')
 
     from sqlalchemy import case
     from sqlalchemy.exc import IntegrityError
@@ -2615,7 +2613,7 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         )
     )
     if upd_res.rowcount == 0:
-        return "Лимит использований исчерпан."
+        return t('Лимит использований исчерпан.')
 
     # Начисление
     amount = promo.coin_amount
@@ -2638,8 +2636,8 @@ async def activate_promocode(session: AsyncSession, user_id: int, code: str) -> 
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        return "Этот промокод уже активирован."
-    return f"✅ Промокод активирован! Начислено {amount} монет."
+        return t('Этот промокод уже активирован.')
+    return t('✅ Промокод активирован! Начислено {amount} монет.', amount=amount)
 
 
 async def create_feedback(
@@ -2783,25 +2781,25 @@ async def buy_lottery_tickets(
     round_obj = await ensure_current_lottery_round(session)
     now = utc_now()
     if round_obj.status != "open" or now >= round_obj.draw_starts_at:
-        return [], Decimal("0"), "Продажа билетов закрыта до следующего розыгрыша."
+        return [], Decimal("0"), t('Продажа билетов закрыта до следующего розыгрыша.')
 
     try:
         quantity = int(quantity)
     except Exception:
-        return [], Decimal("0"), "Количество билетов должно быть числом."
+        return [], Decimal("0"), t('Количество билетов должно быть числом.')
 
     if quantity < 1:
-        return [], Decimal("0"), "Количество билетов должно быть больше нуля."
+        return [], Decimal("0"), t('Количество билетов должно быть больше нуля.')
 
     if quantity > LOTTERY_MAX_TICKETS_PER_PURCHASE:
-        return [], Decimal("0"), f"За один раз можно купить не больше {LOTTERY_MAX_TICKETS_PER_PURCHASE} билетов."
+        return [], Decimal("0"), t('За один раз можно купить не больше {LOTTERY_MAX_TICKETS_PER_PURCHASE} билетов.', LOTTERY_MAX_TICKETS_PER_PURCHASE=LOTTERY_MAX_TICKETS_PER_PURCHASE)
 
     price = to_decimal(round_obj.ticket_price)
     max_affordable = get_lottery_max_tickets_for_balance(user.balance, price)
     if not is_admin_free and quantity > max_affordable:
         if max_affordable <= 0:
-            return [], Decimal("0"), f"Недостаточно монет. Билет стоит {price}."
-        return [], Decimal("0"), f"Недостаточно монет. Сейчас максимум: {max_affordable} билетов."
+            return [], Decimal("0"), t('Недостаточно монет. Билет стоит {price}.', price=price)
+        return [], Decimal("0"), t('Недостаточно монет. Сейчас максимум: {max_affordable} билетов.', max_affordable=max_affordable)
 
     total_cost = price * quantity
     tickets: list[LotteryTicket] = []
@@ -3862,24 +3860,24 @@ async def flush_mod_notifications(bot, session: AsyncSession) -> int:
         by_kind[n.kind] = by_kind.get(n.kind, 0) + n.count
 
     kind_labels = {
-        "video": "📹 Видео/фото на модерации",
-        "offer": "📢 Офферы на модерации",
-        "report": "🚨 Жалобы на контент",
+        "video": t('📹 Видео/фото на модерации'),
+        "offer": t('📢 Офферы на модерации'),
+        "report": t('🚨 Жалобы на контент'),
     }
 
-    lines = ["🔔 <b>Модерация: сводка</b>\n"]
+    lines = [t('🔔 <b>Модерация: сводка</b>\n')]
     for kind, count in by_kind.items():
         label = kind_labels.get(kind, kind)
         lines.append(f"  {label}: <b>{count}</b>")
 
-    lines.append("\n/admin — панель модерации")
+    lines.append(t('\n/admin — панель модерации'))
     text = "\n".join(lines)
 
     reply_markup = None
     if "report" in by_kind:
         from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
         reply_markup = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🚨 Открыть жалобы", callback_data="admin_reports")
+            InlineKeyboardButton(text=t('🚨 Открыть жалобы'), callback_data="admin_reports")
         ]])
 
     sent = 0
@@ -3926,7 +3924,7 @@ async def submit_admin_poll_response(
     *,
     answer_text: str | None = None,
     option_indexes: list[int] | None = None,
-) -> tuple[AdminPoll | None, Decimal | None, str | None]:
+) -> tuple[AdminPoll | None, Decimal | None, str | None, str | None]:
     """Сохраняет ответ на активный опрос и один раз начисляет его награду.
 
     Уникальность пары ``poll_id/user_id`` дополнительно защищается ограничением
@@ -3937,7 +3935,7 @@ async def submit_admin_poll_response(
         select(AdminPoll).where(AdminPoll.id == poll_id, AdminPoll.is_active == True)
     )
     if not poll:
-        return None, None, "Опрос уже завершён или недоступен."
+        return None, None, t('Опрос уже завершён или недоступен.'), "closed"
 
     exists = await session.scalar(
         select(AdminPollResponse.id).where(
@@ -3946,7 +3944,7 @@ async def submit_admin_poll_response(
         )
     )
     if exists:
-        return poll, None, "Вы уже прошли этот опрос."
+        return poll, None, t('Вы уже прошли этот опрос.'), "already"
 
     try:
         options = json.loads(poll.options_json or "[]")
@@ -3958,19 +3956,19 @@ async def submit_admin_poll_response(
     if poll.poll_type == "text":
         normalized_text = (answer_text or "").strip()
         if not normalized_text:
-            return poll, None, "Ответ не может быть пустым."
+            return poll, None, t('Ответ не может быть пустым.'), "invalid"
         if len(normalized_text) > 1000:
-            return poll, None, "Ответ слишком длинный: максимум 1000 символов."
+            return poll, None, t('Ответ слишком длинный: максимум 1000 символов.'), "invalid"
     elif poll.poll_type in {"single", "multiple"}:
         normalized_indexes = sorted({int(idx) for idx in (option_indexes or [])})
         if not normalized_indexes:
-            return poll, None, "Выберите хотя бы один вариант."
+            return poll, None, t('Выберите хотя бы один вариант.'), "invalid"
         if poll.poll_type == "single" and len(normalized_indexes) != 1:
-            return poll, None, "Для этого опроса можно выбрать только один вариант."
+            return poll, None, t('Для этого опроса можно выбрать только один вариант.'), "invalid"
         if any(idx < 0 or idx >= len(options) for idx in normalized_indexes):
-            return poll, None, "Выбран недопустимый вариант ответа."
+            return poll, None, t('Выбран недопустимый вариант ответа.'), "invalid"
     else:
-        return poll, None, "Неизвестный тип опроса."
+        return poll, None, t('Неизвестный тип опроса.'), "invalid"
 
     response = AdminPollResponse(
         poll_id=poll.id,
@@ -3984,7 +3982,7 @@ async def submit_admin_poll_response(
         await session.flush()
     except Exception:
         await session.rollback()
-        return poll, None, "Вы уже прошли этот опрос."
+        return poll, None, t('Вы уже прошли этот опрос.'), "already"
 
     reward = Decimal(str(poll.reward or Decimal("100.00")))
     updated_user = await change_balance_atomic(
@@ -3997,11 +3995,11 @@ async def submit_admin_poll_response(
     )
     if not updated_user:
         await session.rollback()
-        return poll, None, "Пользователь не найден."
+        return poll, None, t('Пользователь не найден.'), "closed"
 
     response.rewarded_at = utc_now()
     await session.commit()
-    return poll, reward, None
+    return poll, reward, None, None
 
 
 async def should_flush_notifications(session: AsyncSession) -> bool:
@@ -4185,21 +4183,17 @@ def build_event_promo_text(event: Event, max_len: int | None = None) -> str:
     if event.applies_vip:
         applies.append("VIP")
     if event.applies_coins:
-        applies.append("монеты")
+        applies.append(t('монеты'))
     if event.applies_lootbox:
-        applies.append("лутбоксы")
+        applies.append(t('лутбоксы'))
     if event.applies_cases:
-        applies.append("кейсы")
-    applies_text = ", ".join(applies) if applies else "всё"
+        applies.append(t('кейсы'))
+    applies_text = ", ".join(applies) if applies else t('всё')
     end_text = event.end_date.strftime("%d.%m.%Y")
 
     def _render(descr: str) -> str:
         return (
-            f"🎉 <b>{event.name}</b>\n\n"
-            f"{descr}\n\n"
-            f"🔥 Скидка <b>{event.discount_percent}%</b> на {applies_text}!\n"
-            f"⏰ Акция до {end_text}\n\n"
-            f"Не пропусти!"
+            t('🎉 <b>{name}</b>\n\n{descr}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ Акция до {end_text}\n\nНе пропусти!', name=event.name, descr=descr, discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
         )
 
     descr = event.description or ""
@@ -4248,9 +4242,7 @@ async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
         reward = int(Decimal(str(poll.reward or Decimal("100.00"))))
         pool.append({
             "text": (
-                "📊 <b>Опрос от администрации</b>\n\n"
-                f"{poll.question}\n\n"
-                f"Пройди опрос один раз и получи <b>{reward} монет</b>."
+                t('📊 <b>Опрос от администрации</b>\n\n{question}\n\nПройди опрос один раз и получи <b>{reward} монет</b>.', question=poll.question, reward=reward)
             ),
             "image_file_id": None,
             "poll": {"id": poll.id, "type": poll.poll_type, "options": options},
@@ -4269,17 +4261,13 @@ async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
             select(User.telegram_id).where(User.status == "active")
         )).scalars().all()
     
-    applies_map = {"all": "всё", "vip": "VIP", "coins": "монеты"}
+    applies_map = {"all": t('всё'), "vip": "VIP", "coins": t('монеты')}
     applies_text = applies_map.get(sale.applies_to, sale.applies_to)
     end_text = sale.end_date.strftime("%d.%m.%Y %H:%M")
-    announcement = sale.announcement or f"Скидка {sale.discount_percent}% на {applies_text}!"
+    announcement = sale.announcement or t('Скидка {discount_percent}% на {applies_text}!', discount_percent=sale.discount_percent, applies_text=applies_text)
     
     text = (
-        f"🛍 <b>Акция!</b>\n\n"
-        f"{announcement}\n\n"
-        f"🔥 Скидка <b>{sale.discount_percent}%</b> на {applies_text}\n"
-        f"⏰ До {end_text}\n\n"
-        f"Успей воспользоваться!"
+        t('🛍 <b>Акция!</b>\n\n{announcement}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}\n⏰ До {end_text}\n\nУспей воспользоваться!', announcement=announcement, discount_percent=sale.discount_percent, applies_text=applies_text, end_text=end_text)
     )
     
     sent = 0
@@ -4555,7 +4543,7 @@ async def process_donationalerts_event(
         select(Payment.id).where(Payment.payload == payload_key)
     )).scalar_one_or_none()
     if already_paid:
-        return False, "Донат уже был обработан ранее", None
+        return False, t('Донат уже был обработан ранее'), None
 
     amount = _donationalerts_amount(amount_rub)
     normalized_currency = (currency or "RUB").upper()
@@ -4565,7 +4553,7 @@ async def process_donationalerts_event(
             currency=normalized_currency, message=message, donor_name=donor_name,
             reason="unsupported_currency",
         )
-        return False, "Валюта требует ручной сверки", exception
+        return False, t('Валюта требует ручной сверки'), exception
 
     code_match = re.search(r"\bDA-[A-Z0-9]{10}\b", (message or "").upper())
     if not code_match:
@@ -4574,7 +4562,7 @@ async def process_donationalerts_event(
             currency=normalized_currency, message=message, donor_name=donor_name,
             reason="order_code_missing",
         )
-        return False, "Код заказа не найден; донат передан на ручную сверку", exception
+        return False, t('Код заказа не найден; донат передан на ручную сверку'), exception
 
     order_code = code_match.group(0)
     order = (await session.execute(
@@ -4586,7 +4574,7 @@ async def process_donationalerts_event(
             currency=normalized_currency, message=message, donor_name=donor_name,
             reason="order_not_found",
         )
-        return False, "Заказ не найден; донат передан на ручную сверку", exception
+        return False, t('Заказ не найден; донат передан на ручную сверку'), exception
 
     now = utc_now()
     if order.status != "pending" or order.expires_at < now:
@@ -4598,7 +4586,7 @@ async def process_donationalerts_event(
             currency=normalized_currency, message=message, donor_name=donor_name,
             reason="order_expired_or_closed", suggested_user_id=order.user_id,
         )
-        return False, "Срок заказа истёк; донат передан на ручную сверку", exception
+        return False, t('Срок заказа истёк; донат передан на ручную сверку'), exception
 
     if amount != _donationalerts_amount(order.expected_amount):
         exception = await record_donationalerts_exception(
@@ -4606,7 +4594,7 @@ async def process_donationalerts_event(
             currency=normalized_currency, message=message, donor_name=donor_name,
             reason="amount_mismatch", suggested_user_id=order.user_id,
         )
-        return False, "Сумма не совпала с заказом; донат передан на ручную сверку", exception
+        return False, t('Сумма не совпала с заказом; донат передан на ручную сверку'), exception
 
     order_user = await session.get(User, order.user_id)
     if not order_user:
@@ -4615,7 +4603,7 @@ async def process_donationalerts_event(
             currency=normalized_currency, message=message, donor_name=donor_name,
             reason="order_user_missing", suggested_user_id=order.user_id,
         )
-        return False, "Пользователь заказа не найден; донат передан на ручную сверку", exception
+        return False, t('Пользователь заказа не найден; донат передан на ручную сверку'), exception
 
     comment = f"{message} vip" if order.reward_type == "vip" else message
     completed, result = await process_donationalerts_donation(
@@ -4638,7 +4626,7 @@ async def process_donationalerts_event(
             order.donation_id = donation_key
             order.matched_at = now
             await session.commit()
-            return False, "Донат уже был обработан ранее", None
+            return False, t('Донат уже был обработан ранее'), None
 
         exception = await record_donationalerts_exception(
             session, donation_id=donation_key, amount_rub=amount,
@@ -4669,7 +4657,7 @@ async def process_donationalerts_donation(
     """
     amount_rub = Decimal(str(amount_rub))
     if amount_rub <= 0:
-        return False, "Некорректная сумма доната"
+        return False, t('Некорректная сумма доната')
 
     payload_key = f"donationalerts_{donation_id}"
 
@@ -4678,12 +4666,12 @@ async def process_donationalerts_donation(
         select(Payment).where(Payment.payload == payload_key)
     )).scalar_one_or_none()
     if existing_payment:
-        return False, "Донат уже был обработан ранее"
+        return False, t('Донат уже был обработан ранее')
 
     # 2. Ищем пользователя
     user = await get_user(session, telegram_user_id)
     if not user:
-        return False, f"Пользователь с Telegram ID {telegram_user_id} не найден"
+        return False, t('Пользователь с Telegram ID {telegram_user_id} не найден', telegram_user_id=telegram_user_id)
 
     # 3. Определяем, что выдаём (курс и цена VIP — из настроек бота)
     comment_lower = (comment or "").lower()
@@ -4696,7 +4684,7 @@ async def process_donationalerts_donation(
     coins_reward = Decimal("0")
     if is_vip:
         perk = await activate_perk(session, user.id, "vip", duration_days=30)
-        reward_desc = "👑 VIP-подписка на 30 дней"
+        reward_desc = t('👑 VIP-подписка на 30 дней')
         await log_user_action(session, user.id, "vip_purchased_da", f"amount_rub={amount_rub}, da_id={donation_id}")
     else:
         coins_reward = Decimal(str(amount_rub * Decimal(str(rub_rate))))
@@ -4704,7 +4692,7 @@ async def process_donationalerts_donation(
             session, user.id, coins_reward, "donationalerts_deposit",
             details=f"rub={amount_rub}, da_id={donation_id}"
         )
-        reward_desc = f"+{coins_reward:,.0f} монет 🪙".replace(',', ' ')
+        reward_desc = t('+{coins_reward:,.0f} монет 🪙', coins_reward=coins_reward).replace(',', ' ')
         await log_user_action(session, user.id, "coins_purchased_da", f"amount_rub={amount_rub}, coins={coins_reward}, da_id={donation_id}")
 
     payment = Payment(
@@ -4721,10 +4709,7 @@ async def process_donationalerts_donation(
         try:
             from html import escape
             msg_text = (
-                f"🎉 <b>Спасибо за подношение / поддержку!</b>\n\n"
-                f"Получен платёж через DonationAlerts на сумму: <b>{amount_rub} руб.</b>\n"
-                f"Вам зачислено: <b>{reward_desc}</b>\n\n"
-                f"Приятного пользования ботом! 💙"
+                t('🎉 <b>Спасибо за подношение / поддержку!</b>\n\nПолучен платёж через DonationAlerts на сумму: <b>{amount_rub} руб.</b>\nВам зачислено: <b>{reward_desc}</b>\n\nПриятного пользования ботом! 💙', amount_rub=amount_rub, reward_desc=reward_desc)
             )
             await bot.send_message(user.telegram_id, msg_text, parse_mode="HTML")
         except Exception as e:
@@ -4734,11 +4719,7 @@ async def process_donationalerts_donation(
             from html import escape
             disp_name = get_display_name(user)
             admin_msg = (
-                f"💳 <b>Новый платёж DonationAlerts!</b>\n\n"
-                f"👤 Пользователь: {disp_name} (ID: <code>{user.telegram_id}</code>)\n"
-                f"💰 Сумма: <b>{amount_rub} руб.</b>\n"
-                f"💬 Сообщение: <i>{escape(comment or '—')}</i>\n"
-                f"🎁 Начислено: <b>{reward_desc}</b>"
+                t('💳 <b>Новый платёж DonationAlerts!</b>\n\n👤 Пользователь: {disp_name} (ID: <code>{telegram_id}</code>)\n💰 Сумма: <b>{amount_rub} руб.</b>\n💬 Сообщение: <i>{arg3}</i>\n🎁 Начислено: <b>{reward_desc}</b>', disp_name=disp_name, telegram_id=user.telegram_id, amount_rub=amount_rub, arg3=escape(comment or '—'), reward_desc=reward_desc)
             )
             for admin_id in ADMINS:
                 try:
@@ -4748,4 +4729,4 @@ async def process_donationalerts_donation(
         except Exception as e:
             logger.warning(f"Failed to notify admins of DA payment: {e}")
 
-    return True, f"Успешно начислено: {reward_desc}"
+    return True, t('Успешно начислено: {reward_desc}', reward_desc=reward_desc)

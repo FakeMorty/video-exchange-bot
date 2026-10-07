@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+from app.i18n import t
+
 """
 Кастомные стили никнеймов — 168 вариантов в 8 категориях.
 
@@ -277,10 +280,15 @@ def format_nick_card(name: str, style_id: int | None = None) -> str:
 
 
 def style_label(style_id: int) -> str:
-    """Человекочитаемое название стиля."""
+    """Человекочитаемое название стиля (с переводом под язык пользователя)."""
     if style_id in STYLES:
-        return STYLES[style_id].label
-    return f"Стиль #{style_id}"
+        return t(STYLES[style_id].label)
+    return t("Стиль #{style_id}", style_id=style_id)
+
+
+def category_name(cat_id: int) -> str:
+    """Название категории стилей (с переводом под язык пользователя)."""
+    return t(CATEGORIES.get(cat_id, ("", ""))[1] or "Категория")
 
 
 def style_inline_preview(style_id: int) -> str:

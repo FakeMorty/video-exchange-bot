@@ -5,14 +5,17 @@ from aiogram.types import Message, CallbackQuery
 
 from app.db import async_session, is_db_unavailable_error
 from app.services import get_user
+from app.i18n import (
+    DEFAULT_LANGUAGE, current_language, get_user_language,
+    normalize_language, set_current_language, t,
+)
 from app.logger import get_logger, log_warning, log_error
 
 logger = get_logger(__name__)
 
-DB_DOWN_TEXT = (
-    "⚠️ Бот временно недоступен (ведутся технические работы). "
-    "Попробуй, пожалуйста, позже."
-)
+
+def _db_down_text(lang: str | None = None) -> str:
+    return t(lang, "db.down")
 
 # Троттлинг, чтобы при падении БД не спамить:
 # в лог — не чаще раза в минуту, пользователю — не чаще раза в 5 минут.
@@ -61,20 +64,30 @@ class BanCheckMiddleware(BaseMiddleware):
                     )
                 if now - _last_notice_ts >= _NOTICE_INTERVAL_SECONDS:
                     _last_notice_ts = now
+                    # БД недоступна — пользователя в базе нет, поэтому берём язык
+                    # из language_code самого Telegram (фолбэк — русский).
+                    tg_lang = getattr(event.from_user, "language_code", None) if event.from_user else None
+                    tg_lang = normalize_language(tg_lang)
+                    set_current_language(tg_lang)
+                    down_text = _db_down_text(tg_lang)
                     try:
                         if isinstance(event, Message):
-                            await event.answer(DB_DOWN_TEXT)
+                            await event.answer(down_text)
                         else:
-                            await event.answer(DB_DOWN_TEXT, show_alert=True)
+                            await event.answer(down_text, show_alert=True)
                     except Exception:
                         pass
                 return
 
+            # Язык текущего апдейта — для всей цепочки обработчиков (i18n.t()).
+            lang = get_user_language(user) if user else DEFAULT_LANGUAGE
+            set_current_language(lang)
+
             if user_banned:
                 if isinstance(event, Message):
-                    await event.answer("🚫 Доступ к боту для тебя заблокирован.")
+                    await event.answer(t(lang, "ban.blocked"))
                 elif isinstance(event, CallbackQuery):
-                    await event.answer("🚫 Доступ к боту для тебя заблокирован.", show_alert=True)
+                    await event.answer(t(lang, "ban.blocked"), show_alert=True)
                 return
 
             # Сообщение о бонусе шлём уже после закрытия сессии (начисление зафиксировано).
@@ -83,10 +96,7 @@ class BanCheckMiddleware(BaseMiddleware):
                 try:
                     await data["bot"].send_message(
                         user_id,
-                        "🔥 <b>Ежедневный бонус за возвращение!</b>\n\n"
-                        f"Начислено: <b>+{reward:.0f}</b> монет\n"
-                        f"Дней подряд: <b>{streak}</b>\n\n"
-                        "Бонус растёт с серией до установленного дневного лимита.",
+                        t(lang, "bonus.daily", reward=f"{reward:.0f}", streak=streak),
                         parse_mode="HTML",
                     )
                 except Exception:
