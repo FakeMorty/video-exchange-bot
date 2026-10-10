@@ -167,8 +167,16 @@ GAME_SESSION_COST = 100.0             # монет за продление се�
 # ============================
 DAILY_BONUS_STREAK_BASE = _get_float("DAILY_BONUS_STREAK_BASE", 5.0)
 DAILY_BONUS_STREAK_INCREASE = _get_float("DAILY_BONUS_STREAK_INCREASE", 1.0)
-DAILY_BONUS_CAP = _get_float("DAILY_BONUS_CAP", 20.0)
 MAX_BONUS_STREAK = 30
+# Дефолтный потолок — верх прогрессии в последний день серии
+# (база + шаг × (N-1)): бонус растёт всю серию, а не упирается в кап
+# посередине. Старый дефолт 20 закрывался уже на 16-й день при
+# базе 5 / шаге 1, и серия 30 дней давала ровно те же 20 монет (баг #16).
+# Админ может ограничить выдачу через `daily_bonus_cap` в настройках.
+DAILY_BONUS_CAP = _get_float(
+    "DAILY_BONUS_CAP",
+    DAILY_BONUS_STREAK_BASE + DAILY_BONUS_STREAK_INCREASE * (MAX_BONUS_STREAK - 1),
+)
 
 # ============================
 # XP И УРОВНИ
