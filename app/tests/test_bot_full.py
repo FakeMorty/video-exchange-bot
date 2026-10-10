@@ -4388,6 +4388,73 @@ async def test_daily_cap_zero_and_stale_session_cannot_double_claim():
 
 
 @pytest.mark.asyncio
+async def test_daily_bonus_grows_through_full_streak_by_default():
+    """Баг #16: серия 30 дней должна приносить больше, чем старые 20 монет.
+
+    Дефолтный потолок теперь равен верху прогрессии в последний день серии
+    (база + шаг × (N-1)), поэтому бонус растёт всю серию; явный потолок из
+    настроек админки (daily_bonus_cap) по-прежнему имеет приоритет.
+    """
+    from app.config import (
+        DAILY_BONUS_CAP,
+        DAILY_BONUS_STREAK_BASE,
+        DAILY_BONUS_STREAK_INCREASE,
+        MAX_BONUS_STREAK,
+    )
+    from app.services import auto_daily_return_bonus, set_setting, to_decimal
+
+    to_dec = to_decimal
+
+    base = DAILY_BONUS_STREAK_BASE
+    increase = DAILY_BONUS_STREAK_INCREASE
+    expected_max = base + increase * (MAX_BONUS_STREAK - 1)
+    # Непротиворечивость дефолтов: кап закрывается ровно в последний день серии.
+    assert abs(DAILY_BONUS_CAP - expected_max) < 1e-9, (DAILY_BONUS_CAP, expected_max)
+
+    engine, Session = await _make_session()
+    async with Session() as s:
+        user = User(telegram_id=777300, balance=Decimal("0"))
+        s.add(user)
+        await s.commit()
+        uid = user.id
+
+    prev_reward = None
+    for day in range(1, MAX_BONUS_STREAK + 1):
+        async with Session() as s:
+            u = await s.get(User, uid)
+            if day > 1:
+                u.last_bonus_at = u.last_bonus_at - timedelta(days=1)
+            result = await auto_daily_return_bonus(s, u)
+            assert result is not None, f"день {day}: бонус не начислен"
+            reward, streak = result
+            assert streak == day, f"день {day}: streak={streak}"
+            expected = base + increase * (day - 1)
+            assert reward == to_dec(expected), f"день {day}: {reward} != {expected}"
+            if prev_reward is not None:
+                assert reward > prev_reward, f"день {day}: бонус не растёт"
+            prev_reward = reward
+
+    # 30-й день — полный потолок прогрессии, заметно больше старых 20 монет.
+    assert prev_reward == to_dec(expected_max)
+    assert prev_reward > Decimal("20")
+    async with Session() as s:
+        u = await s.get(User, uid)
+        assert float(u.balance) == float(
+            sum(to_dec(base + increase * (d - 1)) for d in range(1, MAX_BONUS_STREAK + 1))
+        ), "итоговый баланс за 30 дней"
+
+    # Явный потолок админки имеет приоритет: серия продолжается, но выдача capped.
+    async with Session() as s:
+        await set_setting(s, "daily_bonus_cap", "20")
+    async with Session() as s:
+        u = await s.get(User, uid)
+        u.last_bonus_at = u.last_bonus_at - timedelta(days=1)
+        result = await auto_daily_return_bonus(s, u)
+        assert result is not None and result[0] == Decimal("20"), result
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_nickname_limit_counts_photos_and_videos_together():
     from app.models import VideoView
     from app.user_handlers import require_view_access

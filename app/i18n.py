@@ -100,7 +100,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "🔥 <b>Ежедневный бонус за возвращение!</b>\n\n"
             "Начислено: <b>+{reward}</b> монет\n"
             "Дней подряд: <b>{streak}</b>\n\n"
-            "Бонус растёт с серией до установленного дневного лимита."
+            "Бонус растёт с серией до дневного лимита — <b>{cap}</b> монет."
         ),
         "db.down": (
             "⚠️ Бот временно недоступен (ведутся технические работы). "
@@ -158,7 +158,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "🔥 <b>Daily comeback bonus!</b>\n\n"
             "Credited: <b>+{reward}</b> coins\n"
             "Day streak: <b>{streak}</b>\n\n"
-            "The bonus grows with your streak up to the daily limit."
+            "The bonus grows with your streak up to the daily limit — <b>{cap}</b> coins."
         ),
         "db.down": (
             "⚠️ The bot is temporarily unavailable (maintenance in progress). "

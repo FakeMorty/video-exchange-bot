@@ -4,7 +4,8 @@ from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
 
 from app.db import async_session, is_db_unavailable_error
-from app.services import get_user
+from app.config import DAILY_BONUS_CAP
+from app.services import get_user, get_config_value
 from app.i18n import (
     DEFAULT_LANGUAGE, current_language, get_user_language,
     normalize_language, set_current_language, t,
@@ -36,6 +37,7 @@ class BanCheckMiddleware(BaseMiddleware):
         if user_id:
             user_banned = False
             daily_bonus_granted = None
+            daily_bonus_cap = DAILY_BONUS_CAP
             try:
                 async with async_session() as session:
                     user = await get_user(session, user_id)
@@ -47,6 +49,12 @@ class BanCheckMiddleware(BaseMiddleware):
                             try:
                                 from app.services import auto_daily_return_bonus
                                 daily_bonus_granted = await auto_daily_return_bonus(session, user)
+                                if daily_bonus_granted:
+                                    # Потолок текущих настроек, чтобы в уведомлении
+                                    # показать, до какого лимита растёт бонус.
+                                    daily_bonus_cap = await get_config_value(
+                                        session, "daily_bonus_cap", DAILY_BONUS_CAP
+                                    )
                             except Exception as e:
                                 log_error(logger, f"Daily return bonus error: {e}")
             except Exception as e:
@@ -94,9 +102,17 @@ class BanCheckMiddleware(BaseMiddleware):
             if daily_bonus_granted:
                 reward, streak = daily_bonus_granted
                 try:
+                    cap = float(daily_bonus_cap)
+                    cap_text = f"{cap:.0f}" if cap == int(cap) else f"{cap:g}"
                     await data["bot"].send_message(
                         user_id,
-                        t(lang, "bonus.daily", reward=f"{reward:.0f}", streak=streak),
+                        t(
+                            lang,
+                            "bonus.daily",
+                            reward=f"{reward:.0f}",
+                            streak=streak,
+                            cap=cap_text,
+                        ),
                         parse_mode="HTML",
                     )
                 except Exception:
