@@ -45,6 +45,7 @@ from app.logger import setup_logging, get_logger, log_info, log_error
 from app.services import (
     get_offer_participations_for_subscription_audit,
     get_offer_by_id,
+    get_offer_expires_at,
     get_user_by_id,
     apply_offer_unsubscribe_penalty,
     classify_offer_url,
@@ -102,7 +103,22 @@ def _get_webapp_user_id(request: web.Request, payload: dict | None = None) -> in
         init_data = str(payload.get("init_data", "") or "")
     if not init_data:
         init_data = request.query.get("init_data", "")
-    return _validate_telegram_webapp_init_data(init_data)
+    if not init_data:
+        return None
+    # HMAC-проверка initData выполняется один раз на запрос (декоратор
+    # localized_api + сам хендлер раньше валидировали дважды).
+    try:
+        cache = request.get("_webapp_uid_cache")
+    except Exception:  # не aiohttp-Request (тесты/заглушки)
+        cache = None
+    if cache and cache[0] == init_data:
+        return cache[1]
+    uid = _validate_telegram_webapp_init_data(init_data)
+    try:
+        request["_webapp_uid_cache"] = (init_data, uid)
+    except Exception:
+        pass
+    return uid
 
 
 async def _webapp_user_lang(request: web.Request, payload: dict | None = None) -> str:
@@ -144,28 +160,38 @@ def _inject_page_lang(html: str, request: web.Request) -> str:
 
 
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
-    meta = classify_offer_url(channel_url)
-    normalized = normalize_telegram_url(channel_url)
-    if not meta.get("auto_verify") or not normalized:
-        return None
-    path = urllib.parse.urlsplit(normalized).path.strip("/")
-    username = path.split("/", 1)[0]
-    if not username:
-        return None
-    return f"@{username}"
+    from app.services import offer_chat_id_from_url
+    return offer_chat_id_from_url(channel_url)
 
 
-async def _is_subscribed(bot: Bot, telegram_user_id: int, channel_url: str) -> bool:
+async def _is_subscribed(bot: Bot, telegram_user_id: int, channel_url: str) -> bool | None:
+    """True/False — Telegram ответил однозначно; None — проверить не удалось.
+
+    Раньше любая ошибка (429, таймаут, бот лишён прав в канале, канал удалён)
+    трактовалась как «отписался», и аудит необратимо штрафовал подписанных.
+    """
     chat_id = _chat_id_from_offer_url(channel_url)
     if not chat_id:
-        return False
+        return None
     try:
         member = await bot.get_chat_member(chat_id=chat_id, user_id=telegram_user_id)
-        return member.status in {"member", "administrator", "creator"}
-    except TelegramBadRequest:
-        return False
+    except TelegramBadRequest as exc:
+        # «user not found»/«participant_id_invalid» — пользователь точно не в чате.
+        msg = str(exc).lower()
+        if "user not found" in msg or "participant_id_invalid" in msg or "user_not_participant" in msg:
+            return False
+        return None
     except Exception:
+        return None
+    status = getattr(member, "status", None)
+    if status in {"member", "administrator", "creator"}:
+        return True
+    if status in {"left", "kicked"}:
         return False
+    # restricted: is_member говорит, остался ли пользователь участником
+    if status == "restricted":
+        return bool(getattr(member, "is_member", False))
+    return None
 
 
 async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
@@ -175,6 +201,13 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
         penalized_total = 0
         try:
             async with async_session() as session:
+                # Возврат авторам неизрасходованного эскроу по истёкшим офферам.
+                try:
+                    from app.services import refund_expired_offer_budgets
+                    await refund_expired_offer_budgets(session)
+                except Exception as e:
+                    log_info(logger, f"Offer budget refund warning: {e}")
+
                 parts = await get_offer_participations_for_subscription_audit(
                     session,
                     limit=max(1, OFFER_SUBSCRIPTION_CHECK_BATCH),
@@ -190,8 +223,22 @@ async def subscription_audit_worker(bot: Bot, stop_event: asyncio.Event):
                     target_meta = classify_offer_url(offer.channel_url)
                     if not target_meta.get("auto_verify"):
                         continue
+                    # Оффер завершился по сроку — отписка после него больше не штрафуется.
+                    expires_at = get_offer_expires_at(offer)
+                    if expires_at and expires_at <= utc_now():
+                        part.unsubscribed_penalized_at = utc_now()
+                        part.checked_at = utc_now()
+                        await session.commit()
+                        continue
                     subscribed = await _is_subscribed(bot, user.telegram_id, offer.channel_url)
+                    if subscribed is None:
+                        # Неизвестно (сбой API / нет прав) — не штрафуем, проверим позже.
+                        continue
+                    # Отметка проверки двигает участие в конец очереди аудита —
+                    # иначе проверялись бы вечно одни и те же 200 старейших записей.
+                    part.checked_at = utc_now()
                     if subscribed:
+                        await session.commit()
                         continue
 
                     rewarded_total, extra_penalty, total_charge = await apply_offer_unsubscribe_penalty(
@@ -257,7 +304,7 @@ async def notify_lottery_reminder(bot: Bot, session, round_id: int, draw_starts_
     from app.utils.messaging import format_time_for_user
     
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
-    user_ids = list(set(t.user_id for t in tickets))
+    user_ids = list(set(tk.user_id for tk in tickets))
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
     
     for u in users:
@@ -280,7 +327,7 @@ async def notify_lottery_started(bot: Bot, session, round_id: int):
     from app.config import LOTTERY_SECONDS_PER_BALL
 
     tickets = (await session.execute(select(LotteryTicket).where(LotteryTicket.round_id == round_id))).scalars().all()
-    user_ids = list(set(t.user_id for t in tickets))
+    user_ids = list(set(tk.user_id for tk in tickets))
     users = (await session.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
 
     for u in users:
@@ -307,7 +354,7 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
         return
         
     drawn_nums = _deserialize_numbers(round_obj.drawn_numbers)
-    drawn_nums_str = ", ".join(str(n) for n in drawn_nums)
+    drawn_nums_str = ", ".join(str(num) for num in drawn_nums)
     
     # Получаем все билеты раунда
     tickets = (await session.execute(
@@ -321,14 +368,16 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
     n = round_obj.numbers_per_ticket
     pool = to_decimal(round_obj.prize_pool)
     
-    winners_6_cnt = sum(1 for t in tickets if t.matched_count >= n)
-    winners_5_cnt = sum(1 for t in tickets if t.matched_count == n - 1)
-    winners_4_cnt = sum(1 for t in tickets if t.matched_count == n - 2)
-    winners_3_cnt = sum(1 for t in tickets if t.matched_count == n - 3)
-    winners_2_cnt = sum(1 for t in tickets if t.matched_count == n - 4)
+    winners_6_cnt = sum(1 for tk in tickets if tk.matched_count >= n)
+    winners_5_cnt = sum(1 for tk in tickets if tk.matched_count == n - 1)
+    winners_4_cnt = sum(1 for tk in tickets if tk.matched_count == n - 2)
+    winners_3_cnt = sum(1 for tk in tickets if tk.matched_count == n - 3)
+    winners_2_cnt = sum(1 for tk in tickets if tk.matched_count == n - 4)
 
     # Распределение призового фонда (должно совпадать с settle_lottery_round):
     # 3 совпадения — 60%, 4 совпадения — 25%, 5 совпадений — 10%, 6 — 5%.
+    from app.config import LOTTERY_MATCH2_REWARD, LOTTERY_MATCH3_REWARD
+
     per_ticket_6 = to_decimal(0)
     if winners_6_cnt > 0:
         per_ticket_6 = round((pool * to_decimal(0.05)) / to_decimal(winners_6_cnt), 2)
@@ -344,19 +393,22 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
     per_ticket_3 = to_decimal(0)
     if winners_3_cnt > 0:
         per_ticket_3 = round((pool * to_decimal(0.60)) / to_decimal(winners_3_cnt), 2)
+        # Тот же минимум, что применяет settle_lottery_round — иначе сумма в
+        # сообщении расходилась с реально начисленной.
+        if per_ticket_3 < to_decimal(LOTTERY_MATCH3_REWARD):
+            per_ticket_3 = to_decimal(LOTTERY_MATCH3_REWARD)
 
     # Фиксированные выплаты за 2 совпадения (берём из конфига).
     per_ticket_2 = to_decimal(0)
     if winners_2_cnt > 0:
-        from app.config import LOTTERY_MATCH2_REWARD
         per_ticket_2 = to_decimal(LOTTERY_MATCH2_REWARD)
 
     # Группируем билеты по пользователям
     user_tickets = {}
-    for t in tickets:
-        if t.user_id not in user_tickets:
-            user_tickets[t.user_id] = []
-        user_tickets[t.user_id].append(t)
+    for ticket in tickets:
+        if ticket.user_id not in user_tickets:
+            user_tickets[ticket.user_id] = []
+        user_tickets[ticket.user_id].append(ticket)
         
     # Получаем пользователей
     user_ids = list(user_tickets.keys())
@@ -369,49 +421,49 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
             
         total_won = to_decimal(0)
         tickets_info = []
-        
-        for idx, t in enumerate(tickets_list, 1):
-            matched = t.matched_count
-            win_amount = to_decimal(0)
-            shared_with = 0
-            if matched >= n:
-                win_amount = per_ticket_6
-                shared_with = winners_6_cnt
-            elif matched == n - 1:
-                win_amount = per_ticket_5
-                shared_with = winners_5_cnt
-            elif matched == n - 2:
-                win_amount = per_ticket_4
-                shared_with = winners_4_cnt
-            elif matched == n - 3:
-                win_amount = per_ticket_3
-                shared_with = winners_3_cnt
-            elif matched == n - 4:
-                win_amount = per_ticket_2
-                shared_with = winners_2_cnt
-
-            total_won += win_amount
-            ticket_nums_str = ", ".join(str(n) for n in _deserialize_numbers(t.numbers))
-
-            if win_amount > 0:
-                share_note = (
-                    t(" (делится на {shared_with} победителей)", shared_with=shared_with)
-                    if shared_with > 1
-                    else ""
-                )
-                tickets_info.append(
-                    t("🎫 Билет №{tid} [{nums}]: совпало {matched} чисел — <b>выигрыш {win_amount} монет</b>{share_note} 🎉",
-                      tid=t.id, nums=ticket_nums_str, matched=matched, win_amount=win_amount, share_note=share_note)
-                )
-            else:
-                tickets_info.append(
-                    t("🎫 Билет №{tid} [{nums}]: совпало {matched} чисел (без выигрыша) 😔",
-                      tid=t.id, nums=ticket_nums_str, matched=matched)
-                )
-
-        tickets_report = "\n".join(tickets_info)
 
         with language_scope(u.language):
+            for idx, ticket in enumerate(tickets_list, 1):
+                matched = ticket.matched_count
+                win_amount = to_decimal(0)
+                shared_with = 0
+                if matched >= n:
+                    win_amount = per_ticket_6
+                    shared_with = winners_6_cnt
+                elif matched == n - 1:
+                    win_amount = per_ticket_5
+                    shared_with = winners_5_cnt
+                elif matched == n - 2:
+                    win_amount = per_ticket_4
+                    shared_with = winners_4_cnt
+                elif matched == n - 3:
+                    win_amount = per_ticket_3
+                    shared_with = winners_3_cnt
+                elif matched == n - 4:
+                    win_amount = per_ticket_2
+                    shared_with = winners_2_cnt
+
+                total_won += win_amount
+                ticket_nums_str = ", ".join(str(num) for num in _deserialize_numbers(ticket.numbers))
+
+                if win_amount > 0:
+                    share_note = (
+                        t(" (делится на {shared_with} победителей)", shared_with=shared_with)
+                        if shared_with > 1
+                        else ""
+                    )
+                    tickets_info.append(
+                        t("🎫 Билет №{tid} [{nums}]: совпало {matched} чисел — <b>выигрыш {win_amount} монет</b>{share_note} 🎉",
+                          tid=ticket.id, nums=ticket_nums_str, matched=matched, win_amount=win_amount, share_note=share_note)
+                    )
+                else:
+                    tickets_info.append(
+                        t("🎫 Билет №{tid} [{nums}]: совпало {matched} чисел (без выигрыша) 😔",
+                          tid=ticket.id, nums=ticket_nums_str, matched=matched)
+                    )
+
+            tickets_report = "\n".join(tickets_info)
+
             if total_won > 0:
                 msg = t(
                     "🎉 <b>РОЗЫГРЫШ ЛОТЕРЕИ #{round_id} ЗАВЕРШЕН!</b>\n\n"
@@ -440,15 +492,72 @@ async def notify_lottery_results(bot: Bot, session, round_id: int):
         await asyncio.sleep(0.05)
 
 
-async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
-    from app.config import LOTTERY_SECONDS_PER_BALL
+async def _finish_lottery_draw(bot: Bot, session, round_obj, stop_event: asyncio.Event, *, realtime: bool) -> bool:
+    """Дотягивает недостающие бочонки, проводит расчёт и рассылает итоги.
 
+    realtime=True — обычный розыгрыш (пауза LOTTERY_SECONDS_PER_BALL между
+    бочонками); False — восстановление «зависшего» раунда после рестарта или
+    простоя бота: без пауз, чтобы участники получили выплаты сразу.
+    Возвращает False, если остановлены по stop_event до завершения.
+    """
+    drawn_cnt = len(_deserialize_numbers(round_obj.drawn_numbers))
+    for _step in range(max(0, round_obj.numbers_per_ticket - drawn_cnt)):
+        if stop_event.is_set():
+            return False
+        if realtime:
+            await asyncio.sleep(LOTTERY_SECONDS_PER_BALL)
+        next_num = await draw_next_lottery_number(session, round_obj)
+        if next_num is None:
+            break
+
+    # Рассчитываем и распределяем выигрыши
+    stats = await settle_lottery_round(session, round_obj)
+    log_info(logger, f"Lottery round #{round_obj.id} settled: {stats}")
+
+    # Оповещаем участников о подробных результатах (включая все выпавшие бочонки)
+    try:
+        await notify_lottery_results(bot, session, round_obj.id)
+    except Exception as e:
+        log_info(logger, f"Lottery results notify warning (round #{round_obj.id}): {e}")
+    return True
+
+
+async def _recover_stale_lottery_rounds(bot: Bot, session, stop_event: asyncio.Event, current_round_id: int) -> None:
+    """Раунды, оставшиеся open/drawing после того, как их окно розыгрыша прошло.
+
+    Раньше, если бот был офлайн или завис в ~90-секундном окне розыгрыша,
+    ensure_current_lottery_round создавал раунд следующего дня, а вчерашний
+    (с билетами и ставками) никогда не разыгрывался; раунд в статусе drawing
+    после рестарта тоже не подхватывался. Такие раунды дорозыгрываем сразу.
+    """
+    now_utc = utc_now()
+    stale = (await session.execute(
+        select(LotteryRound).where(
+            LotteryRound.status.in_(("open", "drawing")),
+            LotteryRound.draw_starts_at <= now_utc,
+            LotteryRound.id != current_round_id,
+        ).order_by(LotteryRound.id.asc())
+    )).scalars().all()
+    for stale_round in stale:
+        if stop_event.is_set():
+            return
+        log_info(logger, f"Lottery round #{stale_round.id}: recovering unfinished draw (status={stale_round.status})")
+        if stale_round.status == "open":
+            stale_round.status = "drawing"
+            await session.commit()
+        await _finish_lottery_draw(bot, session, stale_round, stop_event, realtime=False)
+
+
+async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
     REMINDER_HOURS_BEFORE = 1  # За сколько часов до розыгрыша напомнить
     while not stop_event.is_set():
         try:
             async with async_session() as session:
                 round_obj = await ensure_current_lottery_round(session)
                 now_utc = utc_now()
+
+                # Сначала закрываем «хвосты» прошлых раундов (рестарт/простой бота).
+                await _recover_stale_lottery_rounds(bot, session, stop_event, round_obj.id)
 
                 # Напоминание за 1 час до розыгрыша
                 if (
@@ -470,28 +579,15 @@ async def lottery_worker(bot: Bot, stop_event: asyncio.Event):
                     # Оповещаем о старте лототрона
                     await notify_lottery_started(bot, session, round_obj.id)
 
-                    drawn_nums = []
                     # Тянем бочонки по одному: один цикл лототрона = 15 секунд.
                     # Промежуточные результаты НЕ рассылаем — Telegram может за такое
                     # забанить рассылку. Всё покажем в одном итоговом сообщении.
-                    for _step in range(round_obj.numbers_per_ticket):
-                        if stop_event.is_set():
-                            break
-
-                        await asyncio.sleep(LOTTERY_SECONDS_PER_BALL)
-
-                        next_num = await draw_next_lottery_number(session, round_obj)
-                        if next_num is None:
-                            break
-                        drawn_nums.append(next_num)
-
-                    # Рассчитываем и распределяем выигрыши
-                    stats = await settle_lottery_round(session, round_obj)
-                    log_info(logger, f"Lottery round #{round_obj.id} settled: {stats}")
-
-                    # Оповещаем участников о подробных результатах
-                    # (включая все выпавшие бочонки)
-                    await notify_lottery_results(bot, session, round_obj.id)
+                    await _finish_lottery_draw(bot, session, round_obj, stop_event, realtime=True)
+                elif round_obj.status == "drawing":
+                    # Рестарт бота посреди розыгрыша текущего раунда: дотягиваем
+                    # бочонки (в темпе лототрона, пока окно не прошло) и платим.
+                    still_in_window = bool(round_obj.draw_ends_at) and now_utc < round_obj.draw_ends_at
+                    await _finish_lottery_draw(bot, session, round_obj, stop_event, realtime=still_in_window)
         except Exception as e:
             log_info(logger, f"Lottery worker warning: {e}")
 
@@ -1699,17 +1795,55 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
     return web.Response(text=_inject_page_lang(html, request), content_type="text/html")
 
 
+VIDEO_STREAM_TOKEN_TTL_SECONDS = 2 * 60 * 60
+VIDEO_CACHE_DIR = "video_cache"
+
+
+def _video_stream_signature(video_id: int, user_id: int, exp: int) -> str:
+    """Подпись короткоживущей ссылки на поток видео (HMAC на BOT_TOKEN)."""
+    msg = f"video:{video_id}:{user_id}:{exp}".encode()
+    return hmac.new((BOT_TOKEN or "").encode(), msg, hashlib.sha256).hexdigest()[:32]
+
+
+def _video_stream_url(video_id: int, user_id: int) -> str:
+    exp = int(datetime.now(timezone.utc).timestamp()) + VIDEO_STREAM_TOKEN_TTL_SECONDS
+    sig = _video_stream_signature(video_id, user_id, exp)
+    return f"/api/video/{video_id}?u={user_id}&exp={exp}&sig={sig}"
+
+
+def _video_stream_authorized(request: web.Request, video_id: int) -> bool:
+    """Доступ к потоку: подписанная ссылка из ленты или валидный initData."""
+    try:
+        u = int(request.query.get("u", "0") or 0)
+        exp = int(request.query.get("exp", "0") or 0)
+    except ValueError:
+        u, exp = 0, 0
+    sig = request.query.get("sig", "")
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    if u and exp > now_ts and sig and hmac.compare_digest(sig, _video_stream_signature(video_id, u, exp)):
+        return True
+    return bool(_get_webapp_user_id(request))
+
+
 async def api_videofeed_feed(request: web.Request) -> web.Response:
+    # Лента Mini App доступна только авторизованному пользователю Telegram:
+    # раньше эндпоинт был публичным с CORS «*», и все одобренные видео можно
+    # было выкачать скриптом, минуя списание за просмотр.
+    telegram_user_id = _get_webapp_user_id(request)
+    if not telegram_user_id:
+        return web.json_response({"error": "unauthorized"}, status=401)
     try:
         async with async_session() as session:
             videos = (await session.execute(
-                select(Video).where(Video.status == "approved")
+                select(Video).where(Video.status == "approved", Video.content_type == "video")
                 .order_by(func.random()).limit(10)
             )).scalars().all()
             
-            data = [{"id": v.id, "author": v.uploader_user_id} for v in videos]
-            headers = {"Access-Control-Allow-Origin": "*"}
-            return web.json_response({"videos": data}, headers=headers)
+            data = [
+                {"id": v.id, "author": v.uploader_user_id, "url": _video_stream_url(v.id, telegram_user_id)}
+                for v in videos
+            ]
+            return web.json_response({"videos": data})
     except Exception:
         return web.json_response({"error": "Internal Server Error"}, status=500)
 
@@ -1717,6 +1851,8 @@ async def api_video_stream(request: web.Request) -> web.Response:
     video_id = request.match_info.get("id")
     if not video_id or not video_id.isdigit():
         return web.Response(status=400, text="Invalid ID")
+    if not _video_stream_authorized(request, int(video_id)):
+        return web.Response(status=401, text="Unauthorized")
 
     async with async_session() as session:
         video = await session.get(Video, int(video_id))
@@ -1726,7 +1862,7 @@ async def api_video_stream(request: web.Request) -> web.Response:
             return web.Response(status=403, text="Forbidden")
 
     bot = request.app['bot']
-    cache_dir = "video_cache"
+    cache_dir = VIDEO_CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
     file_path_local = os.path.join(cache_dir, f"{video.telegram_file_unique_id}.mp4")
 
@@ -1739,10 +1875,14 @@ async def api_video_stream(request: web.Request) -> web.Response:
             return web.Response(status=400, text=f"TG API Error: {str(e)}. File might be >20MB.")
         except Exception as e:
             return web.Response(status=500, text=str(e))
+    else:
+        try:
+            os.utime(file_path_local, None)  # «недавно использовано» для LRU-очистки
+        except OSError:
+            pass
 
     response = web.FileResponse(file_path_local)
     response.content_type = 'video/mp4'
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def videofeed_page_handler(request: web.Request) -> web.Response:
@@ -1827,7 +1967,7 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
             
             document.getElementById('feed').innerHTML = '<div style="color:yellow; text-align:center; padding-top: 50vh;">Fetching: ' + api_url + '</div>';
             
-            const res = await fetch(api_url);
+            const res = await fetch(api_url, { headers: { 'X-Telegram-Init-Data': (window.Telegram.WebApp.initData || '') } });
             
             document.getElementById('feed').innerHTML = '<div style="color:yellow; text-align:center; padding-top: 50vh;">Reading Response...</div>';
             const textRaw = await res.text();
@@ -1856,7 +1996,7 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
                 container.className = 'video-container';
                 container.innerHTML = `
                     <div class="loading">${L('Загрузка видео...')}</div>
-                    <video src="/api/video/${v.id}" loop playsinline preload="auto" muted crossOrigin="anonymous" style="background:transparent;"></video>
+                    <video src="${v.url || ('/api/video/' + v.id)}" loop playsinline preload="auto" muted style="background:transparent;"></video>
                     <div class="mute-btn" onclick="toggleMute(event)">🔇</div>
                     <div class="overlay">
                         <div class="btn" onclick="window.Telegram.WebApp.HapticFeedback.impactOccurred('medium'); alert('${L('Функция лайков в разработке!')}')">❤️</div>
@@ -2102,7 +2242,7 @@ async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
                 donor_name=event.username,
                 bot=bot,
             )
-        if exception:
+        if exception and getattr(exception, "is_new", True):
             admin_text = t(
                 "⚠️ <b>DonationAlerts: нужна сверка</b>\n\n"
                 "Донат: <code>{donation_id}</code>\n"
@@ -2188,13 +2328,17 @@ async def api_lottery_buy(request: web.Request) -> web.Response:
 
         quantity = int(data.get("quantity", 1) or 1)
 
-        from app.services import get_user, buy_lottery_tickets
+        from app.services import get_user, buy_lottery_tickets, InsufficientBalanceError
         from app.db import async_session
         async with async_session() as session:
             user = await get_user(session, telegram_user_id)
             if not user:
                 return web.json_response({"ok": False, "error": "User not found"})
-            tickets, total_cost, error = await buy_lottery_tickets(session, user, quantity)
+            try:
+                tickets, total_cost, error = await buy_lottery_tickets(session, user, quantity)
+            except InsufficientBalanceError:
+                await session.rollback()
+                return web.json_response({"ok": False, "error": t("Недостаточно монет")})
             if error or not tickets:
                 return web.json_response({"ok": False, "error": error or "purchase_failed"})
             await session.refresh(user)
@@ -2203,7 +2347,7 @@ async def api_lottery_buy(request: web.Request) -> web.Response:
                 "balance": float(user.balance),
                 "quantity": len(tickets),
                 "total_cost": float(total_cost),
-                "ticket_ids": [t.id for t in tickets[:20]],
+                "ticket_ids": [tk.id for tk in tickets[:20]],
             })
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)})
@@ -2277,13 +2421,22 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
         if bet_type not in allowed_bets:
             return web.json_response({"ok": False, "error": t("Неверный тип ставки")})
 
-        from app.services import get_user, ensure_current_lottery_round, change_balance_atomic, to_decimal
+        from app.services import (
+            get_user, ensure_current_lottery_round, change_balance_atomic, to_decimal,
+            InsufficientBalanceError,
+        )
         from app.models import utc_now
+        from app.config import LOTTERY_BET_MAX_AMOUNT
 
         try:
             bet_amount = to_decimal(data.get("bet_amount", 10) or 10)
             if bet_amount <= 0 or not bet_amount.is_finite():
                 return web.json_response({"ok": False, "error": t("Некорректная сумма ставки")})
+            if bet_amount > to_decimal(LOTTERY_BET_MAX_AMOUNT):
+                return web.json_response({
+                    "ok": False,
+                    "error": t("Максимальная ставка — {max_bet} монет", max_bet=f"{to_decimal(LOTTERY_BET_MAX_AMOUNT):.0f}"),
+                })
         except Exception:
             return web.json_response({"ok": False, "error": t("Некорректная сумма ставки")})
 
@@ -2301,7 +2454,11 @@ async def api_lottery_place_bet(request: web.Request) -> web.Response:
             if round_obj.status != "open" or (round_obj.draw_starts_at and now >= round_obj.draw_starts_at):
                 return web.json_response({"ok": False, "error": t("Прием ставок закрыт")})
 
-            await change_balance_atomic(session, user.id, -bet_amount, "lottery_bet", source_id=round_obj.id, details=f"type={bet_type}")
+            try:
+                await change_balance_atomic(session, user.id, -bet_amount, "lottery_bet", source_id=round_obj.id, details=f"type={bet_type}")
+            except InsufficientBalanceError:
+                await session.rollback()
+                return web.json_response({"ok": False, "error": t("Недостаточно монет")})
             bet = LotteryBet(
                 user_id=user.id,
                 round_id=round_obj.id,
@@ -2320,16 +2477,25 @@ async def api_user_timezone(request: web.Request) -> web.Response:
     try:
         data = await request.json()
         telegram_user_id = _get_webapp_user_id(request, data)
-        timezone = data.get("timezone", "")
-        if not telegram_user_id or not timezone:
+        tz_name = str(data.get("timezone", "") or "").strip()
+        if not telegram_user_id or not tz_name:
             return web.json_response({"ok": False}, status=401)
+        # Принимаем только настоящие IANA-зоны: раньше в БД писалась любая
+        # строка (мусор потом молча игнорировался при форматировании времени).
+        if len(tz_name) > 50:
+            return web.json_response({"ok": False, "error": "bad_timezone"}, status=400)
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(tz_name)
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad_timezone"}, status=400)
 
         from app.services import get_user
         from app.db import async_session
         async with async_session() as session:
             user = await get_user(session, telegram_user_id)
             if user:
-                user.timezone = timezone
+                user.timezone = tz_name
                 await session.commit()
                 return web.json_response({"ok": True})
         return web.json_response({"ok": False})
@@ -2380,6 +2546,20 @@ async def on_startup(app):
         except Exception as e:
             log_error(logger, f"Schema self-heal error: {e}")
 
+    if not is_sqlite:
+        # Догон дрейфа схемы прямо на старте (а не только в migrate.py, который
+        # запускается лишь из start_render.sh): ensure_model_columns добавляет
+        # недостающие колонки моделей в существующие таблицы (идемпотентно).
+        # Таблицы при этом создаёт только alembic — create_all на Postgres
+        # осознанно не вызываем, чтобы не обходить миграции.
+        try:
+            from app.db import ensure_model_columns
+            added = await ensure_model_columns()
+            if added:
+                log_info(logger, f"Schema drift fixed, added columns: {', '.join(added)}")
+        except Exception as e:
+            log_error(logger, f"Schema drift check error: {e}")
+
     # DB Maintenance
     from app.utils.db_fix import fix_database
     try:
@@ -2412,49 +2592,51 @@ async def retention_worker(bot: Bot, stop_event: asyncio.Event):
                 one_hour_ago = now - timedelta(hours=1)
                 two_hours_ago = now - timedelta(hours=2)
                 
-                # Ищем юзеров с балансом < 10 (мало для просмотра)
+                # Один агрегирующий запрос вместо 2 запросов на каждого
+                # пользователя с низким балансом (раньше — N+1 каждые 15 минут):
+                # баланс < 10, активен, пуш ещё не получал, последний просмотр
+                # был 1–2 часа назад.
+                from sqlalchemy import exists, func as sa_func
+                pushed = exists().where(
+                    UserActionLog.user_id == User.id,
+                    UserActionLog.action == "retention_push",
+                )
+                last_view_sq = (
+                    select(VideoView.user_id, sa_func.max(VideoView.watched_at).label("last_watch"))
+                    .group_by(VideoView.user_id)
+                    .subquery()
+                )
                 low_balance_users = (await session.execute(
-                    select(User).where(User.balance < to_decimal(10.0), User.status == "active")
+                    select(User)
+                    .join(last_view_sq, last_view_sq.c.user_id == User.id)
+                    .where(
+                        User.balance < to_decimal(10.0),
+                        User.status == "active",
+                        ~pushed,
+                        last_view_sq.c.last_watch >= two_hours_ago,
+                        last_view_sq.c.last_watch <= one_hour_ago,
+                    )
                 )).scalars().all()
                 
                 for u in low_balance_users:
-                    # Проверяем, отправляли ли уже пуш
-                    got_push = (await session.execute(
-                        select(UserActionLog).where(
-                            UserActionLog.user_id == u.id, 
-                            UserActionLog.action == "retention_push"
-                        )
-                    )).scalars().first()
+                    # Начисляем бонус
+                    bonus = 30.0
+                    await change_balance_atomic(session, u.id, to_decimal(bonus), "retention_bonus")
+                    log = UserActionLog(user_id=u.id, action="retention_push", details=f"Sent {bonus} coins")
+                    session.add(log)
+                    await session.commit()
                     
-                    if got_push:
-                        continue
-                        
-                    # Проверяем последний просмотр видео
-                    last_view = (await session.execute(
-                        select(VideoView).where(VideoView.user_id == u.id)
-                        .order_by(VideoView.watched_at.desc())
-                        .limit(1)
-                    )).scalars().first()
-                    
-                    if last_view and two_hours_ago <= last_view.watched_at <= one_hour_ago:
-                        # Начисляем бонус
-                        bonus = 30.0
-                        await change_balance_atomic(session, u.id, to_decimal(bonus), "retention_bonus")
-                        log = UserActionLog(user_id=u.id, action="retention_push", details=f"Sent {bonus} coins")
-                        session.add(log)
-                        await session.commit()
-                        
-                        try:
-                            bot_info = await bot.get_me()
-                            ref_link = f"https://t.me/{bot_info.username}?start={u.referral_code}"
-                            with language_scope(u.language):
-                                await bot.send_message(
-                                    u.telegram_id,
-                                    t('😭 <b>Мы заметили, что у тебя кончились монетки!</b>\n\nНе уходи просто так! Мы начислили тебе <b>+{bonus} бонусных монет</b>, чтобы ты мог посмотреть еще пару сливчиков. 🔥\n\n👉 <b>Хочешь смотреть бесконечно?</b>\nСкинь эту ссылку друзьям:\n<code>{ref_link}</code>\n\nЗа каждого, кто посмотрит 5 видео, мы начислим тебе огромный бонус! Ждем тебя в ленте 🎬', bonus=bonus, ref_link=ref_link),
-                                    parse_mode="HTML"
-                                )
-                        except Exception:
-                            pass
+                    try:
+                        bot_info = await bot.get_me()
+                        ref_link = f"https://t.me/{bot_info.username}?start={u.referral_code}"
+                        with language_scope(u.language):
+                            await bot.send_message(
+                                u.telegram_id,
+                                t('😭 <b>Мы заметили, что у тебя кончились монетки!</b>\n\nНе уходи просто так! Мы начислили тебе <b>+{bonus} бонусных монет</b>, чтобы ты мог посмотреть еще пару сливчиков. 🔥\n\n👉 <b>Хочешь смотреть бесконечно?</b>\nСкинь эту ссылку друзьям:\n<code>{ref_link}</code>\n\nЗа каждого, кто посмотрит 3 видео, мы начислим тебе огромный бонус! Ждем тебя в ленте 🎬', bonus=bonus, ref_link=ref_link),
+                                parse_mode="HTML"
+                            )
+                    except Exception:
+                        pass
         except Exception as e:
             logger.error(f"Retention worker error: {e}")
             
@@ -3171,7 +3353,7 @@ async def api_cases_open(request: web.Request) -> web.Response:
             if reward is None:
                 return web.json_response({"ok": False, "error": kind})
             
-            if kind == "style":
+            if kind in ("style", "style_kept"):
                 from app.nick_styles import style_label
                 win_item = {"type": "style", "value": style_label(reward), "rarity": "epic"}
             else:
@@ -3426,7 +3608,7 @@ function toast(msg){
 }
 function fmt(v){
   v = Math.floor((+v) * 100) / 100;
-  var s = v.toFixed(2).replace(/0+$/,'').replace(/\.$/,'');
+  var s = v.toFixed(2).replace(/0+$/,'').replace(/\\.$/,'');
   return s === '-0' ? '0' : s;
 }
 function errText(c){
@@ -4133,8 +4315,23 @@ async def main():
     @dp.error()
     async def error_handler(event: ErrorEvent):
         from app.logger import log_exception, log_warning, get_logger
+        from app.services import InsufficientBalanceError
         lg = get_logger("dp_error")
         exc = event.exception
+        if isinstance(exc, InsufficientBalanceError):
+            # Гонка списания (двойной тап и т.п.): транзакция откатилась,
+            # ничего не выдано — вежливо сообщаем вместо трейсбека.
+            log_warning(lg, f"dp_error: {exc}")
+            text = t("❌ Недостаточно монет: баланс изменился, операция отменена.")
+            try:
+                upd = event.update
+                if upd.callback_query:
+                    await upd.callback_query.answer(text, show_alert=True)
+                elif upd.message:
+                    await upd.message.answer(text)
+            except Exception:
+                pass
+            return True
         if is_db_unavailable_error(exc):
             # БД недоступна (в т.ч. исчерпана compute-квота Neon).
             # Не сыпем в лог трейсбеки по 5 КБ на каждый апдейт —
@@ -4207,6 +4404,7 @@ async def main():
     audit_task = None
     lottery_task = None
     retention_task = None
+    onboarding_task = None
     promo_task = None
     cache_task = None
     mod_notifications_task = None
@@ -4242,6 +4440,7 @@ async def main():
         await _cancel_task(lottery_task)
         await _cancel_task(cache_task)
         await _cancel_task(retention_task)
+        await _cancel_task(onboarding_task)
         await _cancel_task(promo_task)
         await _cancel_task(mod_notifications_task)
         await _cancel_task(auto_broadcast_task)

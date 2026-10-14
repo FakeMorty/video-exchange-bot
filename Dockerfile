@@ -26,5 +26,7 @@ RUN chown -R botuser:botuser /app
 # Переключаемся на не-root пользователя
 USER botuser
 
-# Команда для запуска бота
-CMD ["python", "-m", "app.main"]
+# Команда для запуска бота: сначала безопасные миграции (migrate.py —
+# alembic upgrade + догон недостающих таблиц/колонок), затем сам бот.
+# Раньше образ стартовал `python -m app.main` напрямую, минуя migrate.py.
+CMD ["bash", "start_render.sh"]

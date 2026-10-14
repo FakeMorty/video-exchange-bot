@@ -65,6 +65,10 @@ from app.models import (
     AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
+    vip_free_promos_used_this_month,
+    grant_xp,
+    purchase_bonus_context,
+    describe_purchase_bonuses,
     get_or_create_user, get_user, get_user_by_id, get_video_by_id, reject_video, get_setting, save_video, save_photo,
     get_xp_multiplier, get_stars_discount,
     get_random_video_for_user, get_random_photo_for_user,
@@ -75,7 +79,7 @@ from app.services import (
     ensure_payment_pending, mark_payment_paid_once,
     get_payment_by_payload, stars_to_coins_amount,
     get_active_offers, get_offer_by_id,
-    start_offer_participation, verify_offer_subscription, is_offer_available,
+    start_offer_participation, verify_offer_subscription, is_offer_available, is_offer_budget_exhausted,
     normalize_telegram_url,
     change_balance_atomic, log_user_action, to_decimal,
     set_display_name, get_display_name, get_styled_display_name, log_balance_change,
@@ -167,7 +171,11 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             if user.status == "banned":
                 await message.answer(t('🚫 Доступ к боту для тебя заблокирован.'))
                 return
-            result = await activate_promocode(session, user.id, promo_code)
+            if not ENABLE_PROMOCODES:
+                # Deep-link не должен обходить выключатель промокодов.
+                result = t('⛔ Промокоды временно отключены.')
+            else:
+                result = await activate_promocode(session, user.id, promo_code)
             await message.answer(result)
             if not user.agreed_to_rules:
                 from app.keyboards import rules_keyboard
@@ -252,20 +260,10 @@ async def _safe_callback_answer(callback: CallbackQuery) -> None:
 
 
 def _chat_id_from_offer_url(channel_url: str) -> str | None:
-    meta = classify_offer_url(channel_url)
-    if not meta.get("auto_verify"):
-        return None
-    if not channel_url:
-        return None
-    url = channel_url.strip()
-    if "t.me/" in url:
-        url = url.split("t.me/", 1)[1]
-    if url.startswith("@"):
-        return url
-    url = url.strip("/").split("?")[0]
-    if not url:
-        return None
-    return f"@{url}"
+    # Единая реализация с фоновым аудитом (см. services.offer_chat_id_from_url):
+    # раньше ссылка на пост канала давала «@channel/123» и проверка не проходила.
+    from app.services import offer_chat_id_from_url
+    return offer_chat_id_from_url(channel_url)
 
 
 async def _check_user_offer_subscription(callback: CallbackQuery, offer: Offer) -> bool:
@@ -759,10 +757,12 @@ async def show_rules(message: Message, state: FSMContext):
 
 
 @router.message(F.text.in_(menu_button_variants("profile")))
-async def show_profile(message: Message, state: FSMContext):
+async def show_profile(message: Message, state: FSMContext, *, telegram_id: int | None = None):
     await state.clear()
+    # telegram_id передаётся, когда профиль открывают из callback-кнопки
+    # (message.from_user там — бот, а не пользователь).
     async with async_session() as session:
-        user = await get_user(session, message.from_user.id)
+        user = await get_user(session, telegram_id or message.from_user.id)
         if not user:
             return
         if not await require_nickname(message, user):
@@ -1313,8 +1313,20 @@ async def watch_video_content(callback: CallbackQuery):
                 # чтобы внешняя ошибка НЕ показывалась пользователю.
                 # Вся пост-обработка выполняется в фоне с защитой от сбоев.
                 try:
+                    # XP за просмотр (на экране «Уровень» обещано +XP_PER_WATCH,
+                    # но раньше за просмотр ничего не начислялось)
+                    new_level, leveled_up = await grant_xp(session, user.id, XP_PER_WATCH)
+                    await session.commit()
                     user = await get_user(session, callback.from_user.id)
-                    await _level_up_check(session, user, callback)
+                    await session.refresh(user)
+                    if leveled_up:
+                        try:
+                            await callback.message.answer(
+                                t('🎉 Поздравляем! Ты достиг уровня <b>{new_level}</b>!', new_level=new_level),
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            logger.exception("Failed to send level-up message")
                     await _update_quest_progress(session, user.id, "watch", 1)
 
                     if user.referred_by_user_id:
@@ -1674,7 +1686,7 @@ async def cb_comments(callback: CallbackQuery):
             for c in comments:
                 u = await get_user_by_id(session, c.user_id)
                 name = await get_styled_display_name(session, u) if u else "???"
-                text += f"👤 <b>{escape(name)}</b>: {escape(c.text)}\n"
+                text += f"👤 <b>{name}</b>: {escape(c.text or '')}\n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -1713,6 +1725,16 @@ async def process_comment(message: Message, state: FSMContext):
         await state.clear()
         return
 
+    comment_text = (message.text or "").strip()
+    if not comment_text:
+        # Стикер/фото/голосовое вместо текста раньше падали IntegrityError
+        # (text NOT NULL) и оставляли пользователя в состоянии ввода.
+        await message.answer(t('✍️ Комментарий должен быть текстом. Напиши его сообщением или выбери пункт меню, чтобы выйти.'))
+        return
+    if len(comment_text) > 500:
+        await message.answer(t('⚠️ Слишком длинный комментарий (максимум 500 символов).'))
+        return
+
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         if not user:
@@ -1738,7 +1760,7 @@ async def process_comment(message: Message, state: FSMContext):
         session.add(CommentModel(
             user_id=user.id,
             video_id=video_id,
-            text=message.text
+            text=comment_text
         ))
         xp_mult = await get_xp_multiplier(session, user.id)
         user.xp += int(XP_PER_COMMENT * xp_mult)
@@ -2188,10 +2210,17 @@ async def cb_buy_pack(callback: CallbackQuery):
             pack_key,
             stars_amount_override=current_pack["stars"],
         )
+        # Показываем бонусы (вечерний курс / первая покупка дня) в самом
+        # инвойсе — раньше они всплывали только после оплаты.
+        try:
+            bonus_mult, first_today = await purchase_bonus_context(session, user.id)
+            bonus_note = describe_purchase_bonuses(pack['coins'], bonus_mult, first_today)
+        except Exception:
+            bonus_note = ""
 
     await callback.message.answer_invoice(
         title=t('Покупка {arg0}', arg0=t(pack['title'])),
-        description=t('{arg0} монет за {arg1} Stars', arg0=pack['coins'], arg1=current_pack['stars']),
+        description=(t('{arg0} монет за {arg1} Stars', arg0=pack['coins'], arg1=current_pack['stars']) + bonus_note)[:255],
         payload=payment.payload,
         currency="XTR",
         prices=[LabeledPrice(label=t(pack['title']), amount=current_pack['stars'])]
@@ -2300,7 +2329,7 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
 async def cb_buy_custom_stars(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CustomBuyState.waiting_stars)
     await callback.message.answer(
-        t('✏️ <b>Кастомное пополнение Stars</b>\\n\\nВведите количество Stars, на которое хотите пополнить баланс.\\nМонеты будут начислены по актуальному курсу магазина.')
+        t('✏️ <b>Кастомное пополнение Stars</b>\n\nВведите количество Stars, на которое хотите пополнить баланс.\nМонеты будут начислены по актуальному курсу магазина.')
     )
     await callback.answer()
 
@@ -2408,15 +2437,54 @@ async def pre_checkout(query: PreCheckoutQuery):
     await query.answer(ok=True)
 
 
-@router.message(F.successful_payment)
-async def successful_payment(message: Message):
+async def _report_payment_problem(message: Message, payload: str, user_text: str, *, refund: bool) -> None:
+    """Stars уже списаны Telegram'ом, а товар выдать не удалось.
+
+    Раньше пользователь получал только «Ошибка платежа», а Stars оставались у
+    бота без следа. Теперь: пробуем автоматический возврат (refund_star_payment),
+    в любом случае уведомляем админов с charge_id и объясняем пользователю.
+    """
+    sp = message.successful_payment
+    charge_id = (getattr(sp, "telegram_payment_charge_id", "") or "") if sp else ""
+    stars = int(getattr(sp, "total_amount", 0) or 0) if sp else 0
+    refund_state = t('не запрашивался')
+    if refund and charge_id:
+        try:
+            await message.bot.refund_star_payment(
+                user_id=message.from_user.id,
+                telegram_payment_charge_id=charge_id,
+            )
+            refund_state = t('выполнен автоматически')
+        except Exception as exc:
+            logger.exception("refund_star_payment failed for payload=%s", payload)
+            refund_state = t('не удался ({err})', err=escape(str(exc))[:120])
+    try:
+        await notify_admins(
+            message.bot,
+            t('🚨 <b>Проблема с оплатой Stars</b>\nПользователь: <code>{tid}</code>\nPayload: <code>{payload}</code>\nСумма: <b>{stars}</b> Stars\nCharge ID: <code>{charge}</code>\nПричина: {reason}\nВозврат: {refund_state}',
+              tid=message.from_user.id, payload=escape(payload or ''), stars=stars,
+              charge=escape(charge_id or '—'), reason=escape(user_text), refund_state=refund_state),
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("notify_admins about payment problem failed")
+    try:
+        if refund_state == t('выполнен автоматически'):
+            await message.answer(t('{user_text}\n\n⭐ Stars возвращены автоматически.', user_text=user_text))
+        else:
+            await message.answer(t('{user_text}\n\nАдминистраторы уведомлены и разберутся с платежом.', user_text=user_text))
+    except Exception:
+        pass
+
+
+async def _successful_payment_impl(message: Message):
     payload = message.successful_payment.invoice_payload
     paid_stars = int(message.successful_payment.total_amount)
 
     if payload.startswith("vip_"):
         parts = payload.split("_")
         if len(parts) < 3 or not parts[1].isdigit() or int(parts[1]) != message.from_user.id:
-            await message.answer(t('Ошибка платежа: некорректный payload.'))
+            await _report_payment_problem(message, payload, t('Ошибка платежа: некорректный payload.'), refund=True)
             return
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
@@ -2433,12 +2501,12 @@ async def successful_payment(message: Message):
                 if not payment or payment.user_id != user.id:
                     await session.rollback()
                     session.expunge_all()
-                    await message.answer(t('Ошибка платежа: пользователь не совпадает.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: пользователь не совпадает.'), refund=True)
                     return
                 if int(payment.stars_amount) != paid_stars:
                     await session.rollback()
                     session.expunge_all()
-                    await message.answer(t('Ошибка платежа: сумма не совпадает.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: сумма не совпадает.'), refund=True)
                     return
                 if not await mark_payment_paid_once(session, payload):
                     await session.rollback()
@@ -2473,12 +2541,12 @@ async def successful_payment(message: Message):
                 uses = int(parts[3])
                 hours = int(parts[4])
             except Exception:
-                await message.answer(t('Ошибка платежа: некорректный payload.'))
+                await _report_payment_problem(message, payload, t('Ошибка платежа: некорректный payload.'), refund=True)
                 return
             async with async_session() as session:
                 user = await get_user(session, creator_tg_id)
                 if not user or user.telegram_id != message.from_user.id:
-                    await message.answer(t('Ошибка платежа: пользователь не найден.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: пользователь не найден.'), refund=True)
                     return
                 payment = await get_payment_by_payload(session, payload)
                 if not payment:
@@ -2492,12 +2560,12 @@ async def successful_payment(message: Message):
                 if not payment or payment.user_id != user.id:
                     await session.rollback()
                     session.expunge_all()
-                    await message.answer(t('Ошибка платежа: пользователь не совпадает.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: пользователь не совпадает.'), refund=True)
                     return
                 if int(payment.stars_amount) != paid_stars:
                     await session.rollback()
                     session.expunge_all()
-                    await message.answer(t('Ошибка платежа: сумма не совпадает.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: сумма не совпадает.'), refund=True)
                     return
                 if not await mark_payment_paid_once(session, payload):
                     await session.rollback()
@@ -2514,7 +2582,7 @@ async def successful_payment(message: Message):
                 if error:
                     await session.rollback()
                     session.expunge_all()
-                    await message.answer(t('❌ Ошибка создания промокода: {error}', error=error))
+                    await _report_payment_problem(message, payload, t('❌ Ошибка создания промокода: {error}', error=error), refund=True)
                 else:
                     promo.stars_paid = paid_stars
                     await session.commit()
@@ -2526,16 +2594,16 @@ async def successful_payment(message: Message):
                         parse_mode="HTML"
                     )
         else:
-            await message.answer(t('Ошибка платежа.'))
+            await _report_payment_problem(message, payload, t('Ошибка платежа.'), refund=True)
     elif payload.startswith("lootbox_"):
         parts = payload.split("_")
         if len(parts) < 3 or not parts[1].isdigit() or int(parts[1]) != message.from_user.id:
-            await message.answer(t('Ошибка платежа: некорректный payload.'))
+            await _report_payment_problem(message, payload, t('Ошибка платежа: некорректный payload.'), refund=True)
             return
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if not user:
-                await message.answer(t('⚠️ Пользователь не найден.'))
+                await _report_payment_problem(message, payload, t('⚠️ Пользователь не найден.'), refund=True)
                 return
             payment = await get_payment_by_payload(session, payload)
             if not payment:
@@ -2549,12 +2617,12 @@ async def successful_payment(message: Message):
             if not payment or payment.user_id != user.id:
                 await session.rollback()
                 session.expunge_all()
-                await message.answer(t('Ошибка платежа: пользователь не совпадает.'))
+                await _report_payment_problem(message, payload, t('Ошибка платежа: пользователь не совпадает.'), refund=True)
                 return
             if int(payment.stars_amount) != paid_stars:
                 await session.rollback()
                 session.expunge_all()
-                await message.answer(t('Ошибка платежа: сумма не совпадает.'))
+                await _report_payment_problem(message, payload, t('Ошибка платежа: сумма не совпадает.'), refund=True)
                 return
             reward, rarity_or_err, new_pity = await open_lootbox_for_stars(
                 session,
@@ -2582,15 +2650,15 @@ async def successful_payment(message: Message):
             async with async_session() as session:
                 user = await get_user(session, message.from_user.id)
                 if not user:
-                    await message.answer(t('⚠️ Пользователь не найден.'))
+                    await _report_payment_problem(message, payload, t('⚠️ Пользователь не найден.'), refund=True)
                     return
 
                 payment = await get_payment_by_payload(session, payload)
                 if not payment or payment.user_id != user.id:
-                    await message.answer(t('Ошибка платежа: платёж не найден или принадлежит другому пользователю.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: платёж не найден или принадлежит другому пользователю.'), refund=True)
                     return
                 if int(payment.stars_amount) != paid_stars:
-                    await message.answer(t('Ошибка платежа: сумма не совпадает.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: сумма не совпадает.'), refund=True)
                     return
                 if not await mark_payment_paid_once(session, payload):
                     await session.rollback()
@@ -2602,7 +2670,7 @@ async def successful_payment(message: Message):
                 if not offer or offer.creator_user_id != user.id:
                     await session.rollback()
                     session.expunge_all()
-                    await message.answer(t('Ошибка платежа: оффер не найден или не принадлежит тебе.'))
+                    await _report_payment_problem(message, payload, t('Ошибка платежа: оффер не найден или не принадлежит тебе.'), refund=True)
                     return
 
                 offer.status = "pending"
@@ -2632,14 +2700,14 @@ async def successful_payment(message: Message):
         async with async_session() as session:
             user = await get_user(session, message.from_user.id)
             if not user:
-                await message.answer(t('⚠️ Пользователь не найден.'))
+                await _report_payment_problem(message, payload, t('⚠️ Пользователь не найден.'), refund=True)
                 return
             payment_row = await get_payment_by_payload(session, payload)
             if not payment_row or payment_row.user_id != user.id:
-                await message.answer(t('Ошибка платежа: не найден в системе.'))
+                await _report_payment_problem(message, payload, t('Ошибка платежа: не найден в системе.'), refund=True)
                 return
             if int(payment_row.stars_amount) != paid_stars:
-                await message.answer(t('Ошибка платежа: сумма не совпадает.'))
+                await _report_payment_problem(message, payload, t('Ошибка платежа: сумма не совпадает.'), refund=True)
                 return
             payment, credited_total = await apply_successful_payment(session, payload)
             if payment and await _is_first_paid_payment(session, user.id):
@@ -2653,7 +2721,20 @@ async def successful_payment(message: Message):
                 parse_mode="HTML"
             )
         else:
-            await message.answer(t('✅ Оплата получена!'))
+            await message.answer(t('✅ Платёж уже был обработан ранее.'))
+
+
+@router.message(F.successful_payment)
+async def successful_payment(message: Message):
+    payload = (message.successful_payment.invoice_payload or "") if message.successful_payment else ""
+    try:
+        await _successful_payment_impl(message)
+    except Exception:
+        # Любой необработанный сбой после оплаты не должен «молча» съесть Stars.
+        logger.exception("successful_payment failed for payload=%s", payload)
+        await _report_payment_problem(
+            message, payload, t('⚠️ Не удалось обработать платёж.'), refund=False
+        )
 
 
 def _lootbox_kb(coin_price: Decimal | None = None, star_price: int | None = None, user_level: int = 1) -> InlineKeyboardMarkup:
@@ -2761,7 +2842,15 @@ async def lootbox_buy(callback: CallbackQuery):
             display_star_price = max(1, int(math.ceil(base_star_price * (1 - discount)))) if discount > 0 else base_star_price
             
             if admin_free:
-                # Бесплатный лутбокс для админа
+                # Бесплатный лутбокс для админа — но те же правила по типу
+                # кейса и уровню, что и у платного открытия.
+                if case_type not in ("common", "elite", "legendary"):
+                    await callback.answer(t('Неизвестный тип кейса.'), show_alert=True)
+                    return
+                req_level = {"common": 1, "elite": 10, "legendary": 20}[case_type]
+                if user.level < req_level:
+                    await callback.answer(t('Требуется уровень {req_level}.', req_level=req_level), show_alert=True)
+                    return
                 reward, rarity, new_pity = _roll_lootbox_reward_coins(user.lootbox_pity_counter, case_type)
                 user.lootbox_pity_counter = new_pity
                 user = await change_balance_atomic(
@@ -2813,7 +2902,8 @@ async def lootbox_buy(callback: CallbackQuery):
             # Admin free — выдаём результат сразу, без оплаты
             if await is_admin_free_eligible(session, callback.from_user.id, user):
                 from app.services import _roll_lootbox_reward_coins
-                reward, rarity = _roll_lootbox_reward_coins()
+                reward, rarity, new_pity = _roll_lootbox_reward_coins(user.lootbox_pity_counter or 0)
+                user.lootbox_pity_counter = new_pity
                 user = await change_balance_atomic(
                     session,
                     user.id,
@@ -2981,11 +3071,19 @@ async def styles_case_view_cat(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StylesCaseState.configuring, F.data.startswith("styles_case_toggle_style:"))
 async def styles_case_toggle_style(callback: CallbackQuery, state: FSMContext):
-    style_id = int(callback.data.split(":")[1])
+    from app.nick_styles import STYLES
+
+    try:
+        style_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+    if style_id not in STYLES:
+        # Старая клавиатура / неизвестный стиль — не трогаем состояние.
+        await callback.answer(t('Стиль не найден'), show_alert=True)
+        return
     data = await state.get_data()
     excluded_ids = list(data.get("excluded_ids", []))
-    
-    from app.nick_styles import STYLES
     
     if style_id in excluded_ids:
         excluded_ids.remove(style_id)
@@ -3057,7 +3155,12 @@ async def styles_case_open(callback: CallbackQuery, state: FSMContext):
         await callback.answer(kind, show_alert=True)
         return
         
-    if kind == "style":
+    if kind == "style_kept":
+        from app.nick_styles import style_inline_preview, style_label
+        preview = style_inline_preview(reward)
+        label = style_label(reward)
+        msg = t('✨ <b>Выпал стиль «{label}»</b> (<code>{preview}</code>)\n\nУ тебя уже активен свой стиль ника — мы его не трогали, а срок действия продлили на 7 дней.', label=label, preview=preview)
+    elif kind == "style":
         from app.nick_styles import style_inline_preview, style_label
         preview = style_inline_preview(reward)
         label = style_label(reward)
@@ -3224,7 +3327,16 @@ async def cb_offer_start(callback: CallbackQuery):
             return
         part, is_new = await start_offer_participation(session, user.id, offer_id)
         if part is None:
-            await callback.answer(t('Оффер не найден.'), show_alert=True)
+            # Понятная причина вместо универсального «не найден»
+            offer_probe = await get_offer_by_id(session, offer_id)
+            if offer_probe and offer_probe.creator_user_id == user.id:
+                await callback.answer(t('Это твой собственный оффер — участвовать в нём нельзя.'), show_alert=True)
+            elif offer_probe and is_offer_budget_exhausted(offer_probe):
+                await callback.answer(t('Бюджет этого оффера исчерпан — новых участников он не принимает.'), show_alert=True)
+            elif offer_probe and not is_offer_available(offer_probe):
+                await callback.answer(t('Оффер уже завершён или неактивен.'), show_alert=True)
+            else:
+                await callback.answer(t('Оффер не найден.'), show_alert=True)
             return
         if not is_new:
             await callback.answer(t('Ты уже участвуешь!'), show_alert=True)
@@ -3672,7 +3784,6 @@ async def lottery_menu(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "lottery_buy")
 def _format_lottery_purchase_summary(tickets: list[LotteryTicket], total_cost: Decimal, balance_after: Decimal, *, admin_free: bool) -> str:
     qty = len(tickets)
     lines = [
@@ -3810,8 +3921,8 @@ async def lottery_my_tickets(callback: CallbackQuery):
         await callback.answer()
         return
     text = t('📋 <b>Твои билеты</b>\n\n')
-    for t in tickets:
-        text += t('#{id}: {numbers} | совпадений: {matched_count}\n', id=t.id, numbers=t.numbers, matched_count=t.matched_count)
+    for ticket in tickets:
+        text += t('#{id}: {numbers} | совпадений: {matched_count}\n', id=ticket.id, numbers=ticket.numbers, matched_count=ticket.matched_count)
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
@@ -3919,7 +4030,7 @@ async def feedback_submit(message: Message, state: FSMContext):
             await state.clear()
             return
         feedback = await create_feedback(session, user.id, kind, text_value)
-        author_name = get_display_name(user)
+        author_name = escape(get_display_name(user))
 
     for admin_tg in ADMINS:
         try:
@@ -3934,7 +4045,7 @@ async def feedback_submit(message: Message, state: FSMContext):
             pass
 
     await message.answer(
-        t('✅ Спасибо! Твойе обращение отправлено команде.\nЕсли нужно, мы свяжемся с тебеи в Telegram.')
+        t('✅ Спасибо! Твоё обращение отправлено команде.\nЕсли нужно, мы свяжемся с тобой в Telegram.')
     )
     await state.clear()
 
@@ -4049,7 +4160,7 @@ async def promo_hours(message: Message, state: FSMContext):
         max_free_coins = int(await get_runtime_value(session, "vip_free_promo_max_coins") or VIP_FREE_PROMO_MAX_COINS)
         max_free_uses = int(await get_runtime_value(session, "vip_free_promo_max_uses") or VIP_FREE_PROMO_MAX_USES)
         is_vip_user = is_vip(user)
-        has_free_left = is_vip_user and (getattr(user, "promo_created_this_month", 0) or 0) < VIP_FREE_PROMO_PER_MONTH
+        has_free_left = is_vip_user and vip_free_promos_used_this_month(user) < VIP_FREE_PROMO_PER_MONTH
         within_limits = (amount * uses) <= max_free_coins and uses <= max_free_uses
 
         if has_free_left and within_limits:
@@ -4059,7 +4170,7 @@ async def promo_hours(message: Message, state: FSMContext):
                 await message.answer(error)
             else:
                 await message.answer(
-                    t('✅ Бесплатный VIP-промокод:\n<code>{code}</code>\nСумма: {amount} монет, использований: {uses}\nОсталось бесплатных в этом месяце: {arg3}\n\n⚠️ Поделись кодом с другом! Активировать собственный промокод нельзя.', code=promo.code, amount=amount, uses=uses, arg3=VIP_FREE_PROMO_PER_MONTH - user.promo_created_this_month),
+                    t('✅ Бесплатный VIP-промокод:\n<code>{code}</code>\nСумма: {amount} монет, использований: {uses}\nОсталось бесплатных в этом месяце: {arg3}\n\n⚠️ Поделись кодом с другом! Активировать собственный промокод нельзя.', code=promo.code, amount=amount, uses=uses, arg3=max(0, VIP_FREE_PROMO_PER_MONTH - vip_free_promos_used_this_month(user))),
                     parse_mode="HTML"
                 )
             await state.clear()

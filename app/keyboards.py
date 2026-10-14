@@ -343,11 +343,11 @@ def admin_db_keyboard(tables) -> InlineKeyboardMarkup:
       - list[tuple[str, str]] where (table_name, label)
     """
     kb = []
-    for t in tables:
-        if isinstance(t, (tuple, list)) and len(t) == 2:
-            table_name, label = t[0], t[1]
+    for table in tables:
+        if isinstance(table, (tuple, list)) and len(table) == 2:
+            table_name, label = table[0], table[1]
         else:
-            table_name, label = t, str(t)
+            table_name, label = table, str(table)
         kb.append([InlineKeyboardButton(text=f"📋 {label}", callback_data=f"db_open:{table_name}:0")])
     kb.append([InlineKeyboardButton(text=t('🔙 Админ-центр'), callback_data="admin_center")])
     return InlineKeyboardMarkup(inline_keyboard=kb)

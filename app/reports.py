@@ -77,6 +77,7 @@ INCOME_SOURCE_LABELS = {
     "lottery_win_6": "Секслото: 6 совпадений",
     "lottery_bet_win": "Секслото: ставки",
     "lottery_weekly_leaderboard": "Секслото: недельный рейтинг",
+    "offer_budget_refund": "Офферы: возврат бюджета",
 }
 
 EXPENSE_SOURCE_LABELS = {

@@ -1,9 +1,9 @@
 from datetime import datetime, timezone, date
 from decimal import Decimal
 from sqlalchemy import (
-    func,
+    func, text,
     BigInteger, String, Numeric, Boolean,
-    Integer, DateTime, ForeignKey, UniqueConstraint, Text, Date,
+    Integer, DateTime, ForeignKey, UniqueConstraint, Text, Date, Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from typing import List
@@ -336,6 +336,14 @@ class Offer(Base):
     # Размещение
     duration_days: Mapped[int] = mapped_column(Integer, default=30)
     placement_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+
+    # Эскроу пользовательского оффера: награды участникам выплачиваются из
+    # бюджета, внесённого автором (budget_total), а не «из воздуха».
+    # budget_total = 0 — оффер финансирует сам бот (админские и legacy-офферы).
+    budget_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), server_default="0")
+    budget_spent: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"), server_default="0")
+    max_participants: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    budget_refunded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Результат модерации. Срок пользовательского оффера отсчитывается от
     # approved_at, а не от момента оплаты/отправки в очередь.
@@ -741,3 +749,15 @@ class ArcadeRun(Base):
     payout: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        # Не больше одного активного забега на игрока даже при параллельных
+        # запросах старта (частичный уникальный индекс, Postgres и SQLite).
+        Index(
+            "uq_arcade_runs_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )

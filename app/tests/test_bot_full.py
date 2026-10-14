@@ -3412,14 +3412,31 @@ async def test_donationalerts_integration():
         assert ok2 is False
         assert "уже был обработан" in msg2
 
-        # 3. Process VIP donation (150 RUB or comment containing "vip")
+        # 3. Слово «vip» в комментарии донатера НЕ выдаёт VIP (B-06): тип
+        #    награды задаёт только заказ/админ — иначе любой донат с текстом
+        #    «vip» превращался в месяц VIP.
+        ok_vip_word, msg_vip_word = await process_donationalerts_donation(
+            session=session,
+            donation_id="da_test_vip_word",
+            amount_rub=10,
+            telegram_user_id=888001,
+            comment="888001 vip",
+            bot=mock_bot
+        )
+        assert ok_vip_word is True
+        assert "VIP" not in msg_vip_word
+        assert await has_active_perk(session, u1.id, "vip") is False
+
+        # 4. VIP выдаётся только при явном reward_type="vip" (заказ из бота /
+        #    выбор админа при ручной сверке).
         ok3, msg3 = await process_donationalerts_donation(
             session=session,
             donation_id="da_test_vip",
             amount_rub=150,
             telegram_user_id=888001,
-            comment="888001 vip",
-            bot=mock_bot
+            comment="888001",
+            bot=mock_bot,
+            reward_type="vip",
         )
         assert ok3 is True
         assert "VIP" in msg3
@@ -4178,7 +4195,8 @@ async def test_donationalerts_vip_sets_user_vip_until_and_status_paid():
             amount_rub=150,
             telegram_user_id=96001,
             comment="vip",
-            bot=mock_bot
+            bot=mock_bot,
+            reward_type="vip",
         )
         assert ok is True
         await session.refresh(u)

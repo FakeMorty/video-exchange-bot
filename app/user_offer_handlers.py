@@ -16,11 +16,28 @@ from sqlalchemy import select
 from app.db import async_session
 from app.models import Offer
 from app.services import (
-    get_user, change_balance_atomic,
+    get_user, change_balance_atomic, InsufficientBalanceError,
     ensure_payment_pending, get_stars_discount,
     notify_admins, classify_offer_url, normalize_telegram_url,
-    coins_to_stars_price,
+    coins_to_stars_price, offer_budget_remaining,
 )
+
+# Эскроу пользовательского оффера: автор оплачивает награды участникам заранее.
+OFFER_MIN_PARTICIPANTS = 3
+OFFER_MAX_PARTICIPANTS = 500
+OFFER_SERVICE_FEE_RATE = Decimal("0.10")
+OFFER_SERVICE_FEE_MIN = Decimal("50")
+
+
+def calculate_user_offer_budget(reward_final: Decimal, participants: int) -> tuple[Decimal, Decimal, Decimal]:
+    """(бюджет наград, сервисный сбор, итого к оплате) для пользовательского оффера.
+
+    Каждый участник получает суммарно reward_final (аванс входит в итог), поэтому
+    бюджет = reward_final × участников; сбор площадки — 10%, но не меньше 50 монет.
+    """
+    budget = (Decimal(reward_final) * Decimal(int(participants))).quantize(Decimal("1"))
+    fee = max(OFFER_SERVICE_FEE_MIN, (budget * OFFER_SERVICE_FEE_RATE).quantize(Decimal("1")))
+    return budget, fee, budget + fee
 
 router = Router()
 
@@ -33,6 +50,7 @@ class UserOfferState(StatesGroup):
     waiting_reward_final = State()
     waiting_penalty = State()
     waiting_duration = State()
+    waiting_participants = State()
     waiting_payment_method = State()
 
 
@@ -168,26 +186,50 @@ async def user_offer_duration(message: Message, state: FSMContext):
         return
     
     await state.update_data(duration_days=days)
-    
-    # Расчёт стоимости
+    await state.set_state(UserOfferState.waiting_participants)
     data = await state.get_data()
-    total_reward = data["reward_preview"] + data["reward_final"]
-    cost = max(Decimal("50"), (total_reward * Decimal("0.20") * Decimal(days) / Decimal("30")).quantize(Decimal("1")))
-    
-    await state.update_data(placement_cost=cost)
-    
-    text = (
-        t('💰 <b>Стоимость размещения:</b> <b>{cost:.0f} монет</b>\n\n• Награды: {arg1} + {arg2}\n• Штраф: {arg3}\n• Длительность: {days} дней\n• Коэффициент: 20%\n\nВыбери способ оплаты:', cost=cost, arg1=data['reward_preview'], arg2=data['reward_final'], arg3=data['penalty_unsubscribe'], days=days)
+    await message.answer(
+        t('👥 <b>Шаг 8/8: Сколько участников оплачиваешь?</b>\n\nНаграды участникам выплачиваются из твоего бюджета: <b>{reward_final:.0f}</b> монет за каждого (аванс входит в итоговую награду). Когда оплаченные места закончатся, оффер закроется автоматически, а неизрасходованный остаток вернётся тебе по окончании срока.\n\nВведи число от {min_p} до {max_p}:', reward_final=Decimal(data['reward_final']), min_p=OFFER_MIN_PARTICIPANTS, max_p=OFFER_MAX_PARTICIPANTS),
+        parse_mode="HTML",
     )
-    
+
+
+@router.message(UserOfferState.waiting_participants)
+async def user_offer_participants(message: Message, state: FSMContext):
+    try:
+        participants = int((message.text or "").strip())
+        if participants < OFFER_MIN_PARTICIPANTS or participants > OFFER_MAX_PARTICIPANTS:
+            raise ValueError
+    except Exception:
+        await message.answer(t('❌ Введи число от {min_p} до {max_p}', min_p=OFFER_MIN_PARTICIPANTS, max_p=OFFER_MAX_PARTICIPANTS))
+        return
+
+    data = await state.get_data()
+    budget, fee, cost = calculate_user_offer_budget(Decimal(data["reward_final"]), participants)
+    await state.update_data(max_participants=participants, budget_total=budget, placement_cost=cost)
+
+    text = t(
+        '💰 <b>Стоимость размещения:</b> <b>{cost:.0f} монет</b>\n\n• Бюджет наград: {budget:.0f} монет ({reward_final:.0f} × {participants} участников)\n• Сервисный сбор: {fee:.0f} монет\n• Аванс / итог участнику: {preview} / {reward_final:.0f}\n• Штраф за отписку: {penalty}\n• Длительность: {days} дней\n\nВыбери способ оплаты:',
+        cost=cost, budget=budget, reward_final=Decimal(data['reward_final']), participants=participants,
+        fee=fee, preview=data['reward_preview'], penalty=data['penalty_unsubscribe'], days=data['duration_days'],
+    )
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t('🪙 Монеты ({cost:.0f})', cost=cost), callback_data="user_offer_pay:coins")],
         [InlineKeyboardButton(text="⭐ Stars", callback_data="user_offer_pay:stars")],
-        [InlineKeyboardButton(text=t('❌ Отмена'), callback_data="offers_participation")],
+        [InlineKeyboardButton(text=t('❌ Отмена'), callback_data="user_offer_cancel")],
     ])
-    
+
     await state.set_state(UserOfferState.waiting_payment_method)
     await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "user_offer_cancel")
+async def user_offer_cancel(callback: CallbackQuery, state: FSMContext):
+    """«Отмена» на шаге оплаты: сбрасываем сценарий, иначе пользователь оставался в FSM."""
+    await state.clear()
+    await callback.message.answer(t('❌ Создание оффера отменено.'), reply_markup=user_offers_menu())
+    await callback.answer()
 
 
 @router.callback_query(UserOfferState.waiting_payment_method, F.data.startswith("user_offer_pay:"))
@@ -210,13 +252,18 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 await callback.answer()
                 return
 
-            await change_balance_atomic(
-                session,
-                user.id,
-                -cost,
-                "user_offer_placement",
-                details=f"Оффер: {data['title']}",
-            )
+            try:
+                await change_balance_atomic(
+                    session,
+                    user.id,
+                    -cost,
+                    "user_offer_placement",
+                    details=f"Оффер: {data['title']}",
+                )
+            except InsufficientBalanceError:
+                await session.rollback()
+                await callback.answer(t('Недостаточно монет'), show_alert=True)
+                return
 
             offer = Offer(
                 creator_user_id=user.id,
@@ -228,6 +275,8 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 penalty_unsubscribe=Decimal(data.get("penalty_unsubscribe", 0)),
                 duration_days=data["duration_days"],
                 placement_cost=cost,
+                budget_total=Decimal(data.get("budget_total", 0) or 0),
+                max_participants=data.get("max_participants"),
                 status="pending",
                 is_active=False,
             )
@@ -260,6 +309,8 @@ async def user_offer_payment(callback: CallbackQuery, state: FSMContext):
                 penalty_unsubscribe=Decimal(data.get("penalty_unsubscribe", 0)),
                 duration_days=data["duration_days"],
                 placement_cost=cost,
+                budget_total=Decimal(data.get("budget_total", 0) or 0),
+                max_participants=data.get("max_participants"),
                 status="payment_pending",
                 is_active=False,
             )
@@ -327,6 +378,11 @@ async def user_my_offers(callback: CallbackQuery):
             + t("Статус: {status}\n", status=status_labels.get(offer.status, escape(offer.status)))
             + t("Награда: {preview}+{final} монет\n", preview=offer.reward_preview, final=offer.reward_final)
         )
+        remaining = offer_budget_remaining(offer)
+        if remaining is not None:
+            text += t("Бюджет: {spent:.0f} / {total:.0f} монет, остаток {remaining:.0f}\n", spent=Decimal(offer.budget_spent or 0), total=Decimal(offer.budget_total or 0), remaining=remaining)
+            if offer.budget_refunded_at is not None:
+                text += t("Остаток бюджета возвращён на баланс.\n")
         if offer.status == "rejected" and offer.rejection_reason:
             text += t("Причина: {reason}\n", reason=escape(offer.rejection_reason))
         text += "\n"

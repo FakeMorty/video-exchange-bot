@@ -319,6 +319,9 @@ LOTTERY_NUMBERS_POOL = _get_int("LOTTERY_NUMBERS_POOL", 36)
 LOTTERY_NUMBERS_PER_TICKET = _get_int("LOTTERY_NUMBERS_PER_TICKET", 6)
 LOTTERY_MATCH2_REWARD = _get_float("LOTTERY_MATCH2_REWARD", 10.0)
 LOTTERY_MATCH3_REWARD = _get_float("LOTTERY_MATCH3_REWARD", 20.0)
+# Потолок одной ставки на чёт/нечет в Mini App (UI ставит 10 монет; API без лимита
+# позволял бы ставить сколько угодно при нулевой комиссии дома).
+LOTTERY_BET_MAX_AMOUNT = max(1.0, _get_float("LOTTERY_BET_MAX_AMOUNT", 100.0))
 LOTTERY_WEEKLY_LEADERBOARD_REWARDS = {
     1: _get_float("LOTTERY_WEEKLY_LEADERBOARD_REWARD_1", 100.0),
     2: _get_float("LOTTERY_WEEKLY_LEADERBOARD_REWARD_2", 50.0),

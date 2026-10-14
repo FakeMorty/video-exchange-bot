@@ -168,6 +168,25 @@ def classify_offer_url(target_url: str) -> dict:
     }
 
 
+def offer_chat_id_from_url(channel_url: str) -> str | None:
+    """`@username` канала/чата для getChatMember по ссылке оффера.
+
+    Единая реализация для пользовательской проверки и фонового аудита: берётся
+    первый сегмент пути, поэтому ссылка на пост (t.me/channel/123) даёт
+    `@channel`, а не `@channel/123` (из-за чего проверка никогда не проходила).
+    """
+    meta = classify_offer_url(channel_url)
+    normalized = normalize_telegram_url(channel_url)
+    if not meta.get("auto_verify") or not normalized:
+        return None
+    import urllib.parse
+    path = urllib.parse.urlsplit(normalized).path.strip("/")
+    username = path.split("/", 1)[0].split("?", 1)[0]
+    if not username or username in {"c", "s", "joinchat", "share", "proxy", "addstickers", "addemoji"}:
+        return None
+    return f"@{username}"
+
+
 async def notify_admins(bot, text: str, *, parse_mode: str = "HTML") -> int:
     sent = 0
     for admin_tid in ADMINS:
@@ -232,7 +251,9 @@ async def open_lootbox_for_coins(session: AsyncSession, user_id: int, kind: str 
         "legendary": 20,
     }
     
-    price = prices.get(kind, prices["common"])
+    if kind not in prices:
+        return None, t('Неизвестный тип кейса.'), 0
+    price = prices[kind]
     req_level = levels.get(kind, 1)
     
     if user.level < req_level:
@@ -241,12 +262,20 @@ async def open_lootbox_for_coins(session: AsyncSession, user_id: int, kind: str 
     if user.balance < price:
         return None, t('Недостаточно монет.'), 0
 
-    # Using separate pity per case type could be done, but let's stick to one for simplicity 
-    # or just use the common one. User might prefer it reset on any non-common win.
-    reward, rarity, new_pity = _roll_lootbox_reward_coins(user.lootbox_pity_counter, kind)
-    user.lootbox_pity_counter = new_pity
+    # Pity-счётчик относится только к обычному кейсу: иначе серия «обычных»
+    # выпадений дешёвого кейса гарантировала бы редкость в дорогом.
+    pity_before = int(user.lootbox_pity_counter or 0) if kind == "common" else 0
+    reward, rarity, new_pity = _roll_lootbox_reward_coins(pity_before, kind)
+    if kind == "common":
+        user.lootbox_pity_counter = new_pity
 
-    await change_balance_atomic(session, user.id, -price, f"lootbox_buy_{kind}", details="currency=coins")
+    # Списание атомарное: при гонке (двойной тап / два запроса Mini App)
+    # второе открытие получит отказ вместо ухода баланса в минус.
+    try:
+        await change_balance_atomic(session, user.id, -price, f"lootbox_buy_{kind}", details="currency=coins")
+    except InsufficientBalanceError:
+        await session.rollback()
+        return None, t('Недостаточно монет.'), 0
     await change_balance_atomic(
         session,
         user.id,
@@ -264,7 +293,7 @@ async def open_lootbox_for_coins(session: AsyncSession, user_id: int, kind: str 
         rarity=rarity,
     ))
     await session.commit()
-    return reward, rarity, 10 - new_pity
+    return reward, rarity, (10 - new_pity) if kind == "common" else 0
 
 
 async def open_lootbox_for_stars(
@@ -342,13 +371,36 @@ async def open_styles_lootbox(
     if user.balance < price:
         return None, t('Недостаточно монет. Нужно {price:.0f}.', price=price), price
         
-    await change_balance_atomic(session, user.id, -price, "styles_lootbox_buy", details=f"excl={len(excluded_style_ids)}")
+    try:
+        await change_balance_atomic(session, user.id, -price, "styles_lootbox_buy", details=f"excl={len(excluded_style_ids)}")
+    except InsufficientBalanceError:
+        await session.rollback()
+        return None, t('Недостаточно монет. Нужно {price:.0f}.', price=price), price
     
     r = random.random()
     if r < 0.50:
         # Style reward
         available_ids = [sid for sid in STYLES.keys() if sid not in excluded_style_ids]
         win_style_id = random.choice(available_ids)
+        # Если у пользователя уже активен (купленный) стиль — не затираем его
+        # молча выигрышем из кейса: оставляем текущий стиль и продлеваем срок
+        # на 7 дней. Раньше activate_perk подменял style_id без спроса.
+        current = (await session.execute(
+            select(UserPerk).where(
+                UserPerk.user_id == user.id,
+                UserPerk.perk_type == "custom_nick",
+                UserPerk.is_active == True,
+                UserPerk.active_until > utc_now(),
+            ).order_by(UserPerk.active_until.desc()).limit(1)
+        )).scalars().first()
+        if current and current.style_id and current.style_id != win_style_id:
+            await activate_perk(session, user.id, "custom_nick", 7, style_id=None)
+            await log_user_action(
+                session, user.id, "styles_lootbox_win_style",
+                f"style_id={win_style_id} kept_current={current.style_id} (+7d)",
+            )
+            await session.commit()
+            return win_style_id, "style_kept", price
         # Activate for 7 days
         await activate_perk(session, user.id, "custom_nick", 7, style_id=win_style_id)
         await log_user_action(session, user.id, "styles_lootbox_win_style", f"style_id={win_style_id}")
@@ -419,7 +471,7 @@ def validate_nickname_format(name: str) -> tuple[bool, str]:
         return False, t('Ник слишком короткий. Минимум {NICKNAME_MIN_LENGTH} символов.', NICKNAME_MIN_LENGTH=NICKNAME_MIN_LENGTH)
     if len(name) > NICKNAME_MAX_LENGTH:
         return False, t('Ник слишком длинный. Максимум {NICKNAME_MAX_LENGTH} символов.', NICKNAME_MAX_LENGTH=NICKNAME_MAX_LENGTH)
-    if not re.fullmatch(r"[a-zA-Zа-яА-ЯёЁ0-9_\\-]+", name):
+    if not re.fullmatch(r"[a-zA-Zа-яА-ЯёЁ0-9_-]+", name):
         return False, t('Ник может содержать только буквы (рус/лат), цифры, _ и -. Без точек, пробелов, ? и спецсимволов.')
     if re.fullmatch(r"[\d_\-]+", name):
         return False, t('Ник не может состоять только из цифр, _ или -. Добавьте буквы.')
@@ -512,8 +564,13 @@ async def get_styled_display_name(
         True           — card-режим: многострочный, для профиля
     """
     from app.nick_styles import format_nick_inline, format_nick_card
+    from html import escape
 
-    name = get_display_name(user)
+    # Имя из Telegram (first_name/username — фолбэк без своего ника) может
+    # содержать «<», «&» и т.п.; все экраны с ником идут с parse_mode=HTML,
+    # поэтому экранируем здесь — в одной точке. Иначе «<3 Аня» ломала рендер
+    # приветствия (пользователь не получал меню), подписи к видео и топы.
+    name = escape(get_display_name(user), quote=False)
     try:
         style_id = await get_nick_style_id(session, user.id)
     except Exception:
@@ -557,6 +614,23 @@ async def is_admin_free_eligible(session: AsyncSession, telegram_id: int, user: 
 def is_vip(user: "User") -> bool:
     """Проверка, является ли пользователь VIP (активен ли статус на текущий момент)."""
     return bool(user.vip_until and user.vip_until > utc_now())
+class InsufficientBalanceError(Exception):
+    """Списание невозможно: на балансе меньше монет, чем требуется.
+
+    Бросается из ``change_balance_atomic`` для отрицательных сумм, когда
+    атомарный ``UPDATE ... WHERE balance + amount >= 0`` не затронул строку.
+    Защищает от TOCTOU: два параллельных запроса (двойной тап, два HTTP-вызова
+    Mini App) раньше оба проходили «проверку баланса» на устаревшем объекте и
+    уводили баланс в минус.
+    """
+
+    def __init__(self, user_id: int, amount, balance=None):
+        self.user_id = user_id
+        self.amount = amount
+        self.balance = balance
+        super().__init__(f"insufficient balance: user_id={user_id}, amount={amount}, balance={balance}")
+
+
 async def change_balance_atomic(
     session: AsyncSession,
     user_id: int,
@@ -565,24 +639,37 @@ async def change_balance_atomic(
     source_id: int = None,
     admin_id: int = None,
     details: str = None,
+    *,
+    allow_negative: bool = False,
 ) -> "User | None":
     """
     Atomically updates user balance and logs the change.
-    Returns the updated user object.
+    Returns the updated user object (None — пользователь не найден).
+
+    Для списаний (``amount < 0``) условие ``balance + amount >= 0`` входит в сам
+    UPDATE, поэтому баланс не может уйти в минус даже при гонке; при нехватке
+    монет бросается ``InsufficientBalanceError``. ``allow_negative=True`` —
+    только для штрафов/служебных корректировок, где минус допустим осознанно.
     """
     from sqlalchemy import update
-    
+
+    is_debit = amount < 0 and not allow_negative
+
     # 1. Atomic update in DB
-    stmt = (
-        update(User)
-        .where(User.id == user_id)
-        .values(balance=User.balance + amount)
-        .returning(User)
-    )
+    stmt = update(User).where(User.id == user_id)
+    if is_debit:
+        stmt = stmt.where(User.balance + amount >= 0)
+    stmt = stmt.values(balance=User.balance + amount).returning(User)
     result = await session.execute(stmt)
     user = result.scalar_one_or_none()
-    
+
     if not user:
+        if is_debit:
+            current = (await session.execute(
+                select(User.balance).where(User.id == user_id)
+            )).scalar_one_or_none()
+            if current is not None:
+                raise InsufficientBalanceError(user_id, amount, current)
         return None
     
     # 2. Log the change
@@ -760,8 +847,12 @@ async def set_display_name(session: AsyncSession, user: "User", name: str,
         cost = to_decimal(NICKNAME_CHANGE_COST)
         if user.balance < cost:
             return False, t('Недостаточно монет. Нужно: {cost}, у тебя: {balance}', cost=cost, balance=user.balance)
-        await change_balance_atomic(session, user.id, -cost, "nickname_change",
-                                    details=f"{user.display_name} -> {name}")
+        try:
+            await change_balance_atomic(session, user.id, -cost, "nickname_change",
+                                        details=f"{user.display_name} -> {name}")
+        except InsufficientBalanceError:
+            await session.rollback()
+            return False, t('Недостаточно монет. Нужно: {cost}, у тебя: {balance}', cost=cost, balance=user.balance)
 
     old_name = user.display_name
     user.display_name = name
@@ -948,18 +1039,44 @@ async def _apply_content_quality_bonus_if_needed(session: AsyncSession, video_id
 
 
 async def approve_video(session: AsyncSession, video_id: int) -> "Video | None":
-    v = (await session.execute(
-        select(Video).where(Video.id == video_id)
-    )).scalar_one_or_none()
-    if not v or v.status != "pending":
+    from sqlalchemy import update
+
+    # Переход pending -> approved делаем одним UPDATE с условием по статусу:
+    # два админа (или «одобрить всё» + ручное одобрение) не смогут одобрить и
+    # наградить одно видео дважды — второй UPDATE затронет 0 строк.
+    res = await session.execute(
+        update(Video)
+        .where(Video.id == video_id, Video.status == "pending")
+        .values(status="approved")
+    )
+    if (res.rowcount or 0) == 0:
         return None
-    v.status = "approved"
+    v = (await session.execute(
+        select(Video).where(Video.id == video_id).execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if not v:
+        return None
     uploader = await get_user_by_id(session, v.uploader_user_id)
     if uploader:
-        reward = await calculate_upload_reward(session, uploader.id, v.content_type)
-        await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
-        await log_user_action(session, uploader.id, "video_approved",
-                              f"id={v.id}, type={v.content_type}, reward={reward}")
+        # Награда за загрузку выдаётся один раз за файл: после
+        # reject -> restore -> approve повторного начисления быть не должно.
+        already_rewarded = (await session.execute(
+            select(BalanceLog.id).where(
+                BalanceLog.source == "upload_approved",
+                BalanceLog.source_id == v.id,
+                BalanceLog.user_id == uploader.id,
+            ).limit(1)
+        )).scalar_one_or_none()
+        if already_rewarded:
+            await log_user_action(session, uploader.id, "video_approved",
+                                  f"id={v.id}, type={v.content_type}, reward=0 (already rewarded)",
+                                  auto_commit=False)
+        else:
+            reward = await calculate_upload_reward(session, uploader.id, v.content_type)
+            await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
+            await log_user_action(session, uploader.id, "video_approved",
+                                  f"id={v.id}, type={v.content_type}, reward={reward}",
+                                  auto_commit=False)
     await session.commit()
     return v
 
@@ -974,6 +1091,10 @@ async def reject_video(
         select(Video).where(Video.id == video_id)
     )).scalar_one_or_none()
     if not v:
+        return None
+    if v.status == "rejected":
+        # Повторное нажатие «отклонить» по уже отклонённому — просто no-op,
+        # чтобы не затирать причину и не дублировать уведомления автору.
         return None
     v.status = "rejected"
     full_reason = reason.strip()
@@ -1134,8 +1255,12 @@ async def record_view_and_charge_with_cost(
     cost = to_decimal(cost)
     if user.balance < cost:
         return False
-    await change_balance_atomic(session, user.id, -cost, "watch", source_id=video_id)
     from sqlalchemy.exc import IntegrityError
+    try:
+        await change_balance_atomic(session, user.id, -cost, "watch", source_id=video_id)
+    except InsufficientBalanceError:
+        await session.rollback()
+        return False
     try:
         session.add(VideoView(user_id=user_id, video_id=video_id, watched_at=utc_now()))
         await session.commit()
@@ -1493,11 +1618,13 @@ async def search_users_admin(session: AsyncSession, query: str, limit: int = 8) 
     q = (query or "").strip()
     if not q:
         return []
-    pattern = f"%{q.replace('%', '').replace('_', ' ')}%"
-    lowered = pattern.lower()
+    # Экранируем спецсимволы LIKE, а не заменяем их: раньше «_» превращался в
+    # пробел, и ники вида «cool_user» по запросу «cool_u» не находились.
+    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    lowered = f"%{escaped}%".lower()
     conds = [
-        func.lower(func.coalesce(User.display_name, "")).like(lowered),
-        func.lower(func.coalesce(User.username, "")).like(lowered),
+        func.lower(func.coalesce(User.display_name, "")).like(lowered, escape="\\"),
+        func.lower(func.coalesce(User.username, "")).like(lowered, escape="\\"),
     ]
     digits = "".join(ch for ch in q if ch.isdigit())
     if len(digits) >= 3:
@@ -1570,42 +1697,47 @@ async def process_referral_reward(session: AsyncSession, referrer_id: int):
 
     Такой порог подтверждает реальную вовлечённость, но не заставляет нового
     пользователя смотреть только видео и сохраняет защиту от пустых регистраций.
+
+    Вызывается на каждый просмотр приглашённого, поэтому считаем всё двумя
+    агрегирующими запросами, а не N+1 (раньше — по 2 запроса на каждого
+    реферала инвайтера при каждом просмотре).
     """
-    refs = (await session.execute(
-        select(User).where(User.referred_by_user_id == referrer_id)
-    )).scalars().all()
-    active_referrals_total = 0
-    for ref in refs:
-        views = (await session.execute(
-            select(func.count(VideoView.id))
-            .join(Video, Video.id == VideoView.video_id)
-            .where(
-                VideoView.user_id == ref.id,
-                Video.content_type.in_(("video", "photo")),
+    rows = (await session.execute(
+        select(User.id, func.count(Video.id))
+        .select_from(User)
+        .outerjoin(VideoView, VideoView.user_id == User.id)
+        .outerjoin(Video, (Video.id == VideoView.video_id) & Video.content_type.in_(("video", "photo")))
+        .where(User.referred_by_user_id == referrer_id)
+        .group_by(User.id)
+    )).all()
+    qualified_ids = [int(uid) for uid, cnt in rows if int(cnt or 0) >= 3]
+    active_referrals_total = len(qualified_ids)
+    if not qualified_ids:
+        return
+
+    inviter = await get_user_by_id(session, referrer_id)
+    if inviter:
+        wanted = {f"ref_user_id={uid}": uid for uid in qualified_ids}
+        rewarded = set((await session.execute(
+            select(BalanceLog.details).where(
+                BalanceLog.user_id == referrer_id,
+                BalanceLog.source == "referral_reward",
+                BalanceLog.details.in_(list(wanted.keys())),
             )
-        )).scalar_one()
-        if views >= 3:
-            active_referrals_total += 1
-            inviter = await get_user_by_id(session, referrer_id)
-            if inviter:
-                already = (await session.execute(
-                    select(BalanceLog).where(
-                        BalanceLog.user_id == referrer_id,
-                        BalanceLog.source == "referral_reward",
-                        BalanceLog.details == f"ref_user_id={ref.id}"
-                    )
-                )).scalar_one_or_none()
-                if not already:
-                    reward = to_decimal(REFERRAL_REWARD_INVITER)
-                    await change_balance_atomic(
-                        session,
-                        inviter.id,
-                        reward,
-                        "referral_reward",
-                        details=f"ref_user_id={ref.id}",
-                    )
-                    inviter.referral_earnings += reward
-                    await session.commit()
+        )).scalars().all())
+        for details, ref_id in wanted.items():
+            if details in rewarded:
+                continue
+            reward = to_decimal(REFERRAL_REWARD_INVITER)
+            await change_balance_atomic(
+                session,
+                inviter.id,
+                reward,
+                "referral_reward",
+                details=details,
+            )
+            inviter.referral_earnings += reward
+            await session.commit()
     inviter = await get_user_by_id(session, referrer_id)
     if inviter and active_referrals_total > 0:
         await _apply_referral_milestones(session, inviter, active_referrals_total)
@@ -1724,26 +1856,9 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> tuple
     credited_total = Decimal("0")
     user = await get_user_by_id(session, payment.user_id)
     if user:
-        bonus_multiplier = 1.0
-        # Динамический курс
-        if DYNAMIC_STAR_DISCOUNT_ENABLED:
-            try:
-                start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
-                now_h = utc_now().hour
-                if start_h <= now_h < end_h:
-                    bonus_multiplier = DYNAMIC_STAR_DISCOUNT_MULTIPLIER
-            except Exception:
-                pass
-        # Первая покупка за день
-        today = utc_now().date()
-        first_today = not (await session.execute(
-            select(Payment).where(
-                Payment.user_id == user.id,
-                Payment.status == "paid",
-                func.date(Payment.created_at) == today,
-                Payment.id != payment.id,
-            )
-        )).scalar_one_or_none()
+        bonus_multiplier, first_today = await purchase_bonus_context(
+            session, user.id, exclude_payment_id=payment.id
+        )
         credited_total = payment.coins_amount * to_decimal(bonus_multiplier)
         if first_today:
             credited_total += to_decimal(FIRST_PURCHASE_DAILY_BONUS)
@@ -1753,11 +1868,86 @@ async def apply_successful_payment(session: AsyncSession, payload: str) -> tuple
     return payment, credited_total
 
 
+async def purchase_bonus_context(
+    session: AsyncSession, user_id: int, *, exclude_payment_id: int | None = None
+) -> tuple[float, bool]:
+    """(множитель «вечернего» курса, первая ли это оплаченная покупка за день).
+
+    Общая точка для начисления и для текста инвойса, чтобы пользователь видел
+    бонусы ДО оплаты. Запрос «есть ли уже оплаты сегодня» делаем через
+    EXISTS/limit — раньше scalar_one_or_none падал MultipleResultsFound на
+    третьей покупке за день, и монеты не начислялись.
+    """
+    bonus_multiplier = 1.0
+    if DYNAMIC_STAR_DISCOUNT_ENABLED:
+        try:
+            start_h, end_h = map(int, DYNAMIC_STAR_DISCOUNT_HOURS.split("-"))
+            now_h = utc_now().hour
+            if start_h <= now_h < end_h:
+                bonus_multiplier = float(DYNAMIC_STAR_DISCOUNT_MULTIPLIER)
+        except Exception:
+            pass
+    today = utc_now().date()
+    conds = [
+        Payment.user_id == user_id,
+        Payment.status == "paid",
+        func.date(Payment.created_at) == today,
+    ]
+    if exclude_payment_id is not None:
+        conds.append(Payment.id != exclude_payment_id)
+    paid_today = (await session.execute(
+        select(Payment.id).where(*conds).limit(1)
+    )).scalar_one_or_none()
+    return bonus_multiplier, paid_today is None
+
+
+def describe_purchase_bonuses(coins, bonus_multiplier: float, first_today: bool) -> str:
+    """Короткая приписка к инвойсу: что будет начислено сверх номинала."""
+    parts: list[str] = []
+    if bonus_multiplier and bonus_multiplier != 1.0:
+        parts.append(t('×{mult:g} к монетам', mult=bonus_multiplier))
+    if first_today and FIRST_PURCHASE_DAILY_BONUS:
+        parts.append(t('+{bonus} за первую покупку дня', bonus=to_decimal(FIRST_PURCHASE_DAILY_BONUS)))
+    if not parts:
+        return ""
+    total = to_decimal(coins) * to_decimal(bonus_multiplier)
+    if first_today:
+        total += to_decimal(FIRST_PURCHASE_DAILY_BONUS)
+    return t(' Бонус: {parts}. Итого ≈ {total:.0f} монет.', parts=", ".join(parts), total=total)
+
+
 # ============================
 # ОФФЕРЫ
 # ============================
-def is_offer_available(offer: "Offer | None", *, at: datetime | None = None) -> bool:
-    """Whether an offer may be shown and may accept new participations."""
+def offer_budget_remaining(offer: "Offer | None") -> Decimal | None:
+    """Остаток эскроу-бюджета оффера; None — бюджет не ограничен (финансирует бот)."""
+    if not offer:
+        return None
+    total = to_decimal(offer.budget_total or 0)
+    if total <= 0:
+        return None
+    if offer.budget_refunded_at is not None:
+        # Остаток уже возвращён автору — выплачивать больше не из чего.
+        return Decimal("0")
+    return max(total - to_decimal(offer.budget_spent or 0), Decimal("0"))
+
+
+def is_offer_budget_exhausted(offer: "Offer | None") -> bool:
+    """Бюджета не хватает ещё на одного участника (на полную итоговую награду)."""
+    remaining = offer_budget_remaining(offer)
+    if remaining is None:
+        return False
+    return remaining < to_decimal(offer.reward_final or 0)
+
+
+def is_offer_available(offer: "Offer | None", *, at: datetime | None = None,
+                       check_budget: bool = True) -> bool:
+    """Whether an offer may be shown and may accept new participations.
+
+    ``check_budget=False`` — для уже начатых участий: они зарезервировали свою
+    награду при входе и должны иметь возможность завершить оффер, даже если
+    новых участников бюджет уже не принимает.
+    """
     if not offer or offer.status != "approved" or not offer.is_active:
         return False
     duration_days = int(offer.duration_days or 0)
@@ -1765,6 +1955,8 @@ def is_offer_available(offer: "Offer | None", *, at: datetime | None = None) -> 
         return False
     started_at = offer.approved_at or offer.created_at
     if not started_at:
+        return False
+    if check_budget and is_offer_budget_exhausted(offer):
         return False
     return started_at + timedelta(days=duration_days) > (at or utc_now())
 
@@ -1846,7 +2038,12 @@ async def moderate_offer(
         await session.rollback()
         return None
     await session.commit()
-    return await get_offer_by_id(session, offer_id)
+    offer = await get_offer_by_id(session, offer_id)
+    if offer and not approve:
+        # Отклонённый оффер: автору возвращается всё внесённое (эскроу + сбор).
+        await refund_offer_budget(session, offer, full=True, reason="rejected")
+        offer = await get_offer_by_id(session, offer_id)
+    return offer
 
 
 async def set_offer_active(
@@ -1889,6 +2086,16 @@ async def _get_today_offer_rewards_total(session: AsyncSession, user_id: int) ->
     return to_decimal(value)
 
 
+async def _lock_offer_for_budget(session: AsyncSession, offer_id: int) -> "Offer | None":
+    """Перечитывает оффер с блокировкой строки (Postgres) для учёта бюджета."""
+    return (await session.execute(
+        select(Offer)
+        .where(Offer.id == offer_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+
+
 async def start_offer_participation(session: AsyncSession, user_id: int,
                                     offer_id: int) -> tuple["OfferParticipation | None", bool]:
     offer = await get_offer_by_id(session, offer_id)
@@ -1904,9 +2111,21 @@ async def start_offer_participation(session: AsyncSession, user_id: int,
     )).scalar_one_or_none()
     if existing:
         return existing, False
+
+    # Эскроу: под строкой-блокировкой проверяем, что бюджета хватит на полную
+    # награду этому участнику, и сразу учитываем выплаченный аванс.
+    budget_limited = offer_budget_remaining(offer) is not None
+    if budget_limited:
+        offer = await _lock_offer_for_budget(session, offer_id)
+        if not is_offer_available(offer):
+            await session.rollback()
+            return None, False
+
     today_offer_rewards = await _get_today_offer_rewards_total(session, user_id)
     cap_remaining = max(to_decimal(OFFER_DAILY_REWARD_CAP) - today_offer_rewards, Decimal("0"))
     preview_reward = min(to_decimal(offer.reward_preview), cap_remaining)
+    if budget_limited:
+        preview_reward = min(preview_reward, offer_budget_remaining(offer))
     part = OfferParticipation(
         user_id=user_id,
         offer_id=offer_id,
@@ -1921,9 +2140,22 @@ async def start_offer_participation(session: AsyncSession, user_id: int,
             "offer_preview",
             source_id=offer_id,
         )
-        # user.balance += preview_reward  # Handled by change_balance_atomic
+        if budget_limited:
+            offer.budget_spent = to_decimal(offer.budget_spent or 0) + preview_reward
     session.add(part)
-    await session.commit()
+    from sqlalchemy.exc import IntegrityError
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Двойной тап: параллельный запрос уже создал участие.
+        await session.rollback()
+        existing = (await session.execute(
+            select(OfferParticipation).where(
+                OfferParticipation.user_id == user_id,
+                OfferParticipation.offer_id == offer_id,
+            )
+        )).scalar_one_or_none()
+        return existing, False
     return part, True
 
 
@@ -1951,8 +2183,17 @@ async def verify_offer_subscription(
 
     offer = await get_offer_by_id(session, offer_id)
     user = await get_user_by_id(session, user_id)
-    if not user or not is_offer_available(offer) or offer.creator_user_id == user_id:
+    # Начатое участие уже зарезервировало награду — исчерпание бюджета для
+    # новых участников не должно мешать завершить своё.
+    if not user or not is_offer_available(offer, check_budget=False) or offer.creator_user_id == user_id:
         return False, Decimal("0")
+
+    budget_limited = offer_budget_remaining(offer) is not None
+    if budget_limited:
+        offer = await _lock_offer_for_budget(session, offer_id)
+        if not is_offer_available(offer, check_budget=False):
+            await session.rollback()
+            return False, Decimal("0")
 
     part.status = "completed"
     part.checked_at = utc_now()
@@ -1964,6 +2205,8 @@ async def verify_offer_subscription(
         max(to_decimal(offer.reward_final) - already_paid, Decimal("0")),
         cap_remaining,
     )
+    if budget_limited:
+        additional = min(additional, offer_budget_remaining(offer))
     if additional > 0:
         await change_balance_atomic(
             session,
@@ -1972,11 +2215,74 @@ async def verify_offer_subscription(
             "offer_complete",
             source_id=offer_id,
         )
-        # user.balance += additional  # Handled by change_balance_atomic
         part.reward_given = already_paid + additional
+        if budget_limited:
+            offer.budget_spent = to_decimal(offer.budget_spent or 0) + additional
 
     await session.commit()
     return True, additional
+
+
+async def refund_offer_budget(
+    session: AsyncSession,
+    offer: "Offer",
+    *,
+    full: bool = False,
+    reason: str = "",
+) -> Decimal:
+    """Возвращает автору неизрасходованный эскроу-бюджет (однократно).
+
+    ``full=True`` — отклонение на модерации: возвращается всё внесённое
+    (бюджет + сервисный сбор). Иначе — остаток бюджета по истечении срока.
+    """
+    if not offer or offer.budget_refunded_at is not None or not offer.creator_user_id:
+        return Decimal("0")
+    total = to_decimal(offer.budget_total or 0)
+    if total <= 0:
+        return Decimal("0")
+    if full:
+        amount = max(to_decimal(offer.placement_cost or 0), total)
+    else:
+        amount = max(total - to_decimal(offer.budget_spent or 0), Decimal("0"))
+    offer.budget_refunded_at = utc_now()
+    if amount > 0:
+        await change_balance_atomic(
+            session,
+            offer.creator_user_id,
+            amount,
+            "offer_budget_refund",
+            source_id=offer.id,
+            details=reason or ("full" if full else "unspent"),
+        )
+    await session.commit()
+    return amount
+
+
+async def refund_expired_offer_budgets(session: AsyncSession, limit: int = 50) -> int:
+    """Фоновая задача: возвращает авторам остаток бюджета по истёкшим офферам."""
+    now = utc_now()
+    candidates = (await session.execute(
+        select(Offer).where(
+            Offer.budget_total > 0,
+            Offer.budget_refunded_at.is_(None),
+            Offer.creator_user_id.is_not(None),
+            Offer.status.in_(("approved", "rejected")),
+        ).order_by(Offer.id.asc()).limit(limit * 4)
+    )).scalars().all()
+    refunded = 0
+    for offer in candidates:
+        if offer.status == "rejected":
+            await refund_offer_budget(session, offer, full=True, reason="rejected")
+            refunded += 1
+        else:
+            # Только по истечении срока (не при временной деактивации админом).
+            expires_at = get_offer_expires_at(offer)
+            if expires_at and expires_at <= now:
+                await refund_offer_budget(session, offer, reason="expired")
+                refunded += 1
+        if refunded >= limit:
+            break
+    return refunded
 
 
 def calculate_offer_unsubscribe_amounts(
@@ -2033,6 +2339,7 @@ async def apply_offer_unsubscribe_penalty(
                 f"reward_revoke={rewarded_total}; extra_penalty={extra_penalty}; "
                 f"grace={int(in_grace_period)}; repeat={int(previous_penalties > 0)}"
             ),
+            allow_negative=True,
         )
     part.status = "unsubscribed"
     part.unsubscribed_penalized_at = utc_now()
@@ -2122,7 +2429,11 @@ async def pay_for_game_session(session: AsyncSession, user_id: int) -> bool:
     cost = to_decimal(GAME_SESSION_COST)
     if user.balance < cost:
         return False
-    await change_balance_atomic(session, user.id, -cost, "game_session_paid")
+    try:
+        await change_balance_atomic(session, user.id, -cost, "game_session_paid")
+    except InsufficientBalanceError:
+        await session.rollback()
+        return False
     gs = await get_or_create_game_session(session, user_id)
     gs.games_played = 0
     gs.window_start = utc_now()
@@ -2484,6 +2795,23 @@ async def calculate_promocode_star_cost(
     return max(1, int(-(-result.numerator // result.denominator)))
 
 
+def _promo_month_key(now: datetime | None = None) -> int:
+    now = now or utc_now()
+    return now.year * 12 + now.month
+
+
+def vip_free_promos_used_this_month(user: "User") -> int:
+    """Сколько бесплатных VIP-промокодов уже создано в ТЕКУЩЕМ месяце.
+
+    Счётчик promo_created_this_month сбрасывается лениво (в create_promocode),
+    поэтому при показе экрана/проверке лимита нужно смотреть на promo_month:
+    иначе после первого месяца пользователь навсегда видит «лимит исчерпан».
+    """
+    if (getattr(user, "promo_month", 0) or 0) != _promo_month_key():
+        return 0
+    return int(getattr(user, "promo_created_this_month", 0) or 0)
+
+
 async def create_promocode(
     session: AsyncSession,
     creator_tg_id: int,
@@ -2520,7 +2848,7 @@ async def create_promocode(
     elif not admin_free:
         # Проверка VIP (бесплатный промокод раз в месяц, строго в рамках лимита)
         if user.vip_until and user.vip_until > utc_now():
-            month_key = utc_now().year * 12 + utc_now().month
+            month_key = _promo_month_key()
             promo_month = getattr(user, 'promo_month', 0) or 0
             if promo_month != month_key:
                 user.promo_created_this_month = 0
@@ -2816,14 +3144,18 @@ async def buy_lottery_tickets(
             details=f"qty={quantity}",
         )
     else:
-        user = await change_balance_atomic(
-            session,
-            user.id,
-            -total_cost,
-            "lottery_ticket_purchase",
-            source_id=round_obj.id,
-            details=f"qty={quantity}",
-        ) or user
+        try:
+            user = await change_balance_atomic(
+                session,
+                user.id,
+                -total_cost,
+                "lottery_ticket_purchase",
+                source_id=round_obj.id,
+                details=f"qty={quantity}",
+            ) or user
+        except InsufficientBalanceError:
+            await session.rollback()
+            return [], Decimal("0"), t('Недостаточно монет. Билет стоит {price}.', price=price)
 
     for _ in range(quantity):
         numbers = sorted(random.sample(pool, k=pick_count))
@@ -2834,9 +3166,19 @@ async def buy_lottery_tickets(
         )
         tickets.append(ticket)
 
-    round_obj.prize_pool += total_cost
+    # Призовой фонд пополняют только реально оплаченные билеты (админские
+    # бесплатные билеты раньше раздували пул, не внося монет), и делаем это
+    # атомарным UPDATE — параллельные покупки не теряют инкременты.
+    if not is_admin_free and total_cost > 0:
+        await session.execute(
+            update(LotteryRound)
+            .where(LotteryRound.id == round_obj.id)
+            .values(prize_pool=LotteryRound.prize_pool + total_cost)
+        )
     session.add_all(tickets)
     await session.commit()
+    if not is_admin_free and total_cost > 0:
+        await session.refresh(round_obj)
     return tickets, total_cost, None
 
 
@@ -3444,17 +3786,18 @@ async def get_coin_multiplier(session: AsyncSession, user_id: int) -> float:
         from app.config import VIP_BONUS_MULTIPLIER
         multiplier = float(VIP_BONUS_MULTIPLIER)
     
-    # Перк coin_multiplier переопределяет
+    # Перк coin_multiplier (×1.5) не должен «понижать» VIP (×2.0):
+    # берём лучший из множителей, а не последний найденный.
     coin_boost = (await session.execute(
         select(UserPerk).where(
             UserPerk.user_id == user_id,
             UserPerk.perk_type == "coin_multiplier",
             UserPerk.is_active == True,
             UserPerk.active_until > utc_now(),
-        )
-    )).scalar_one_or_none()
+        ).limit(1)
+    )).scalars().first()
     if coin_boost:
-        multiplier = 1.5  # фиксированный бонус бустера
+        multiplier = max(multiplier, 1.5)  # фиксированный бонус бустера
     
     return multiplier
 
@@ -3470,6 +3813,60 @@ async def get_xp_multiplier(session: AsyncSession, user_id: int) -> float:
         )
     )).scalar_one_or_none()
     return 2.0 if xp_boost else 1.0
+
+
+def calc_level_xp_required(level: int) -> int:
+    from app.config import LEVEL_XP_BASE, LEVEL_XP_MULTIPLIER
+    return int(LEVEL_XP_BASE * (LEVEL_XP_MULTIPLIER ** (level - 1)))
+
+
+def calc_level_from_xp(xp: int) -> int:
+    level = 1
+    remaining = int(xp or 0)
+    while True:
+        required = calc_level_xp_required(level)
+        if remaining < required:
+            break
+        remaining -= required
+        level += 1
+    return level
+
+
+async def grant_xp(
+    session: AsyncSession, user_id: int, base_amount: int, *, apply_multiplier: bool = True
+) -> tuple[int, bool]:
+    """Начислить XP атомарным UPDATE (без гонок с параллельными действиями)
+    и пересчитать уровень. Возвращает (новый уровень, был ли level-up);
+    (0, False) — пользователь не найден. Коммит — на вызывающей стороне.
+
+    Используется там, где раньше XP «обещали» на экране уровня, но не
+    начисляли (просмотр видео, игра в аркаде).
+    """
+    from sqlalchemy import update
+
+    amount = int(base_amount or 0)
+    if amount <= 0:
+        return 0, False
+    if apply_multiplier:
+        try:
+            amount = int(amount * await get_xp_multiplier(session, user_id))
+        except Exception:
+            pass
+    row = (await session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(xp=User.xp + amount)
+        .returning(User.xp, User.level)
+    )).first()
+    if not row:
+        return 0, False
+    new_level = calc_level_from_xp(row[0])
+    leveled_up = new_level > (row[1] or 1)
+    if leveled_up:
+        await session.execute(
+            update(User).where(User.id == user_id, User.level < new_level).values(level=new_level)
+        )
+    return new_level, leveled_up
 
 
 async def get_active_perks(session: AsyncSession, user_id: int) -> list[UserPerk]:
@@ -3524,8 +3921,8 @@ async def activate_perk(
             UserPerk.user_id == user_id,
             UserPerk.perk_type == perk_type,
             UserPerk.is_active == True,
-        )
-    )).scalar_one_or_none()
+        ).order_by(UserPerk.active_until.desc()).limit(1)
+    )).scalars().first()
     
     user = await get_user_by_id(session, user_id)
     if existing:
@@ -4042,15 +4439,32 @@ async def approve_all_pending(session: AsyncSession, admin_id: int, limit: int =
         select(User).where(User.id.in_(uploader_ids))
     )).scalars().all()
     uploader_map = {u.id: u for u in uploaders}
+    from sqlalchemy import update
+
     count = 0
     for v in pending:
-        v.status = "approved"
-        v.rejection_reason = None
-        # Начисляем награду загрузчику
+        # Условный UPDATE: если видео параллельно одобрили/отклонили вручную,
+        # строка уже не pending — пропускаем, чтобы не наградить дважды.
+        res = await session.execute(
+            update(Video)
+            .where(Video.id == v.id, Video.status == "pending")
+            .values(status="approved", rejection_reason=None)
+        )
+        if (res.rowcount or 0) == 0:
+            continue
+        # Начисляем награду загрузчику (один раз за файл, см. approve_video)
         uploader = uploader_map.get(v.uploader_user_id)
         if uploader:
-            reward = await calculate_upload_reward(session, uploader.id, v.content_type)
-            await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
+            already_rewarded = (await session.execute(
+                select(BalanceLog.id).where(
+                    BalanceLog.source == "upload_approved",
+                    BalanceLog.source_id == v.id,
+                    BalanceLog.user_id == uploader.id,
+                ).limit(1)
+            )).scalar_one_or_none()
+            if not already_rewarded:
+                reward = await calculate_upload_reward(session, uploader.id, v.content_type)
+                await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
         count += 1
     await session.commit()
     await log_user_action(session, admin_id, "approve_all", f"count={count}")
@@ -4505,6 +4919,9 @@ async def record_donationalerts_exception(
         select(DonationAlertException).where(DonationAlertException.donation_id == donation_key)
     )).scalar_one_or_none()
     if existing:
+        # Транзиентный флаг для вызывающего кода: REST-сверка видит один и тот
+        # же донат каждую минуту — уведомлять админов надо только о новом.
+        existing.is_new = False
         return existing
 
     exception = DonationAlertException(
@@ -4519,6 +4936,7 @@ async def record_donationalerts_exception(
     session.add(exception)
     await session.commit()
     await session.refresh(exception)
+    exception.is_new = True
     return exception
 
 
@@ -4605,14 +5023,17 @@ async def process_donationalerts_event(
         )
         return False, t('Пользователь заказа не найден; донат передан на ручную сверку'), exception
 
-    comment = f"{message} vip" if order.reward_type == "vip" else message
+    # Что выдавать — строго из заказа, а не из текста донатера: раньше слово
+    # «vip» в сообщении превращало любой донат (даже 10 ₽) в VIP на 30 дней.
     completed, result = await process_donationalerts_donation(
         session,
         donation_id=donation_key,
         amount_rub=amount,
         telegram_user_id=order_user.telegram_id,
-        comment=comment,
+        comment=message,
         bot=bot,
+        reward_type=order.reward_type or "coins",
+        coins_amount=order.coins_amount if order.reward_type != "vip" else None,
     )
     if not completed:
         # Real-time канал и резервная REST-сверка могут увидеть один и тот же
@@ -4649,10 +5070,16 @@ async def process_donationalerts_donation(
     telegram_user_id: int,
     comment: str | None = None,
     bot = None,
+    *,
+    reward_type: str = "coins",
+    coins_amount: Decimal | float | int | None = None,
 ) -> tuple[bool, str]:
     """Обработка доната от DonationAlerts.
 
     Идемпотентен по payload = f"donationalerts_{donation_id}".
+    ``reward_type`` («coins» | «vip») задаётся вызывающим кодом (заказ или
+    явный выбор админа) — текст донатера на тип награды не влияет.
+    ``coins_amount`` — монеты по заказу; если не передано, считается по курсу.
     Возвращает (успех, сообщение).
     """
     amount_rub = Decimal(str(amount_rub))
@@ -4673,13 +5100,11 @@ async def process_donationalerts_donation(
     if not user:
         return False, t('Пользователь с Telegram ID {telegram_user_id} не найден', telegram_user_id=telegram_user_id)
 
-    # 3. Определяем, что выдаём (курс и цена VIP — из настроек бота)
-    comment_lower = (comment or "").lower()
+    # 3. Определяем, что выдаём (курс — из настроек бота)
     from app.config import ADMINS
     rub_rate = float(await get_runtime_value(session, "rub_to_coins_rate") or RUB_TO_COINS_RATE)
-    vip_price_rub = float(await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB)
 
-    is_vip = "vip" in comment_lower or (abs(amount_rub - Decimal(str(vip_price_rub))) < Decimal("0.01"))
+    is_vip = (reward_type or "coins").lower() == "vip"
 
     coins_reward = Decimal("0")
     if is_vip:
@@ -4687,7 +5112,10 @@ async def process_donationalerts_donation(
         reward_desc = t('👑 VIP-подписка на 30 дней')
         await log_user_action(session, user.id, "vip_purchased_da", f"amount_rub={amount_rub}, da_id={donation_id}")
     else:
-        coins_reward = Decimal(str(amount_rub * Decimal(str(rub_rate))))
+        if coins_amount is not None and Decimal(str(coins_amount)) > 0:
+            coins_reward = Decimal(str(coins_amount))
+        else:
+            coins_reward = Decimal(str(amount_rub * Decimal(str(rub_rate))))
         await change_balance_atomic(
             session, user.id, coins_reward, "donationalerts_deposit",
             details=f"rub={amount_rub}, da_id={donation_id}"
@@ -4717,7 +5145,7 @@ async def process_donationalerts_donation(
 
         try:
             from html import escape
-            disp_name = get_display_name(user)
+            disp_name = escape(get_display_name(user))
             admin_msg = (
                 t('💳 <b>Новый платёж DonationAlerts!</b>\n\n👤 Пользователь: {disp_name} (ID: <code>{telegram_id}</code>)\n💰 Сумма: <b>{amount_rub} руб.</b>\n💬 Сообщение: <i>{arg3}</i>\n🎁 Начислено: <b>{reward_desc}</b>', disp_name=disp_name, telegram_id=user.telegram_id, amount_rub=amount_rub, arg3=escape(comment or '—'), reward_desc=reward_desc)
             )
