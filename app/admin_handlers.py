@@ -37,7 +37,7 @@ from app.services import (
     approve_all_pending,
     get_pending_reports, dismiss_report, REPORT_REASONS,
     get_offer_moderation_counts, get_offers_for_admin, get_offer_by_id,
-    moderate_offer, set_offer_active, get_offer_expires_at,
+    moderate_offer, set_offer_active, get_offer_expires_at, offer_budget_remaining, to_decimal,
     normalize_telegram_url,
     adjust_balance_by_admin, AdminBalanceError,
 )
@@ -242,7 +242,7 @@ async def admin_db_menu(callback: CallbackQuery):
         return
     table_labels = {"users": t('Пользователи'), "videos": t('Контент'), "offers": t('Офферы'), "events": t('События'), "balance_logs": t('Лог баланса')}
     all_tables = sorted(Base.metadata.tables.keys())
-    tables = [(t, table_labels.get(t, t)) for t in all_tables]
+    tables = [(tbl, table_labels.get(tbl, tbl)) for tbl in all_tables]
     await _safe_edit(callback, t('🗄 <b>База данных</b>'), parse_mode="HTML", reply_markup=admin_db_keyboard(tables))
     await callback.answer()
 
@@ -491,7 +491,10 @@ async def mod_approve(callback: CallbackQuery, state: FSMContext | None = None):
             if uploader:
                 try: await callback.bot.send_message(uploader.telegram_id, t('✅ Публикация #{video_id} одобрена!', video_id=video_id))
                 except Exception: pass
-    await _safe_edit(callback, t('✅ #{video_id} ОДОБРЕНО', video_id=video_id), reply_markup=admin_after_action_keyboard())
+    if video:
+        await _safe_edit(callback, t('✅ #{video_id} ОДОБРЕНО', video_id=video_id), reply_markup=admin_after_action_keyboard())
+    else:
+        await _safe_edit(callback, t('ℹ️ #{video_id} уже обработано (статус изменился).', video_id=video_id), reply_markup=admin_after_action_keyboard())
     await callback.answer()
 
 
@@ -1686,9 +1689,24 @@ async def cb_admin_user_give_coins_start(callback: CallbackQuery, state: FSMCont
     await callback.answer()
 
 
+def _can_manage_target(admin_telegram_id: int, target: User | None) -> bool:
+    """Обычный (назначенный через БД) админ не может банить/менять баланс
+    супер-админам из ADMINS и другим админам — только супер-админ."""
+    if target is None:
+        return True
+    if is_super_admin(admin_telegram_id):
+        return True
+    if is_super_admin(target.telegram_id) or getattr(target, "is_admin", False):
+        return target.telegram_id == admin_telegram_id
+    return True
+
+
 async def _apply_admin_balance_change(bot, admin_telegram_id: int, user_id: int, amount: Decimal, details: str) -> User:
     async with async_session() as session:
         admin = await get_user(session, admin_telegram_id)
+        target = await get_user_by_id(session, user_id)
+        if target is not None and not _can_manage_target(admin_telegram_id, target):
+            raise AdminBalanceError(t('⛔ Менять баланс администраторам может только супер-админ.'))
         try:
             user = await adjust_balance_by_admin(
                 session,
@@ -1791,6 +1809,9 @@ async def cb_admin_user_toggle_ban(callback: CallbackQuery):
         user = await get_user_by_id(session, user_id)
         if not user:
             await callback.answer(t('Пользователь не найден.'))
+            return
+        if not _can_manage_target(callback.from_user.id, user):
+            await callback.answer(t('⛔ Банить администраторов может только супер-админ.'), show_alert=True)
             return
             
         if user.status == "banned":
@@ -2287,6 +2308,13 @@ async def admin_offer_view(callback: CallbackQuery):
     text_value = (
         t('📢 <b>Оффер #{id}</b>\n\n<b>{arg1}</b>\n{arg2}\n\nСтатус: {arg3}\nАвтор: {creator_text}\nСсылка: {arg5}\nНаграды: <b>{reward_preview} + {reward_final}</b> монет\nШтраф: <b>{penalty_unsubscribe}</b> монет\nРазмещение: <b>{placement_cost}</b> монет\nСрок: <b>{duration_days}</b> дней, до {expires_text}\nУчастников: <b>{participants}</b>', id=offer.id, arg1=escape(offer.title), arg2=escape(offer.description), arg3=_offer_status_text(offer), creator_text=creator_text, arg5=escape(offer.channel_url), reward_preview=offer.reward_preview, reward_final=offer.reward_final, penalty_unsubscribe=offer.penalty_unsubscribe, placement_cost=offer.placement_cost, duration_days=offer.duration_days, expires_text=expires_text, participants=participants)
     )
+    if offer_budget_remaining(offer) is not None:
+        text_value += t(
+            '\nБюджет: <b>{spent:.0f} / {total:.0f}</b> монет, остаток <b>{remaining:.0f}</b>',
+            spent=to_decimal(offer.budget_spent or 0),
+            total=to_decimal(offer.budget_total or 0),
+            remaining=offer_budget_remaining(offer),
+        )
     if offer.rejection_reason:
         text_value += t('\nПричина отказа: {arg0}', arg0=escape(offer.rejection_reason))
 
@@ -2907,7 +2935,7 @@ async def admin_da_manual_user(message: Message, state: FSMContext):
         if not user:
             await message.answer(t('❌ Пользователь с Telegram ID <code>{tid}</code> не найден в базе данных. Проверьте ID:', tid=tid))
             return
-        disp_name = get_display_name(user)
+        disp_name = escape(get_display_name(user))
 
     await state.update_data(da_manual_user_id=tid)
     await state.set_state(DAManualState.waiting_amount)
@@ -2933,11 +2961,16 @@ async def admin_da_manual_amount(message: Message, state: FSMContext):
         return
 
     if raw == "vip":
-        amount_rub = 150
-        comment = "vip"
+        from app.services import get_runtime_value
+        from app.config import VIP_PRICE_RUB
+        async with async_session() as _s:
+            amount_rub = float(await get_runtime_value(_s, "vip_price_rub") or VIP_PRICE_RUB)
+        reward_type = "vip"
+        comment = f"manual_vip_by_admin_{message.from_user.id}"
     else:
         try:
             amount_rub = float(raw)
+            reward_type = "coins"
             comment = f"manual_by_admin_{message.from_user.id}"
         except ValueError:
             await message.answer(t('❌ Введите числовое значение суммы в рублях (или `vip`):'))
@@ -2954,7 +2987,8 @@ async def admin_da_manual_amount(message: Message, state: FSMContext):
             amount_rub=amount_rub,
             telegram_user_id=tid,
             comment=comment,
-            bot=message.bot
+            bot=message.bot,
+            reward_type=reward_type,
         )
 
     await state.clear()
@@ -3339,8 +3373,8 @@ async def admin_trusted_uploaders(callback: CallbackQuery):
         text = t('🤝 <b>Доверенные авторы</b>\n\n')
         for tu, user_obj in trusted_rows:
             admin_obj = admin_map.get(tu.admin_user_id)
-            admin_name = get_display_name(admin_obj) if admin_obj else "?"
-            text += t('• {arg0} (добавил {admin_name})\n', arg0=get_display_name(user_obj), admin_name=admin_name)
+            admin_name = escape(get_display_name(admin_obj)) if admin_obj else "?"
+            text += t('• {arg0} (добавил {admin_name})\n', arg0=escape(get_display_name(user_obj)), admin_name=admin_name)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t('➕ Добавить автора'), callback_data="trusted_add_start")],
@@ -3395,7 +3429,7 @@ async def trusted_add_process(message: Message, state: FSMContext):
         )).scalar_one_or_none()
 
         if existing:
-            await message.answer(t('⚠️ {arg0} уже в списке доверенных.', arg0=get_display_name(user)))
+            await message.answer(t('⚠️ {arg0} уже в списке доверенных.', arg0=escape(get_display_name(user))))
             await state.clear()
             return
 
@@ -3406,7 +3440,7 @@ async def trusted_add_process(message: Message, state: FSMContext):
         ))
         await session.commit()
 
-    await message.answer(t('✅ {arg0} добавлен как доверенный автор!\nТеперь его видео одобряются автоматически.', arg0=get_display_name(user)))
+    await message.answer(t('✅ {arg0} добавлен как доверенный автор!\nТеперь его видео одобряются автоматически.', arg0=escape(get_display_name(user))))
     await state.clear()
 
 
@@ -3454,14 +3488,14 @@ async def trusted_remove_process(message: Message, state: FSMContext):
         trusted = result.scalar_one_or_none()
 
         if not trusted:
-            await message.answer(t('⚠️ {arg0} не в списке доверенных.', arg0=get_display_name(user)))
+            await message.answer(t('⚠️ {arg0} не в списке доверенных.', arg0=escape(get_display_name(user))))
             await state.clear()
             return
 
         await session.delete(trusted)
         await session.commit()
 
-    await message.answer(t('✅ {arg0} удалён из списка доверенных авторов.', arg0=get_display_name(user)))
+    await message.answer(t('✅ {arg0} удалён из списка доверенных авторов.', arg0=escape(get_display_name(user))))
     await state.clear()
 
 

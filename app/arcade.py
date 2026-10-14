@@ -39,6 +39,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import config as app_config
@@ -268,7 +269,7 @@ async def start_run(session: AsyncSession, user, bet: Decimal, cfg: ArcadeConfig
     crash-волны. Возвращает (run, error_code); error_code == "" при успехе.
     """
     from app.models import ArcadeRun
-    from app.services import change_balance_atomic
+    from app.services import change_balance_atomic, InsufficientBalanceError
 
     bet = Decimal(bet).quantize(TWO_PLACES, rounding=ROUND_DOWN)
     if not cfg.enabled:
@@ -282,11 +283,15 @@ async def start_run(session: AsyncSession, user, bet: Decimal, cfg: ArcadeConfig
     if Decimal(user.balance) < bet:
         return None, "no_funds"
 
-    await change_balance_atomic(
-        session, user.id, -bet,
-        source="arcade_bet",
-        details="Ставка в Космической аркаде",
-    )
+    try:
+        await change_balance_atomic(
+            session, user.id, -bet,
+            source="arcade_bet",
+            details="Ставка в Космической аркаде",
+        )
+    except InsufficientBalanceError:
+        await session.rollback()
+        return None, "no_funds"
     run = ArcadeRun(
         user_id=user.id,
         bet=bet,
@@ -296,8 +301,20 @@ async def start_run(session: AsyncSession, user, bet: Decimal, cfg: ArcadeConfig
         status="active",
     )
     session.add(run)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Параллельный старт успел создать активный забег: откатываем и ставку.
+        await session.rollback()
+        return None, "run_in_progress"
     await session.refresh(run)
+    # XP за игру (экран «Уровень» обещает +XP_PER_GAME за каждую игру)
+    try:
+        from app.services import grant_xp
+        await grant_xp(session, user.id, int(app_config.XP_PER_GAME))
+        await session.commit()
+    except Exception:
+        await session.rollback()
     return run, ""
 
 

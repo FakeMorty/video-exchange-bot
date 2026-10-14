@@ -1,5 +1,6 @@
 from app.i18n import t
 from app.models import utc_now
+from html import escape
 """
 Донатный магазин — покупка привилегий за монеты.
 Включает FSM-флоу для выбора кастомного стиля ника из 50 вариантов.
@@ -17,6 +18,7 @@ from app.services import (
     activate_perk, has_active_perk, get_active_perks, deactivate_perk,
     get_display_name,
     is_admin_free_eligible,
+    InsufficientBalanceError,
 )
 from app.nick_styles import (
     CATEGORIES, STYLES, STYLES_BY_CAT,
@@ -258,9 +260,13 @@ async def donate_confirm(callback: CallbackQuery, state: FSMContext):
             await change_balance_atomic(session, user.id, Decimal("0"), "donation_purchase_admin_free",
                                          details=f"{item['name']} (ADMIN_FREE)")
         else:
-            await change_balance_atomic(session, user.id, -item["price"], "donation_purchase",
-                                         details=item["name"])
-            # user.balance -= item["price"] # Handled by change_balance_atomic
+            try:
+                await change_balance_atomic(session, user.id, -item["price"], "donation_purchase",
+                                             details=item["name"])
+            except InsufficientBalanceError:
+                await session.rollback()
+                await callback.answer(t('Недостаточно монет'), show_alert=True)
+                return
 
         perk = await activate_perk(session, user.id, item["id"], item["duration_days"])
         expires = perk.active_until
@@ -330,7 +336,7 @@ async def _show_styles_in_category(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else t('Ник')
+        user_name = escape(get_display_name(user)) if user else t('Ник')
 
     icon, cat_name = CATEGORIES[cat_id]
 
@@ -353,7 +359,7 @@ async def _styles_page(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else t('Ник')
+        user_name = escape(get_display_name(user)) if user else t('Ник')
 
     icon, cat_name = CATEGORIES[cat_id]
 
@@ -381,7 +387,7 @@ async def _show_style_preview(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else t('Ник')
+        user_name = escape(get_display_name(user)) if user else t('Ник')
 
     s = STYLES[style_id]
     icon, cat_name = CATEGORIES[s.cat_id]
@@ -440,10 +446,18 @@ async def _confirm_custom_nick(callback: CallbackQuery, state: FSMContext):
                                      details=f"custom_nick style={style_id} (ADMIN_FREE)",
             )
         else:
-            await change_balance_atomic(
-                session, user.id, -PRICE, "donation_purchase",
-                details=f"custom_nick style={style_id}",
-            )
+            try:
+                await change_balance_atomic(
+                    session, user.id, -PRICE, "donation_purchase",
+                    details=f"custom_nick style={style_id}",
+                )
+            except InsufficientBalanceError:
+                await session.rollback()
+                await callback.answer(
+                    t('❌ Недостаточно монет. Нужно: {PRICE}', PRICE=PRICE),
+                    show_alert=True,
+                )
+                return
 
         # Активируем перк со style_id
         perk = await activate_perk(
@@ -460,7 +474,7 @@ async def _confirm_custom_nick(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
     # Финальное сообщение с рендером
-    user_name = get_display_name(user)
+    user_name = escape(get_display_name(user))
     inline = format_nick_inline(user_name, style_id)
     card = format_nick_card(user_name, style_id)
 
@@ -492,7 +506,7 @@ async def _back_to_styles(callback: CallbackQuery, state: FSMContext):
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
-        user_name = get_display_name(user) if user else t('Ник')
+        user_name = escape(get_display_name(user)) if user else t('Ник')
 
     icon, cat_name = CATEGORIES[cat_id]
 
@@ -567,14 +581,14 @@ async def donate_my_perks(callback: CallbackQuery):
 # BACK BUTTON HANDLER
 # =========================
 @router.callback_query(F.data == "btn_profile")
-async def back_to_profile(callback: CallbackQuery):
-    # Simple back: show profile hint
+async def back_to_profile(callback: CallbackQuery, state: FSMContext):
+    """«Назад» из магазина перков: открываем сам профиль, а не подсказку
+    «нажми кнопку в меню»."""
+    from app.user_handlers import show_profile
+
+    await callback.answer()
     try:
-        await callback.message.edit_text(
-            t('👤 Нажми кнопку 👤 Профиль в главном меню, чтобы вернуться.'),
-            reply_markup=None
-        )
+        await show_profile(callback.message, state, telegram_id=callback.from_user.id)
     except Exception:
         await callback.message.answer(t('👤 Нажми кнопку 👤 Профиль в главном меню.'))
-    await callback.answer()
 
