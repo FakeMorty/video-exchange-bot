@@ -12,6 +12,11 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
 В репозитории не было entrypoint, который понимает Vercel: бот запускался
 только как постоянно живой процесс (`python -m app.main`, long-polling).
 
+Вторая ошибка после добавления entrypoint — `uv sync` на сборке падал на
+`.python-version` с 3.11.11: такого интерпретатора у Vercel нет (поддерживаются
+3.12+). Файл поднят до 3.13 — как в `Dockerfile`. На Render это не влияет:
+там версия задана отдельно переменной `PYTHON_VERSION=3.11.11` в `render.yaml`.
+
 ## Что сделано
 
 - `api/index.py` — ASGI-entrypoint для Vercel Python Runtime. Экспортирует
