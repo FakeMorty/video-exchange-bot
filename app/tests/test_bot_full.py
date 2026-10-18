@@ -3582,6 +3582,7 @@ def test_content_actions_show_remove_button_only_to_admins():
     ]
 
     assert "admin_remove_from_feed:42" not in viewer_callbacks
+    assert "playlist_add:42" in viewer_callbacks
     assert "admin_remove_from_feed:42" in admin_video_callbacks
     assert "admin_remove_from_feed:43" in admin_photo_callbacks
 
@@ -4571,7 +4572,7 @@ def test_i18n_normalize_language_and_fallbacks():
 def test_main_menu_is_localized_and_has_language_button():
     from app.keyboards import (
         BTN_ADMIN, BTN_BUY, BTN_FAQ, BTN_FEEDBACK, BTN_GAMES, BTN_LANG,
-        BTN_OFFERS, BTN_PROFILE, BTN_PROMO, BTN_REFERRALS, BTN_RULES,
+        BTN_OFFERS, BTN_PLAYLISTS, BTN_PROFILE, BTN_PROMO, BTN_REFERRALS, BTN_RULES,
         BTN_TOPS, BTN_UPLOAD, BTN_WATCH,
         language_keyboard, main_menu, menu_button_variants,
     )
@@ -4580,12 +4581,12 @@ def test_main_menu_is_localized_and_has_language_button():
     en_labels = [b.text for row in main_menu(lang="en").keyboard for b in row]
 
     # По умолчанию меню русское, включая кнопку выбора языка
-    for label in (BTN_WATCH, BTN_UPLOAD, BTN_PROFILE, BTN_BUY, BTN_OFFERS,
+    for label in (BTN_WATCH, BTN_PLAYLISTS, BTN_UPLOAD, BTN_PROFILE, BTN_BUY, BTN_OFFERS,
                   BTN_REFERRALS, BTN_GAMES, BTN_TOPS, BTN_PROMO, BTN_FEEDBACK,
                   BTN_RULES, BTN_FAQ, BTN_LANG):
         assert label in ru_labels
     # Английская локализация
-    for label in ("🎬 Watch", "📤 Upload", "👤 Profile", "🛍 Shop",
+    for label in ("🎬 Watch", "🎵 Playlists", "📤 Upload", "👤 Profile", "🛍 Shop",
                   "📢 Offers", "👥 Referrals", "🎮 Games", "🏆 Tops",
                   "🎟 Promo codes", "💬 Feedback", "📜 Rules",
                   "ℹ️ FAQ / Help", "🌐 Language"):
@@ -4598,6 +4599,7 @@ def test_main_menu_is_localized_and_has_language_button():
 
     # Варианты для матчинга обработчиков покрывают все языки
     assert menu_button_variants("watch") == {"🎬 Смотреть", "🎬 Watch"}
+    assert menu_button_variants("playlists") == {"🎵 Плейлисты", "🎵 Playlists"}
     assert menu_button_variants("lang") == {"🌐 Язык", "🌐 Language"}
 
     # Клавиатура выбора языка: оба языка, текущий отмечен, есть возврат в меню
@@ -4616,7 +4618,8 @@ def test_menu_button_constants_match_ru_translations():
     from app.i18n import t
 
     pairs = {
-        "watch": K.BTN_WATCH, "upload": K.BTN_UPLOAD, "profile": K.BTN_PROFILE,
+        "watch": K.BTN_WATCH, "playlists": K.BTN_PLAYLISTS,
+        "upload": K.BTN_UPLOAD, "profile": K.BTN_PROFILE,
         "buy": K.BTN_BUY, "offers": K.BTN_OFFERS, "referrals": K.BTN_REFERRALS,
         "games": K.BTN_GAMES, "tops": K.BTN_TOPS, "promo": K.BTN_PROMO,
         "feedback": K.BTN_FEEDBACK, "rules": K.BTN_RULES, "faq": K.BTN_FAQ,

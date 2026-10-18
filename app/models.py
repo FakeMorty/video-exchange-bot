@@ -88,6 +88,11 @@ class User(Base):
         foreign_keys="BlockedUser.user_id",
         back_populates="user",
     )
+    playlists: Mapped[List["UserPlaylist"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     lootbox_pity_counter: Mapped[int] = mapped_column(Integer, default=0)
 
 
@@ -192,6 +197,53 @@ class Video(Base):
     ratings: Mapped[List["VideoRating"]] = relationship(back_populates="video")
     comments: Mapped[List["Comment"]] = relationship(back_populates="video")
     reactions: Mapped[List["ContentReaction"]] = relationship(back_populates="video")
+
+
+class UserPlaylist(Base):
+    """Личный плейлист пользователя; доступ к нему ограничен активным VIP."""
+
+    __tablename__ = "user_playlists"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_user_playlist_user_name"),
+        Index("ix_user_playlists_user_created_at", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    user: Mapped["User"] = relationship(back_populates="playlists")
+    items: Mapped[List["UserPlaylistItem"]] = relationship(
+        back_populates="playlist",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="UserPlaylistItem.id",
+    )
+
+
+class UserPlaylistItem(Base):
+    """Сохранённый ролик в личном плейлисте; окончания VIP не удаляют запись."""
+
+    __tablename__ = "user_playlist_items"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "video_id", name="uq_user_playlist_video"),
+        Index("ix_user_playlist_items_playlist_added", "playlist_id", "added_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    playlist_id: Mapped[int] = mapped_column(
+        ForeignKey("user_playlists.id", ondelete="CASCADE"), nullable=False
+    )
+    video_id: Mapped[int] = mapped_column(
+        ForeignKey("videos.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    playlist: Mapped["UserPlaylist"] = relationship(back_populates="items")
+    video: Mapped["Video"] = relationship()
 
 
 class VideoView(Base):

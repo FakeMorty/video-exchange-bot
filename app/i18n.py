@@ -52,6 +52,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "ru": {
         # Кнопки главного меню
         "menu.watch": "🎬 Смотреть",
+        "menu.playlists": "🎵 Плейлисты",
         "menu.upload": "📤 Загрузить",
         "menu.profile": "👤 Профиль",
         "menu.buy": "🛍 Магазин",
@@ -110,6 +111,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
         # Main menu buttons
         "menu.watch": "🎬 Watch",
+        "menu.playlists": "🎵 Playlists",
         "menu.upload": "📤 Upload",
         "menu.profile": "👤 Profile",
         "menu.buy": "🛍 Shop",

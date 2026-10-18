@@ -56,6 +56,49 @@ import urllib.parse
 
 _bot = None
 _dp = None
+_playlist_schema_ready = False
+
+
+async def _ensure_playlist_schema() -> None:
+    """Create only the new playlist tables on the first Vercel webhook.
+
+    Vercel's ASGI entrypoint does not run ``app.main.on_startup`` or the
+    Render migration script. The tables are also covered by Alembic for the
+    always-on deployment; this small idempotent check lets the serverless
+    webhook activate the feature without requiring an out-of-band shell.
+    """
+    global _playlist_schema_ready
+    if _playlist_schema_ready:
+        return
+
+    from sqlalchemy import inspect
+    from app.db import engine
+    from app.models import UserPlaylist, UserPlaylistItem
+
+    def create_tables(sync_conn):
+        UserPlaylist.metadata.create_all(
+            sync_conn,
+            tables=[UserPlaylist.__table__, UserPlaylistItem.__table__],
+            checkfirst=True,
+        )
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(create_tables)
+    except Exception:
+        # Two serverless instances may cold-start concurrently: one can create
+        # a table after the other's checkfirst inspection. Treat that narrow
+        # race as success only when both tables now exist; otherwise propagate.
+        async with engine.connect() as conn:
+            tables_exist = await conn.run_sync(
+                lambda sync_conn: (
+                    inspect(sync_conn).has_table("user_playlists")
+                    and inspect(sync_conn).has_table("user_playlist_items")
+                )
+            )
+        if not tables_exist:
+            raise
+    _playlist_schema_ready = True
 
 
 def _get_bot_and_dispatcher():
@@ -295,6 +338,7 @@ async def app(scope, receive, send):
             from aiogram.types import Update
 
             bot, dp = _get_bot_and_dispatcher()
+            await _ensure_playlist_schema()
             update = Update.model_validate(data, context={"bot": bot})
             await dp.feed_update(bot, update)
         except Exception as exc:  # не роняем функцию: Telegram иначе ретраит штормом

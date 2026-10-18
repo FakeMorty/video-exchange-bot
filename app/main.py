@@ -41,6 +41,7 @@ from app.admin_handlers import router as admin_router
 from app.user_offer_handlers import router as user_offer_router
 from app.donation_shop import router as donation_router
 from app.arcade_handlers import router as arcade_router
+from app.playlist_handlers import router as playlist_router
 from app.logger import setup_logging, get_logger, log_info, log_error
 from app.services import (
     get_offer_participations_for_subscription_audit,
@@ -4309,6 +4310,7 @@ def create_bot_and_dispatcher():
     dp.callback_query.middleware(BanCheckMiddleware())
     dp.include_router(admin_router)
     dp.include_router(user_router)
+    dp.include_router(playlist_router)
     dp.include_router(arcade_router)
     dp.include_router(user_offer_router)
     dp.include_router(donation_router)

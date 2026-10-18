@@ -13,6 +13,7 @@ from app.i18n import SUPPORTED_LANGUAGES, current_language, language_label, norm
 # (app/i18n.py), а эти константы остаются для обратной совместимости —
 # они должны совпадать с t("ru", "menu.<ключ>") (это проверяет тест).
 BTN_WATCH      = "🎬 Смотреть"
+BTN_PLAYLISTS  = "🎵 Плейлисты"
 BTN_UPLOAD     = "📤 Загрузить"
 BTN_PROFILE    = "👤 Профиль"
 BTN_BUY        = "🛍 Магазин"
@@ -44,6 +45,7 @@ def main_menu(is_admin: bool = False, lang: str | None = None) -> ReplyKeyboardM
     """
     kb = [
         [KeyboardButton(text=t(lang, "menu.watch")), KeyboardButton(text=t(lang, "menu.upload"))],
+        [KeyboardButton(text=t(lang, "menu.playlists"))],
         [KeyboardButton(text=t(lang, "menu.profile")), KeyboardButton(text=t(lang, "menu.buy"))],
         [KeyboardButton(text=t(lang, "menu.offers")), KeyboardButton(text=t(lang, "menu.referrals"))],
         [KeyboardButton(text=t(lang, "menu.games")), KeyboardButton(text=t(lang, "menu.tops"))],
@@ -184,6 +186,7 @@ def video_rating_keyboard(video_id: int, *, is_admin: bool = False) -> InlineKey
             InlineKeyboardButton(text=t('🚨 Жалоба'), callback_data=f"report_video:{video_id}"),
         ],
         [InlineKeyboardButton(text=t('🚫 Заблокировать автора'), callback_data=f"block_author:{video_id}")],
+        [InlineKeyboardButton(text=t('➕ В плейлист'), callback_data=f"playlist_add:{video_id}")],
     ]
     if is_admin:
         rows.append([InlineKeyboardButton(text=t('🗑 Удалить из ленты'), callback_data=f"admin_remove_from_feed:{video_id}")])
