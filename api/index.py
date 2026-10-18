@@ -29,16 +29,30 @@ Telegram-апдейт отдельным вызовом функции чере�
     WEBHOOK_BASE=https://<проект>.vercel.app BOT_TOKEN=... \\
         python scripts/set_vercel_webhook.py
 
+ИЛИ напрямую из Vercel (без локального доступа к api.telegram.org):
+    GET /api/setup-webhook?key=<WEBHOOK_SECRET>
+    (требует WEBHOOK_SECRET и WEBHOOK_BASE в env Vercel)
+
 ВАЖНО: webhook и polling взаимоисключающи. Если бот в этот же момент
 запущен на Render/Docker через polling, Telegram будет отдавать апдейты
 только одному из них, а polling-копия получит TelegramConflictError.
 Оставляйте один боевой инстанс.
+
+Vercel rewrite-роутинг (фикс v3.29.2):
+Vercel rewrites вида {\"source\": \"/(.*)\", \"destination\": \"/api/index\"}
+заставляют Python-runtime видеть в ASGI scope.path всегда \"/api/index\",
+а оригинальный путь теряется → все хендлеры 404. Поэтому vercel.json
+передаёт оригинальный путь как `?__vercel_path=/$1` (с мержем query),
+а этот модуль восстанавливает его через _resolve_path(scope) с
+фолбэком на заголовки Vercel (x-vercel-original-path и др.) и
+совместимостью со старыми прямыми вызовами.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 
 _bot = None
 _dp = None
@@ -54,6 +68,76 @@ def _get_bot_and_dispatcher():
 
         _bot, _dp = create_bot_and_dispatcher()
     return _bot, _dp
+
+
+def _resolve_path(scope) -> str:
+    """Восстанавливает оригинальный путь запроса при Vercel rewrite.
+
+    Vercel при rewrite `/(.*) -> /api/index?__vercel_path=/$1` передаёт
+    оригинальный путь в query-параметре `__vercel_path` (Vercel мержит
+    query оригинального запроса и destination). На случай смены формата
+    также проверяем заголовки, которые Vercel может прокидывать
+    (x-matched-path, x-forwarded-uri и т.д.), и делаем фолбэк на
+    scope[\"path\"] с нормализацией \"/api/index\" -> \"/\" для
+    совместимости с прямыми вызовами без rewrite.
+    """
+    # 1) Приоритет: query-параметр __vercel_path (основной механизм v3.29.2)
+    qs_bytes = scope.get("query_string", b"")
+    try:
+        qs_str = qs_bytes.decode("latin-1") if isinstance(qs_bytes, (bytes, bytearray)) else str(qs_bytes)
+    except Exception:
+        qs_str = ""
+    if qs_str:
+        try:
+            parsed = urllib.parse.parse_qs(qs_str, keep_blank_values=True)
+            for key in ("__vercel_path", "__path", "__route", "__vpath", "_vercel_path"):
+                if key in parsed and parsed[key]:
+                    val = parsed[key][0]
+                    if not val:
+                        continue
+                    # parse_qs уже декодирует %2F etc.; гарантируем ведущий слэш
+                    if not val.startswith("/"):
+                        val = "/" + val
+                    # нормализуем // -> /
+                    if val.startswith("//"):
+                        val = "/" + val.lstrip("/")
+                    return val
+        except Exception:
+            pass
+
+    # 2) Фолбэк: заголовки, которые Vercel может выставлять при rewrite
+    try:
+        headers = {}
+        for hk, hv in scope.get("headers", []):
+            try:
+                headers[hk.decode("latin-1").lower()] = hv.decode("latin-1")
+            except Exception:
+                continue
+        for hk in (
+            "x-vercel-original-path",
+            "x-vercel-invoke-path",
+            "x-vercel-matched-path",
+            "x-matched-path",
+            "x-forwarded-uri",
+            "x-rewrite-url",
+            "x-middleware-rewrite",
+            "x-invoke-path",
+        ):
+            if hk in headers and headers[hk]:
+                raw = headers[hk].split("?")[0].strip()
+                if raw and raw not in ("/api/index", "/api/index.py"):
+                    if not raw.startswith("/"):
+                        raw = "/" + raw
+                    return raw
+    except Exception:
+        pass
+
+    # 3) Прямой путь из scope (локальный прогон без rewrite, старый vercel.json)
+    path = scope.get("path", "/") or "/"
+    # Если Vercel прислал destination без preservation старого формата — считаем это health
+    if path in ("/api/index", "/api/index.py"):
+        return "/"
+    return path
 
 
 async def _send(send, status: int, body: bytes, content_type: str = "application/json") -> None:
@@ -103,12 +187,13 @@ async def app(scope, receive, send):
         return
 
     method = scope.get("method", "GET")
-    path = scope.get("path", "/")
+    # Восстанавливаем оригинальный путь с учётом Vercel rewrite (v3.29.2)
+    path = _resolve_path(scope)
     webhook_path = os.getenv("WEBHOOK_PATH", "/webhook").strip() or "/webhook"
 
     # Health-check: должен отвечать 200 даже без секретов, иначе в дашборде
     # Vercel нельзя отличить «функция жива» от «не заданы env vars».
-    if method == "GET" and path in ("/", "/health", "/healthz", "/api/health"):
+    if method == "GET" and path in ("/", "/health", "/healthz", "/api/health", "/api/index"):
         configured = bool(os.getenv("BOT_TOKEN")) and bool(os.getenv("DATABASE_URL"))
         await _json(
             send,
@@ -138,9 +223,19 @@ async def app(scope, receive, send):
         import hmac as _hmac
 
         expected = os.getenv("WEBHOOK_SECRET", "").strip()
-        query = scope.get("query_string", b"").decode("latin-1")
-        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
-        if not expected or not _hmac.compare_digest(params.get("key", ""), expected):
+        # Парсим query надёжно через urllib (Vercel мержит ?__vercel_path и ?key)
+        query = scope.get("query_string", b"").decode("latin-1") if scope.get("query_string") else ""
+        parsed_qs = urllib.parse.parse_qs(query, keep_blank_values=True)
+        # parse_qs возвращает list значений; берём первое
+        key_val = parsed_qs.get("key", [""])[0] if parsed_qs.get("key") else ""
+        # фолбэк для старых прямых парсингов без parse_qs
+        if not key_val and query:
+            try:
+                params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+                key_val = params.get("key", "")
+            except Exception:
+                key_val = ""
+        if not expected or not _hmac.compare_digest(key_val, expected):
             await _json(send, 403, {"ok": False, "error": "bad key"})
             return
         if not os.getenv("BOT_TOKEN"):
@@ -173,7 +268,8 @@ async def app(scope, receive, send):
             await _json(send, 502, {"ok": False, "error": "setWebhook failed, see Vercel logs"})
         return
 
-    if method == "POST" and path in (webhook_path, "/webhook", "/api/webhook"):
+    if method == "POST" and path in (webhook_path, "/webhook", "/api/webhook", "/api/index"):
+        # /api/index как POST допускаем для совместимости, если rewrite без preservation
         if not os.getenv("BOT_TOKEN"):
             await _json(send, 503, {"ok": False, "error": "BOT_TOKEN is not set"})
             return
@@ -215,6 +311,7 @@ async def app(scope, receive, send):
         {
             "ok": False,
             "error": "not found",
+            "path": path,
             "hint": "On Vercel this bot serves only health-checks and the "
             "Telegram webhook. Mini App pages and background workers "
             "require the long-lived host (see render.yaml / Dockerfile).",
