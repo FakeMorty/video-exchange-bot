@@ -6,9 +6,6 @@
     }
   },
   "rewrites": [
-    { "source": "/", "destination": "/api/index" },
-    { "source": "/health", "destination": "/api/index" },
-    { "source": "/healthz", "destination": "/api/index" },
-    { "source": "/webhook", "destination": "/api/index" }
+    { "source": "/(.*)", "destination": "/api/index?__vercel_path=/$1" }
   ]
 }
