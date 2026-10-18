@@ -4288,7 +4288,14 @@ async def donationalerts_oauth_callback(request: web.Request) -> web.Response:
     )
 
 
-async def main():
+def create_bot_and_dispatcher():
+    """Создаёт Bot + Dispatcher со всеми роутерами и глобальным error-handler.
+
+    Единая точка сборки для обоих режимов работы:
+    - `main()` — long-polling на постоянно живом хосте (Render/Docker/VPS);
+    - `api/index.py` — webhook-режим на serverless (Vercel), где каждый
+      апдейт приходит отдельным HTTP-вызовом функции.
+    """
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is empty")
 
@@ -4355,6 +4362,12 @@ async def main():
             return True
         log_exception(lg, f"dp_error: {exc}")
         return True
+
+    return bot, dp
+
+
+async def main():
+    bot, dp = create_bot_and_dispatcher()
 
     app = web.Application()
     app['bot'] = bot
