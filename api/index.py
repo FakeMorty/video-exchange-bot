@@ -131,6 +131,48 @@ async def app(scope, receive, send):
         )
         return
 
+    if method == "GET" and path == "/api/setup-webhook":
+        # Одноразовая установка вебхука прямо из функции Vercel (у песочниц и
+        # локальных машин часто нет прямого доступа к api.telegram.org).
+        # Защита: ?key= должен совпасть с WEBHOOK_SECRET из env vars.
+        import hmac as _hmac
+
+        expected = os.getenv("WEBHOOK_SECRET", "").strip()
+        query = scope.get("query_string", b"").decode("latin-1")
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        if not expected or not _hmac.compare_digest(params.get("key", ""), expected):
+            await _json(send, 403, {"ok": False, "error": "bad key"})
+            return
+        if not os.getenv("BOT_TOKEN"):
+            await _json(send, 503, {"ok": False, "error": "BOT_TOKEN is not set"})
+            return
+        base = os.getenv("WEBHOOK_BASE", "").strip().rstrip("/")
+        if not base.startswith("https://"):
+            await _json(send, 503, {"ok": False, "error": "WEBHOOK_BASE must be https:// URL"})
+            return
+        try:
+            bot, _dp_unused = _get_bot_and_dispatcher()
+            await bot.set_webhook(
+                url=f"{base}{webhook_path}",
+                secret_token=expected,
+                drop_pending_updates=False,
+            )
+            info = await bot.get_webhook_info()
+            await _json(
+                send,
+                200,
+                {
+                    "ok": True,
+                    "webhook_url": info.url,
+                    "pending_update_count": info.pending_update_count,
+                    "last_error_message": info.last_error_message,
+                },
+            )
+        except Exception as exc:
+            print(f"setup-webhook error: {exc!r}", flush=True)
+            await _json(send, 502, {"ok": False, "error": "setWebhook failed, see Vercel logs"})
+        return
+
     if method == "POST" and path in (webhook_path, "/webhook", "/api/webhook"):
         if not os.getenv("BOT_TOKEN"):
             await _json(send, 503, {"ok": False, "error": "BOT_TOKEN is not set"})
