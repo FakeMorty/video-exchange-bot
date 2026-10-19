@@ -2568,7 +2568,14 @@ async def on_startup(app):
         log_info(logger, "Database maintenance complete")
     except Exception as e:
         log_error(logger, f"Database maintenance error: {e}")
-        
+
+    # Нативное меню команд Telegram (кнопка «Меню» рядом с полем ввода).
+    try:
+        await apply_bot_commands(bot)
+        log_info(logger, "Bot commands menu set")
+    except Exception as e:
+        log_error(logger, f"set_my_commands error: {e}")
+
     await _notify_admins_started(bot)
 
     log_info(logger, "Service initialized")
@@ -4287,6 +4294,60 @@ async def donationalerts_oauth_callback(request: web.Request) -> web.Response:
         ),
         content_type="text/html",
     )
+
+
+async def apply_bot_commands(bot: Bot) -> None:
+    """Ставит нативное меню команд Telegram (кнопка «Меню» у поля ввода).
+
+    Без этого команды /start, /cancel и др. пользователи находят только в
+    документации. Описания локализованы: русский — дефолтный scope (канонический
+    язык бота), английский — для клиентов с language code «en». Админам из
+    конфига в их личных чатах доступен расширенный набор (/admin, /video,
+    /health, /selfcheck); у остальных этих команд в меню не видно.
+    """
+    from aiogram.types import (
+        BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeChat,
+    )
+
+    user_cmds = [
+        BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="cancel", description="Отменить текущее действие"),
+        BotCommand(command="version", description="Версия бота и что нового"),
+    ]
+    user_cmds_en = [
+        BotCommand(command="start", description="Main menu"),
+        BotCommand(command="cancel", description="Cancel the current action"),
+        BotCommand(command="version", description="Bot version and what's new"),
+    ]
+    admin_extra = [
+        BotCommand(command="admin", description="Панель администратора"),
+        BotCommand(command="video", description="Найти публикацию по номеру"),
+        BotCommand(command="health", description="Проверить состояние бота"),
+        BotCommand(command="selfcheck", description="Диагностика данных"),
+    ]
+    admin_extra_en = [
+        BotCommand(command="admin", description="Admin panel"),
+        BotCommand(command="video", description="Find a post by number"),
+        BotCommand(command="health", description="Check the bot status"),
+        BotCommand(command="selfcheck", description="Data diagnostics"),
+    ]
+
+    # Дефолт (все чаты) — русский; английский — для клиентов с en.
+    await bot.set_my_commands(user_cmds)
+    await bot.set_my_commands(
+        user_cmds_en,
+        scope=BotCommandScopeAllPrivateChats(),
+        language_code="en",
+    )
+    # Админам из конфига — расширенный список в их личных чатах.
+    for admin_id in ADMINS:
+        scope = BotCommandScopeChat(chat_id=admin_id)
+        await bot.set_my_commands(user_cmds + admin_extra, scope=scope)
+        await bot.set_my_commands(
+            user_cmds_en + admin_extra_en,
+            scope=scope,
+            language_code="en",
+        )
 
 
 def create_bot_and_dispatcher():

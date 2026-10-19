@@ -4555,7 +4555,7 @@ def test_i18n_normalize_language_and_fallbacks():
     assert t("xx", "menu.watch") == "🎬 Смотреть"  # нет такого языка -> русский
     assert t("en", "no.such.key") == "no.such.key"  # нет ключа -> сам ключ
     assert t("en", "welcome.greeting", name="Nick", vip="", balance=100) == (
-        "👋 Hi, <b>Nick</b>!\n💰 Balance: <b>100</b> coins"
+        "👋 Hi, <b>Nick</b>!\n💰 Your balance: <b>100</b> coins"
     )
 
     # язык пользователя
@@ -4589,7 +4589,7 @@ def test_main_menu_is_localized_and_has_language_button():
     for label in ("🎬 Watch", "🎵 Playlists", "📤 Upload", "👤 Profile", "🛍 Shop",
                   "📢 Offers", "👥 Referrals", "🎮 Games", "🏆 Tops",
                   "🎟 Promo codes", "💬 Feedback", "📜 Rules",
-                  "ℹ️ FAQ / Help", "🌐 Language"):
+                  "ℹ️ Help", "🌐 Language"):
         assert label in en_labels
         assert label not in ru_labels
     # Админ-кнопка тоже локализуется и не светится обычным юзерам
@@ -4926,3 +4926,135 @@ async def test_poll_error_codes_are_language_independent():
             session, poll2.id, user.id, option_indexes=[],
         )
         assert invalid_error is not None and invalid_code == "invalid"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Нативный интерфейс: парные ряды меню, разделы админ-панели,
+# понятные кнопки ленты и локализованное меню команд Telegram
+# ═══════════════════════════════════════════════════════════════
+
+def test_main_menu_rows_are_paired_and_compact():
+    """Главное меню собрано парами кнопок в ряд (плюс отдельный админ-ряд).
+
+    Парная раскладка делает клавиатуру ниже и группирует связанные разделы:
+    контент -> подборки/топы -> профиль/магазин -> игры/промокоды ->
+    заработок -> помощь и язык.
+    """
+    from app.keyboards import main_menu
+
+    rows = main_menu().keyboard
+    assert len(rows) == 7
+    for row in rows:
+        assert len(row) == 2
+
+    admin_rows = main_menu(is_admin=True).keyboard
+    assert len(admin_rows) == 8
+    assert len(admin_rows[-1]) == 1  # «🔧 Админка» — отдельный ряд
+
+
+def test_admin_panel_keeps_all_sections_and_is_grouped():
+    """Группировка админ-панели не потеряла ни одного раздела; кнопки парами."""
+    from app.keyboards import admin_main_keyboard
+
+    expected_callbacks = {
+        "admin_queue_info", "admin_approve_all", "admin_extended_stats",
+        "admin_da_menu", "admin_manage_users", "admin_auto_moderation",
+        "admin_trusted_uploaders", "admin_offers_menu",
+        "admin_direct_message_all", "admin_broadcast", "admin_polls",
+        "admin_events_menu", "admin_sales", "admin_reports",
+        "admin_feedback_menu", "admin_bot_settings",
+    }
+    kb = admin_main_keyboard(is_super=False)
+    callbacks = {b.callback_data for row in kb.inline_keyboard for b in row}
+    assert callbacks == expected_callbacks
+    for row in kb.inline_keyboard:
+        assert len(row) == 2
+
+    super_kb = admin_main_keyboard(is_super=True)
+    super_callbacks = {
+        b.callback_data for row in super_kb.inline_keyboard for b in row
+    }
+    assert super_callbacks == expected_callbacks | {"admin_db_menu", "admin_manage_admins"}
+
+
+def test_admin_panel_text_has_section_legend():
+    """Сообщение панели содержит легенду разделов, совпадающую с группировкой кнопок."""
+    from app.admin_handlers import admin_panel_text
+    from app.i18n import language_scope
+
+    with language_scope("ru"):
+        text = admin_panel_text()
+        assert "Панель администратора" in text
+        for section in ("Контент", "Аудитория", "Деньги", "Система"):
+            assert section in text
+    with language_scope("en"):
+        text = admin_panel_text()
+        assert "Admin panel" in text
+        for section in ("Content", "Audience", "Money", "System"):
+            assert section in text
+
+
+def test_watch_flow_buttons_are_self_explanatory():
+    """Кнопки ленты говорят, что будет дальше, и переведены на английский."""
+    from app.i18n import t
+    from app.keyboards import photo_actions_keyboard, video_rating_keyboard
+
+    video_texts = [
+        b.text for row in video_rating_keyboard(1).inline_keyboard for b in row
+    ]
+    assert "▶️ Следующее видео" in video_texts
+    assert "🚫 Скрыть автора" in video_texts
+    assert "📝 Следующее" not in video_texts
+
+    photo_texts = [
+        b.text for row in photo_actions_keyboard(2).inline_keyboard for b in row
+    ]
+    assert "▶️ Следующее фото" in photo_texts
+    assert "🚫 Скрыть автора" in photo_texts
+
+    assert t("en", "▶️ Следующее видео") == "▶️ Next video"
+    assert t("en", "▶️ Следующее фото") == "▶️ Next photo"
+    assert t("en", "🚫 Скрыть автора") == "🚫 Hide author"
+
+
+@pytest.mark.asyncio
+async def test_apply_bot_commands_sets_localized_menus(monkeypatch):
+    """Нативное меню команд Telegram: русский дефолт, английский для en,
+    расширенный набор (/admin, /video, /health, /selfcheck) — только админам."""
+    from app.main import apply_bot_commands
+
+    calls = []
+
+    class FakeBot:
+        async def set_my_commands(self, commands, scope=None, language_code=None):
+            calls.append((
+                tuple(c.command for c in commands),
+                type(scope).__name__ if scope is not None else None,
+                language_code,
+            ))
+
+    monkeypatch.setattr("app.main.ADMINS", [111], raising=False)
+    await apply_bot_commands(FakeBot())
+
+    # Дефолт (все чаты) — русский набор пользователя
+    assert (("start", "cancel", "version"), None, None) in calls
+    # Английский набор — для частных чатов с language code en
+    assert any(
+        c[0] == ("start", "cancel", "version")
+        and c[1] == "BotCommandScopeAllPrivateChats"
+        and c[2] == "en"
+        for c in calls
+    )
+    # Админу из конфига — расширенный набор в его чат (ru и en)
+    assert any(
+        c[0] == ("start", "cancel", "version", "admin", "video", "health", "selfcheck")
+        and c[1] == "BotCommandScopeChat"
+        and c[2] is None
+        for c in calls
+    )
+    assert any(
+        c[0][:4] == ("start", "cancel", "version", "admin")
+        and c[1] == "BotCommandScopeChat"
+        and c[2] == "en"
+        for c in calls
+    )
