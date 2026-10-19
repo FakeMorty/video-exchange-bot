@@ -1066,7 +1066,7 @@ async def show_vip(message: Message, state: FSMContext):
 
             if is_vip(user):
                 await message.answer(
-                    t('👑 <b>Ты VIP!</b>\n\nДо: <b>{arg0}</b>\n\nПривилегии:\n• Множитель монет x{VIP_BONUS_MULTIPLIER}\n• Скидка {vip_discount_percent}% на просмотр\n• Приоритет и бонусы в экономике', arg0=user.vip_until.strftime('%d.%m.%Y %H:%M'), VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
+                    t('👑 <b>Ты VIP!</b>\n\nДо: <b>{arg0}</b>\n\nПривилегии:\n• Множитель монет x{VIP_BONUS_MULTIPLIER}\n• Скидка {vip_discount_percent}% на просмотр\n• Приоритет и бонусы в экономике\n• 🎵 Личные плейлисты: подборки сохраняются при окончании VIP и снова доступны после продления', arg0=user.vip_until.strftime('%d.%m.%Y %H:%M'), VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
                     parse_mode="HTML"
                 )
             else:
@@ -1086,7 +1086,7 @@ async def show_vip(message: Message, state: FSMContext):
                 from app.config import VIP_PRICE_RUB
                 vip_price_rub = int(float(await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB))
                 await message.answer(
-                    t('👑 <b>VIP статус через DonationAlerts</b>\n\n💰 Стоимость на 30 дней: <b>{vip_price_rub} руб.</b>{sale_badge}{admin_free_badge}\n\nПривилегии:\n• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n• 🎬 Просмотр фото без дневного лимита\n• ⭐️ Скидка {vip_discount_percent}% на просмотр\n• 👑 Эксклюзивная плашка VIP в профиле\n\nНажмите кнопку ниже: бот создаст одноразовый код, который нужно вставить в поле «Сообщение» DonationAlerts вместе с точной суммой.', vip_price_rub=vip_price_rub, sale_badge=sale_badge, admin_free_badge=admin_free_badge, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
+                    t('👑 <b>VIP статус через DonationAlerts</b>\n\n💰 Стоимость на 30 дней: <b>{vip_price_rub} руб.</b>{sale_badge}{admin_free_badge}\n\nПривилегии:\n• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n• 🎬 Просмотр фото без дневного лимита\n• ⭐️ Скидка {vip_discount_percent}% на просмотр\n• 👑 Эксклюзивная плашка VIP в профиле\n• 🎵 Создание личных плейлистов — они сохраняются при окончании VIP и открываются после продления\n\nНажмите кнопку ниже: бот создаст одноразовый код, который нужно вставить в поле «Сообщение» DonationAlerts вместе с точной суммой.', vip_price_rub=vip_price_rub, sale_badge=sale_badge, admin_free_badge=admin_free_badge, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text=t('👑 Получить код VIP за {vip_price_rub} ₽', vip_price_rub=vip_price_rub), callback_data="da_order:vip_150")],
@@ -1152,7 +1152,7 @@ async def buy_vip(callback: CallbackQuery):
         await session.commit()
         
         await callback.message.answer(
-            t('👑 <b>VIP активирован бесплатно!</b>\n\n🆓 (ADMIN_FREE для админов)\nVIP до: <b>{arg0}</b>\n\nПривилегии:\n• Множитель монет x{VIP_BONUS_MULTIPLIER}\n• Скидка {vip_discount_percent}% на просмотр\n• Приоритет и бонусы в экономике', arg0=user.vip_until.strftime('%d.%m.%Y %H:%M'), VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
+            t('👑 <b>VIP активирован бесплатно!</b>\n\n🆓 (ADMIN_FREE для админов)\nVIP до: <b>{arg0}</b>\n\nПривилегии:\n• Множитель монет x{VIP_BONUS_MULTIPLIER}\n• Скидка {vip_discount_percent}% на просмотр\n• Приоритет и бонусы в экономике\n• 🎵 Личные плейлисты: они сохраняются при окончании VIP и доступны после продления', arg0=user.vip_until.strftime('%d.%m.%Y %H:%M'), VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
             parse_mode="HTML",
         )
         await callback.answer(t('🆓 VIP активирован бесплатно!'))
@@ -2068,14 +2068,14 @@ async def cb_store_vip(callback: CallbackQuery):
         discount_percent = max(0, min(100, round((1 - discount) * 100)))
         if is_vip(user):
             text = (
-                t('👑 <b>VIP активен до {arg0}</b>\n\n• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n• Фото без дневного лимита\n• Скидка {discount_percent}% на просмотр', arg0=user.vip_until.strftime('%d.%m.%Y %H:%M'), VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, discount_percent=discount_percent)
+                t('👑 <b>VIP активен до {arg0}</b>\n\n• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n• Фото без дневного лимита\n• Скидка {discount_percent}% на просмотр\n• 🎵 Личные плейлисты: сохранены до продления VIP', arg0=user.vip_until.strftime('%d.%m.%Y %H:%M'), VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, discount_percent=discount_percent)
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('🛍 В магазин'), callback_data="store_menu")],
             ])
         else:
             text = (
-                t('👑 <b>VIP на 30 дней</b>\n\nСтоимость: <b>{vip_price} Stars</b>\n\n• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n• Фото без дневного лимита\n• Скидка {discount_percent}% на просмотр', vip_price=vip_price, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, discount_percent=discount_percent)
+                t('👑 <b>VIP на 30 дней</b>\n\nСтоимость: <b>{vip_price} Stars</b>\n\n• Множитель монет ×{VIP_BONUS_MULTIPLIER}\n• Фото без дневного лимита\n• Скидка {discount_percent}% на просмотр\n• 🎵 Создание личных плейлистов; они сохраняются после окончания VIP', vip_price=vip_price, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, discount_percent=discount_percent)
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('👑 Оформить за {vip_price} Stars', vip_price=vip_price), callback_data="buy_vip")],

@@ -23,11 +23,17 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
   `app` / `application` / `handler`, отвечает на health-check'и и принимает
   Telegram-апдейты вебхуком (`dp.feed_update`) — polling на serverless
   невозможен.
-- `vercel.json` — функция `api/index.py` (maxDuration 60 c) и rewrites для
-  `/`, `/health`, `/healthz`, `/webhook`.
+- `vercel.json` — функция `api/index.py` (maxDuration 60 c), rewrites для
+  `/`, `/health`, `/healthz`, `/webhook` и регион `fra1` (Frankfurt), ближе к
+  Supabase Central EU для сокращения задержек между функцией и базой.
 - `app/main.py` — сборка Bot + Dispatcher вынесена в
   `create_bot_and_dispatcher()`, её переиспользуют и polling-режим
   (Render/Docker), и Vercel-вебхук. Поведение polling-режима не изменилось.
+- `api/index.py` — при первом Telegram webhook идемпотентно создаёт только
+  таблицы VIP-плейлистов, нужные serverless-версии бота. Базовые таблицы
+  `users` и `videos` должны уже существовать; DB-пользователю нужны права
+  проверять схему и создавать таблицы/индексы (или их нужно заранее создать
+  через Alembic `upgrade head`).
 - `scripts/set_vercel_webhook.py` — ставит/снимает Telegram-вебхук.
 
 ## Как задеплоить
@@ -35,8 +41,10 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
 1. Запушьте эту ветку / смержите в `master` (production branch проекта на Vercel).
 2. В Vercel: **Project → Settings → Environment Variables** задайте минимум:
    - `BOT_TOKEN` — токен от @BotFather;
-   - `DATABASE_URL` — PostgreSQL URL **уже смигрированной** БД
-     (та же, что на Render/Supabase; миграции на serverless не гоняются);
+   - `DATABASE_URL` — PostgreSQL URL БД с уже созданной базовой схемой
+     (`users`, `videos` и т. п.; та же, что на Render/Supabase). На первом
+     Telegram webhook Vercel создаёт только таблицы VIP-плейлистов; для этого
+     нужны права DDL, если миграция `vip_playlists_001` ещё не применена;
    - `ADMINS` — id администраторов через запятую;
    - при желании `WEBHOOK_PATH=/webhook` и `WEBHOOK_SECRET=<случайная строка>`.
 3. Сделайте Redeploy.
