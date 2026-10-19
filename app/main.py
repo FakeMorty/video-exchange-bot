@@ -2140,9 +2140,13 @@ async def auto_broadcast_worker(bot):
     """
     import asyncio
     import random
+    from aiogram.types import FSInputFile
     from app.db import async_session
     from app.models import User
-    from app.services import seed_default_promo_messages, get_auto_broadcast_pool
+    from app.services import (
+        seed_default_promo_messages, get_auto_broadcast_pool,
+        ensure_holiday_events, announce_started_events,
+    )
     from sqlalchemy import select
 
     await asyncio.sleep(60)  # подождать старта бота
@@ -2164,10 +2168,26 @@ async def auto_broadcast_worker(bot):
             await asyncio.sleep(interval_sec)
 
             async with async_session() as session:
+                # Авто-события праздников: создать предстоящие, закрыть истёкшие
+                # (идемпотентно; каталог в app/holidays.py).
+                try:
+                    await ensure_holiday_events(session)
+                except Exception:
+                    logger.exception("Holiday events ensure failed (non-critical)")
                 pool = await get_auto_broadcast_pool(session)
                 users = (await session.execute(
                     select(User.telegram_id).where(User.status == "active")
                 )).scalars().all()
+
+            # Разовая рассылка «событие началось» для запланированных событий
+            # (праздничные авто-события и ручные с будущей датой старта).
+            try:
+                async with async_session() as session:
+                    announced = await announce_started_events(bot, session)
+                if announced:
+                    logger.info(f"Event start announcements sent: {announced}")
+            except Exception:
+                logger.exception("Event announce cycle failed (non-critical)")
 
             if not pool:
                 logger.info("Promo rotation: пул пуст (нет шаблонов и событий) — пропуск цикла.")
@@ -2177,6 +2197,7 @@ async def auto_broadcast_worker(bot):
             item = random.choice(pool)
             msg_text = item["text"]
             image = item.get("image_file_id")
+            image_path = item.get("image_path")  # постер события на диске
             poll_info = item.get("poll")
             reply_markup = None
             if poll_info:
@@ -2190,6 +2211,8 @@ async def auto_broadcast_worker(bot):
                 try:
                     if image:
                         await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
+                    elif image_path:
+                        await bot.send_photo(tid, FSInputFile(image_path), caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
                     else:
                         await bot.send_message(tid, msg_text, parse_mode="HTML", reply_markup=reply_markup)
                     sent += 1
@@ -2568,7 +2591,25 @@ async def on_startup(app):
         log_info(logger, "Database maintenance complete")
     except Exception as e:
         log_error(logger, f"Database maintenance error: {e}")
-        
+
+    # Праздничные авто-события: создать предстоящие из каталога app/holidays.py
+    # и закрыть истёкшие. Идемпотентно, дёшево — безопасно на каждом старте.
+    try:
+        from app.services import ensure_holiday_events
+        async with async_session() as session:
+            created_events = await ensure_holiday_events(session)
+        if created_events:
+            log_info(logger, f"Holiday events auto-created: {created_events}")
+    except Exception as e:
+        log_error(logger, f"Holiday events bootstrap error: {e}")
+
+    # Нативное меню команд Telegram (кнопка «Меню» рядом с полем ввода).
+    try:
+        await apply_bot_commands(bot)
+        log_info(logger, "Bot commands menu set")
+    except Exception as e:
+        log_error(logger, f"set_my_commands error: {e}")
+
     await _notify_admins_started(bot)
 
     log_info(logger, "Service initialized")
@@ -4287,6 +4328,60 @@ async def donationalerts_oauth_callback(request: web.Request) -> web.Response:
         ),
         content_type="text/html",
     )
+
+
+async def apply_bot_commands(bot: Bot) -> None:
+    """Ставит нативное меню команд Telegram (кнопка «Меню» у поля ввода).
+
+    Без этого команды /start, /cancel и др. пользователи находят только в
+    документации. Описания локализованы: русский — дефолтный scope (канонический
+    язык бота), английский — для клиентов с language code «en». Админам из
+    конфига в их личных чатах доступен расширенный набор (/admin, /video,
+    /health, /selfcheck); у остальных этих команд в меню не видно.
+    """
+    from aiogram.types import (
+        BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeChat,
+    )
+
+    user_cmds = [
+        BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="cancel", description="Отменить текущее действие"),
+        BotCommand(command="version", description="Версия бота и что нового"),
+    ]
+    user_cmds_en = [
+        BotCommand(command="start", description="Main menu"),
+        BotCommand(command="cancel", description="Cancel the current action"),
+        BotCommand(command="version", description="Bot version and what's new"),
+    ]
+    admin_extra = [
+        BotCommand(command="admin", description="Панель администратора"),
+        BotCommand(command="video", description="Найти публикацию по номеру"),
+        BotCommand(command="health", description="Проверить состояние бота"),
+        BotCommand(command="selfcheck", description="Диагностика данных"),
+    ]
+    admin_extra_en = [
+        BotCommand(command="admin", description="Admin panel"),
+        BotCommand(command="video", description="Find a post by number"),
+        BotCommand(command="health", description="Check the bot status"),
+        BotCommand(command="selfcheck", description="Data diagnostics"),
+    ]
+
+    # Дефолт (все чаты) — русский; английский — для клиентов с en.
+    await bot.set_my_commands(user_cmds)
+    await bot.set_my_commands(
+        user_cmds_en,
+        scope=BotCommandScopeAllPrivateChats(),
+        language_code="en",
+    )
+    # Админам из конфига — расширенный список в их личных чатах.
+    for admin_id in ADMINS:
+        scope = BotCommandScopeChat(chat_id=admin_id)
+        await bot.set_my_commands(user_cmds + admin_extra, scope=scope)
+        await bot.set_my_commands(
+            user_cmds_en + admin_extra_en,
+            scope=scope,
+            language_code="en",
+        )
 
 
 def create_bot_and_dispatcher():

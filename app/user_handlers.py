@@ -581,42 +581,52 @@ async def send_welcome_banner(message_or_callback, session, user):
     if custom_welcome:
         msg_text += f"\n\n{custom_welcome}"
 
-    banner_file_id = await get_setting(session, "welcome_banner_id", "")
+    # Действующее событие (в т.ч. праздничное авто-событие): на время окна
+    # постер события заменяет приветственный баннер, а к тексту добавляется
+    # праздничный блок со скидкой и датой окончания.
+    event_poster = None
+    try:
+        from app.holidays import build_event_welcome_block, resolve_event_poster
+        events = await get_active_events(session)
+        if events:
+            event = max(events, key=lambda e: e.discount_percent)
+            msg_text += "\n\n" + build_event_welcome_block(event)
+            event_poster = resolve_event_poster(event)
+    except Exception:
+        logger.exception("welcome: не удалось применить активное событие (некритично)")
 
-    if banner_file_id:
+    banner_file_id = await get_setting(session, "welcome_banner_id", "")
+    menu_kb = main_menu(is_admin=admin_flag, lang=lang)
+
+    async def _send_photo(photo) -> bool:
         try:
             await target.answer_photo(
-                photo=banner_file_id,
+                photo=photo,
                 caption=msg_text,
                 parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
+                reply_markup=menu_kb,
             )
+            return True
         except Exception:
-            await target.answer(
-                msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
-            )
-    elif os.path.exists("app/banner.jpg"):
-        try:
-            await target.answer_photo(
-                photo=FSInputFile("app/banner.jpg"),
-                caption=msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
-            )
-        except Exception:
-            await target.answer(
-                msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
-            )
-    else:
+            return False
+
+    async def _send_text():
         await target.answer(
             msg_text,
             parse_mode="HTML",
-            reply_markup=main_menu(is_admin=admin_flag, lang=lang)
+            reply_markup=menu_kb,
         )
+
+    # Приоритет картинок: постер события -> баннер из админки -> app/banner.jpg.
+    sent = False
+    if event_poster:
+        sent = await _send_photo(FSInputFile(event_poster))
+    if not sent and banner_file_id:
+        sent = await _send_photo(banner_file_id)
+    if not sent and os.path.exists("app/banner.jpg"):
+        sent = await _send_photo(FSInputFile("app/banner.jpg"))
+    if not sent:
+        await _send_text()
 
     # Стартовый лутбокс показываем только новым пользователям (до 24 часов с регистрации)
     # и только один раз.
@@ -1408,16 +1418,22 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
         end_text = event.end_date.strftime("%d.%m")
         
         ad_text = (
-            t('🎉 <b>Акция: {name}</b>\n\n{description}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ До {end_text}\n\nСкорее в магазин, пока действует акция!', name=event.name, description=event.description, discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
+            t('🎉 <b>Акция: {name}</b>\n\n{description}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ До {end_text}\n\nСкорее в магазин, пока действует акция!', name=t(event.name), description=t(event.description) if event.description else "", discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
         )
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t('🛍 В магазин'), callback_data="btn_buy")],
-            [InlineKeyboardButton(text=t('▶ Смотреть дальше'), callback_data="watch_video_content")],
+            [InlineKeyboardButton(text=t('▶️ Смотреть дальше'), callback_data="watch_video_content")],
         ])
         
+        # Постер события: telegram file_id (ручные) или файл на диске
+        # (праздничные авто-события из «постеры/» или banners/).
+        from app.holidays import resolve_event_poster
+        event_poster = resolve_event_poster(event)
         if event.image_file_id:
             await callback.message.answer_photo(event.image_file_id, caption=ad_text, parse_mode="HTML", reply_markup=kb)
+        elif event_poster:
+            await callback.message.answer_photo(FSInputFile(event_poster), caption=ad_text, parse_mode="HTML", reply_markup=kb)
         else:
             await callback.message.answer(ad_text, parse_mode="HTML", reply_markup=kb)
         
@@ -1435,7 +1451,7 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('👉 Подписаться'), url=offer.channel_url)],
-                [InlineKeyboardButton(text=t('▶ Смотреть дальше'), callback_data="watch_video_content")],
+                [InlineKeyboardButton(text=t('▶️ Смотреть дальше'), callback_data="watch_video_content")],
             ])
             await callback.message.answer(ad_text, parse_mode="HTML", reply_markup=kb)
             await reset_ad_counter(session, user.id)
@@ -1618,7 +1634,7 @@ async def admin_remove_from_feed_confirm(callback: CallbackQuery):
         try:
             await callback.bot.send_message(
                 author.telegram_id,
-                t('📢 Ваш контент #{video_id} снят администрацией с общей ленты.\n\nОн больше не будет показываться новым зрителям. Если вы считаете, что это ошибка, обратитесь в раздел «Жалобы и предложения».', video_id=video_id),
+                t('📢 Твой контент #{video_id} снят администрацией с общей ленты.\n\nОн больше не будет показываться новым зрителям. Если считаешь, что это ошибка, напиши нам в разделе «💬 Обратная связь».', video_id=video_id),
             )
         except Exception:
             pass
@@ -3979,7 +3995,7 @@ async def feedback_start(message: Message, state: FSMContext):
         [InlineKeyboardButton(text=t('❤️ Поблагодарить команду'), callback_data="feedback_kind:praise")],
     ])
     await message.answer(
-        t('💬 <b>Жалобы и предложения</b>\n\nНапиши нам бесплатно: о баге, идее или просто поддержке.\nМы читаем все обращения.'),
+        t('💬 <b>Обратная связь</b>\n\nНапиши нам бесплатно: о баге, идее или просто поддержке.\nМы читаем все обращения.'),
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -4586,7 +4602,7 @@ async def btn_faq(message: Message, state: FSMContext):
     await state.clear()
     
     faq_text = (
-        t('ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n<b>1. Как зарабатывать монеты?</b>\nЗагружайте видео и фото, выполняй офферы и приглашайте друзей по реферальной ссылке. А ещё просто заходи каждый день — бот сам начислит бонус за серию дней подряд! Точные награды зависят от текущих настроек бота.\n\n<b>2. Как смотреть контент других авторов?</b>\nНажми кнопку 🎬 Смотреть и выбери интересующий формат.\n\n<b>3. Что дает подписка VIP?</b>\nМножитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. VIP оформляется в разделе 🛍 Магазин.\n\n<b>4. Что такое Секслото?</b>\nЭто ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n<b>5. Где пополнить баланс, оформить VIP или выбрать стиль?</b>\nВсё находится в разделе 🛍 Магазин: монеты, VIP и стили профиля собраны в одном месте.\n\n<b>6. Как работают промокоды?</b>\nТы можешь создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n<b>7. Как работает реферальная система?</b>\nОткрой раздел 👥 Рефералы, скопируй свою ссылку и отправь друзьям. За активного приглашённого ты получаешь <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n<b>8. Как работает еженедельная халява?</b>\nКаждую неделю выпадает новое секретное слово (в течение года слова не повторяются). Введи его в разделе 🎁 <b>Еженедельная Халява</b> (меню 🎟 Промокоды) и получи случайно от 200 до 1500 монет. Секретное слово бот присылает сам — следи за еженедельной рассылкой!\n\n<b>9. Есть ли квесты?</b>\nНет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n<b>10. Где посмотреть топы игроков?</b>\nВ меню 🏆 Топы собраны текущие рейтинги загрузчиков, зрителей, XP и баланса. Рейтинг загрузчиков и зрителей считается за всё время.\n\n<b>11. Что находится внутри лутбоксов?</b>\nСлучайный выигрыш монет разной степени редкости.\n\n<b>12. Как сменить никнейм?</b>\nВ твоем Профиле. Первая установка ника бесплатна, последующие изменения — за монеты.\n\n<b>13. Что такое Уровень и XP?</b>\nЗа активность ты получаешь XP. Повышение уровня открывает приятную косметику и прогресс профиля.\n\n<b>14. Безопасны ли мои данные?</b>\nБот не просит лишние персональные данные: используется в основном Telegram ID и сервисная информация профиля.\n\n<b>15. Что такое Космическая аркада?</b>\nЭто мини-игра (Mini App) в разделе 🎮 Игры: делаете ставку, отбиваете волны инопланетного флота, и каждая волна увеличивает множитель ставки. Забрать выигрыш можно в любой момент, но рано или поздно флот прорвётся — и ставка сгорит. Есть дневной кап чистой прибыли.\n\n<b>16. Как связаться с техподдержкой?</b>\nНажми кнопку 💬 Жалобы и предложения и отправь сообщение команде.', REFERRAL_REWARD_INVITER=REFERRAL_REWARD_INVITER)
+        t('ℹ️ <b>Часто задаваемые вопросы (FAQ) и Помощь</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n<b>1. Как зарабатывать монеты?</b>\nЗагружайте видео и фото, выполняй офферы и приглашайте друзей по реферальной ссылке. А ещё просто заходи каждый день — бот сам начислит бонус за серию дней подряд! Точные награды зависят от текущих настроек бота.\n\n<b>2. Как смотреть контент других авторов?</b>\nНажми кнопку 🎬 Смотреть и выбери интересующий формат.\n\n<b>3. Что дает подписка VIP?</b>\nМножитель начисления монет ×2, скидка на просмотр видео, фото без дневного лимита и дополнительные бонусы в экономике. VIP оформляется в разделе 🛍 Магазин.\n\n<b>4. Что такое Секслото?</b>\nЭто ежедневный розыгрыш: каждый день в 20:00 по МСК бот вытягивает 6 бочонков из 36, а на каждый бочонок уходит около 15 секунд. 1 совпадение — без выигрыша, 2 совпадения дают 10 монет, 3 совпадения — 20 монет, а 4/5/6 совпадений делят основной призовой фонд.\n\n<b>5. Где пополнить баланс, оформить VIP или выбрать стиль?</b>\nВсё находится в разделе 🛍 Магазин: монеты, VIP и стили профиля собраны в одном месте.\n\n<b>6. Как работают промокоды?</b>\nТы можешь создавать промокоды за Stars, активировать чужие и забирать еженедельную халяву.\n\n<b>7. Как работает реферальная система?</b>\nОткрой раздел 👥 Рефералы, скопируй свою ссылку и отправь друзьям. За активного приглашённого ты получаешь <b>+{REFERRAL_REWARD_INVITER}</b> монет.\n\n<b>8. Как работает еженедельная халява?</b>\nКаждую неделю выпадает новое секретное слово (в течение года слова не повторяются). Введи его в разделе 🎁 <b>Еженедельная Халява</b> (меню 🎟 Промокоды) и получи случайно от 200 до 1500 монет. Секретное слово бот присылает сам — следи за еженедельной рассылкой!\n\n<b>9. Есть ли квесты?</b>\nНет. Ежедневные квесты убраны из актуального UX, чтобы не захламлять меню.\n\n<b>10. Где посмотреть топы игроков?</b>\nВ меню 🏆 Топы собраны текущие рейтинги загрузчиков, зрителей, XP и баланса. Рейтинг загрузчиков и зрителей считается за всё время.\n\n<b>11. Что находится внутри лутбоксов?</b>\nСлучайный выигрыш монет разной степени редкости.\n\n<b>12. Как сменить никнейм?</b>\nВ твоем Профиле. Первая установка ника бесплатна, последующие изменения — за монеты.\n\n<b>13. Что такое Уровень и XP?</b>\nЗа активность ты получаешь XP. Повышение уровня открывает приятную косметику и прогресс профиля.\n\n<b>14. Безопасны ли мои данные?</b>\nБот не просит лишние персональные данные: используется в основном Telegram ID и сервисная информация профиля.\n\n<b>15. Что такое Космическая аркада?</b>\nЭто мини-игра (Mini App) в разделе 🎮 Игры: делаете ставку, отбиваете волны инопланетного флота, и каждая волна увеличивает множитель ставки. Забрать выигрыш можно в любой момент, но рано или поздно флот прорвётся — и ставка сгорит. Есть дневной кап чистой прибыли.\n\n<b>16. Как связаться с техподдержкой?</b>\nНажми кнопку 💬 Обратная связь и отправь сообщение команде.', REFERRAL_REWARD_INVITER=REFERRAL_REWARD_INVITER)
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[

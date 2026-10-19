@@ -25,12 +25,12 @@ BTN_TOPS       = "🏆 Топы"
 BTN_VIP        = "👑 VIP"
 BTN_LEVEL      = "📊 Уровень"
 BTN_PROMO      = "🎟 Промокоды"
-BTN_FEEDBACK   = "💬 Жалобы и предложения"
+BTN_FEEDBACK   = "💬 Обратная связь"
 BTN_LOTTERY    = "🎰 Секслото"
 BTN_LOOTBOXES  = "🎁 Лутбоксы"
 BTN_ARCADE     = "🚀 Космическая аркада"
 BTN_RULES      = "📜 Правила"
-BTN_FAQ        = "ℹ️ FAQ / Помощь"
+BTN_FAQ        = "ℹ️ Помощь"
 BTN_LANG       = "🌐 Язык"
 
 
@@ -41,17 +41,24 @@ def main_menu(is_admin: bool = False, lang: str | None = None) -> ReplyKeyboardM
     """Главное меню на языке интерфейса пользователя.
 
     `lang` — код языка (см. app/i18n.py); None/неизвестный код = русский.
-    Последний ряд — кнопка выбора языка «🌐 Язык / 🌐 Language».
+    Кнопки сгруппированы по смыслу парами в ряд — так меню занимает меньше
+    места на экране и нужные разделы легче найти глазами:
+    контент -> подборки/топы -> профиль/магазин -> игры/промокоды ->
+    заработок (офферы/рефералы) -> помощь (правила/FAQ/обратная связь/язык).
     """
     kb = [
+        # Контент — главные действия всегда в первом ряду.
         [KeyboardButton(text=t(lang, "menu.watch")), KeyboardButton(text=t(lang, "menu.upload"))],
-        [KeyboardButton(text=t(lang, "menu.playlists"))],
+        [KeyboardButton(text=t(lang, "menu.playlists")), KeyboardButton(text=t(lang, "menu.tops"))],
+        # Я и покупки.
         [KeyboardButton(text=t(lang, "menu.profile")), KeyboardButton(text=t(lang, "menu.buy"))],
+        # Развлечения и промокоды.
+        [KeyboardButton(text=t(lang, "menu.games")), KeyboardButton(text=t(lang, "menu.promo"))],
+        # Заработок.
         [KeyboardButton(text=t(lang, "menu.offers")), KeyboardButton(text=t(lang, "menu.referrals"))],
-        [KeyboardButton(text=t(lang, "menu.games")), KeyboardButton(text=t(lang, "menu.tops"))],
-        [KeyboardButton(text=t(lang, "menu.promo")), KeyboardButton(text=t(lang, "menu.feedback"))],
+        # Помощь и настройки.
         [KeyboardButton(text=t(lang, "menu.rules")), KeyboardButton(text=t(lang, "menu.faq"))],
-        [KeyboardButton(text=t(lang, "menu.lang"))],
+        [KeyboardButton(text=t(lang, "menu.feedback")), KeyboardButton(text=t(lang, "menu.lang"))],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=t(lang, "menu.admin"))])
@@ -89,44 +96,63 @@ def language_keyboard(current_lang: str | None = None) -> InlineKeyboardMarkup:
 # АДМИН-КЛАВИАТУРЫ (Inline)
 # =========================
 def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
+    """Главная клавиатура админ-панели.
+
+    Кнопки сгруппированы по разделам и идут парами в ряд — порядок совпадает
+    с легендой в сообщении панели (см. `admin_panel_text()` в admin_handlers):
+    🛡 контент и модерация -> 👥 аудитория и коммуникации ->
+    💰 монетизация -> 📈 система. Callback-коды не менялись.
+    """
     buttons = [
-        [InlineKeyboardButton(text=t('📊 Очередь модерации'), callback_data="admin_queue_info")],
-        [InlineKeyboardButton(text=t('✅ Одобрить всё'), callback_data="admin_approve_all")],
-        [InlineKeyboardButton(text=t('📈 Статистика бота'), callback_data="admin_extended_stats")],
-        [InlineKeyboardButton(text=t('💳 Управление DonationAlerts'), callback_data="admin_da_menu")],
-        [InlineKeyboardButton(text=t('👥 Пользователи'), callback_data="admin_manage_users")],
-        [InlineKeyboardButton(text=t('⚡ Авто-модерация (доверенные)'), callback_data="admin_auto_moderation")],
-        [InlineKeyboardButton(text=t('🤝 Доверенные авторы'), callback_data="admin_trusted_uploaders")],
-        [InlineKeyboardButton(text=t('📢 Офферы и реклама'), callback_data="admin_offers_menu")],
-        [InlineKeyboardButton(text=t('📨 Сообщение всем от админа'), callback_data="admin_direct_message_all")],
-        [InlineKeyboardButton(text=t('📣 Промо-рассылки'), callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text=t('📊 Опросы с наградой'), callback_data="admin_polls")],
-        [InlineKeyboardButton(text=t('🎉 События'), callback_data="admin_events_menu")],
-        [InlineKeyboardButton(text=t('🛍 Акции и скидки'), callback_data="admin_sales")],
-        [InlineKeyboardButton(text=t('🚨 Жалобы'), callback_data="admin_reports")],
-        [InlineKeyboardButton(text=t('💬 Обращения пользователей'), callback_data="admin_feedback_menu")],
-        [InlineKeyboardButton(text=t('🔧 Настройки бота'), callback_data="admin_bot_settings")],
+        # 🛡 Контент и модерация
+        [
+            InlineKeyboardButton(text=t('📊 Очередь модерации'), callback_data="admin_queue_info"),
+            InlineKeyboardButton(text=t('🚨 Жалобы'), callback_data="admin_reports"),
+        ],
+        [
+            InlineKeyboardButton(text=t('✅ Одобрить всё'), callback_data="admin_approve_all"),
+            InlineKeyboardButton(text=t('⚡ Авто-модерация'), callback_data="admin_auto_moderation"),
+        ],
+        [
+            InlineKeyboardButton(text=t('🤝 Доверенные авторы'), callback_data="admin_trusted_uploaders"),
+            InlineKeyboardButton(text=t('👥 Пользователи'), callback_data="admin_manage_users"),
+        ],
+        # 👥 Аудитория и коммуникации
+        [
+            InlineKeyboardButton(text=t('📨 Рассылка всем'), callback_data="admin_direct_message_all"),
+            InlineKeyboardButton(text=t('📣 Промо-рассылки'), callback_data="admin_broadcast"),
+        ],
+        [
+            InlineKeyboardButton(text=t('🎯 Опросы'), callback_data="admin_polls"),
+            InlineKeyboardButton(text=t('💬 Обращения'), callback_data="admin_feedback_menu"),
+        ],
+        # 💰 Монетизация
+        [
+            InlineKeyboardButton(text=t('💳 Платежи'), callback_data="admin_da_menu"),
+            InlineKeyboardButton(text=t('🛍 Акции и скидки'), callback_data="admin_sales"),
+        ],
+        [
+            InlineKeyboardButton(text=t('📢 Офферы и реклама'), callback_data="admin_offers_menu"),
+            InlineKeyboardButton(text=t('🎉 События'), callback_data="admin_events_menu"),
+        ],
+        # 📈 Система
+        [
+            InlineKeyboardButton(text=t('📈 Статистика'), callback_data="admin_extended_stats"),
+            InlineKeyboardButton(text=t('🔧 Настройки бота'), callback_data="admin_bot_settings"),
+        ],
     ]
     if is_super:
         buttons.append([
-            InlineKeyboardButton(
-                text=t('🗄 База данных'),
-                callback_data="admin_db_menu"
-            )
-        ])
-        buttons.append([
-            InlineKeyboardButton(
-                text=t('👑 Управление админами'),
-                callback_data="admin_manage_admins"
-            )
+            InlineKeyboardButton(text=t('🗄 База данных'), callback_data="admin_db_menu"),
+            InlineKeyboardButton(text=t('👑 Админы'), callback_data="admin_manage_admins"),
         ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def admin_after_action_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t('📝 Следующее'), callback_data="admin_get_pending")],
-        [InlineKeyboardButton(text=t('🔙 Админ-центр'), callback_data="admin_center")],
+        [InlineKeyboardButton(text=t('⏭ Следующее'), callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text=t('◀️ Админ-панель'), callback_data="admin_center")],
     ])
 
 
@@ -139,7 +165,7 @@ def moderation_keyboard(video_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=t('✅ Одобрить'), callback_data=f"mod_approve:{video_id}"),
             InlineKeyboardButton(text=t('❌ Отклонить'), callback_data=f"mod_reject:{video_id}"),
         ],
-        [InlineKeyboardButton(text=t('📝 Следующее'), callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text=t('⏭ Следующее'), callback_data="admin_get_pending")],
     ])
 
 
@@ -185,12 +211,12 @@ def video_rating_keyboard(video_id: int, *, is_admin: bool = False) -> InlineKey
             InlineKeyboardButton(text=t('😀 Реакции'), callback_data=f"reactions:{video_id}"),
             InlineKeyboardButton(text=t('🚨 Жалоба'), callback_data=f"report_video:{video_id}"),
         ],
-        [InlineKeyboardButton(text=t('🚫 Заблокировать автора'), callback_data=f"block_author:{video_id}")],
+        [InlineKeyboardButton(text=t('🚫 Скрыть автора'), callback_data=f"block_author:{video_id}")],
         [InlineKeyboardButton(text=t('➕ В плейлист'), callback_data=f"playlist_add:{video_id}")],
     ]
     if is_admin:
         rows.append([InlineKeyboardButton(text=t('🗑 Удалить из ленты'), callback_data=f"admin_remove_from_feed:{video_id}")])
-    rows.append([InlineKeyboardButton(text=t('📝 Следующее'), callback_data="watch_next")])
+    rows.append([InlineKeyboardButton(text=t('▶️ Следующее видео'), callback_data="watch_next")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -199,12 +225,12 @@ def photo_actions_keyboard(photo_id: int, *, is_admin: bool = False) -> InlineKe
         [InlineKeyboardButton(text=t('😀 Реакции'), callback_data=f"reactions:{photo_id}")],
         [
             InlineKeyboardButton(text=t('🚨 Жалоба'), callback_data=f"report_video:{photo_id}"),
-            InlineKeyboardButton(text=t('🚫 Блок автора'), callback_data=f"block_author:{photo_id}"),
+            InlineKeyboardButton(text=t('🚫 Скрыть автора'), callback_data=f"block_author:{photo_id}"),
         ],
     ]
     if is_admin:
         rows.append([InlineKeyboardButton(text=t('🗑 Удалить из ленты'), callback_data=f"admin_remove_from_feed:{photo_id}")])
-    rows.append([InlineKeyboardButton(text=t('📝 Следующее фото'), callback_data="watch_next_photo")])
+    rows.append([InlineKeyboardButton(text=t('▶️ Следующее фото'), callback_data="watch_next_photo")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -352,7 +378,7 @@ def admin_db_keyboard(tables) -> InlineKeyboardMarkup:
         else:
             table_name, label = table, str(table)
         kb.append([InlineKeyboardButton(text=f"📋 {label}", callback_data=f"db_open:{table_name}:0")])
-    kb.append([InlineKeyboardButton(text=t('🔙 Админ-центр'), callback_data="admin_center")])
+    kb.append([InlineKeyboardButton(text=t('◀️ Админ-панель'), callback_data="admin_center")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 

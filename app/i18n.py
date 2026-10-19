@@ -61,19 +61,19 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu.games": "🎮 Игры",
         "menu.tops": "🏆 Топы",
         "menu.promo": "🎟 Промокоды",
-        "menu.feedback": "💬 Жалобы и предложения",
+        "menu.feedback": "💬 Обратная связь",
         "menu.rules": "📜 Правила",
-        "menu.faq": "ℹ️ FAQ / Помощь",
+        "menu.faq": "ℹ️ Помощь",
         "menu.admin": "🔧 Админка",
         "menu.lang": "🌐 Язык",
         # Выбор языка
         "lang.title": "🌐 <b>Выбери язык бота</b>",
         "lang.changed_alert": "✅ Язык: 🇷🇺 русский",
         # Главное меню
-        "main_menu.title": "🏠 <b>Главное меню</b>\n\nВыбери нужный раздел:",
+        "main_menu.title": "🏠 <b>Главное меню</b>\n\nВыбери, чем заняться 👇",
         "main_menu.button": "🏠 Главное меню",
         # Приветствие / старт
-        "welcome.greeting": "👋 Привет, <b>{name}</b>{vip}!\n💰 Баланс: <b>{balance}</b> монет",
+        "welcome.greeting": "👋 Привет, <b>{name}</b>{vip}!\n💰 Твой баланс: <b>{balance}</b> монет",
         "welcome.no_nickname_hint": (
             "🎬 Без ника можно посмотреть всего 3 фото или видео. "
             "Затем установи ник бесплатно в профиле; для загрузок он тоже понадобится."
@@ -122,17 +122,17 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu.promo": "🎟 Promo codes",
         "menu.feedback": "💬 Feedback",
         "menu.rules": "📜 Rules",
-        "menu.faq": "ℹ️ FAQ / Help",
+        "menu.faq": "ℹ️ Help",
         "menu.admin": "🔧 Admin",
         "menu.lang": "🌐 Language",
         # Language picker
         "lang.title": "🌐 <b>Choose the bot language</b>",
         "lang.changed_alert": "✅ Language: 🇬🇧 English",
         # Main menu
-        "main_menu.title": "🏠 <b>Main menu</b>\n\nPick a section:",
+        "main_menu.title": "🏠 <b>Main menu</b>\n\nPick what to do 👇",
         "main_menu.button": "🏠 Main menu",
         # Welcome / start
-        "welcome.greeting": "👋 Hi, <b>{name}</b>{vip}!\n💰 Balance: <b>{balance}</b> coins",
+        "welcome.greeting": "👋 Hi, <b>{name}</b>{vip}!\n💰 Your balance: <b>{balance}</b> coins",
         "welcome.no_nickname_hint": (
             "🎬 Without a nickname you can watch just 3 photos or videos. "
             "Then set a nickname for free in your profile — you'll need it for uploads too."

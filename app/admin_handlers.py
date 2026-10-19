@@ -54,6 +54,23 @@ logger = get_logger(__name__)
 
 router = Router()
 
+
+def admin_panel_text() -> str:
+    """Текст главной админ-панели с легендой разделов.
+
+    Легенда дублирует группировку кнопок в `admin_main_keyboard`
+    (модерация -> аудитория -> монетизация -> система), чтобы длинный
+    список инлайн-кнопок читался как понятная структура, а не как свалка.
+    """
+    return t(
+        '⚙️ <b>Панель администратора</b>\n\n'
+        '🛡 <b>Контент</b> — очередь модерации, жалобы, доверенные авторы\n'
+        '👥 <b>Аудитория</b> — пользователи, рассылки, опросы, обращения\n'
+        '💰 <b>Деньги</b> — платежи, акции, офферы, события\n'
+        '📈 <b>Система</b> — статистика, настройки, база данных\n\n'
+        'Выбери раздел 👇'
+    )
+
 @router.message(Command("cancel"))
 async def cmd_cancel_admin(message: Message, state: FSMContext):
     await state.clear()
@@ -139,6 +156,7 @@ class EventCreationState(StatesGroup):
     waiting_description = State()
     waiting_discount = State()
     waiting_duration = State()
+    waiting_start = State()      # «сейчас» или дата старта (ДД.ММ[.ГГГГ])
     waiting_applies = State()
     waiting_image = State()      # опциональная картинка
     confirm = State()
@@ -175,7 +193,7 @@ async def cmd_admin(message: Message, state: FSMContext | None = None):
         return
     sa = is_super_admin(message.from_user.id)
     await message.answer(
-        t('⚙️ <b>Панель администратора</b>\n\nВыбери нужный раздел:'),
+        admin_panel_text(),
         parse_mode="HTML",
         reply_markup=admin_main_keyboard(is_super=sa)
     )
@@ -191,7 +209,7 @@ async def admin_center(callback: CallbackQuery, state: FSMContext | None = None)
     sa = is_super_admin(callback.from_user.id)
     await _safe_edit(
         callback,
-        t('⚙️ <b>Панель администратора</b>\n\nВыбери нужный раздел:'),
+        admin_panel_text(),
         parse_mode="HTML",
         reply_markup=admin_main_keyboard(is_super=sa)
     )
@@ -216,7 +234,7 @@ async def admin_feedback_menu(callback: CallbackQuery):
         await callback.message.answer(
             t('💬 Обращений пока нет.'),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")]
+                [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")]
             ]),
         )
         await callback.answer()
@@ -230,7 +248,7 @@ async def admin_feedback_menu(callback: CallbackQuery):
 
     await callback.message.answer(text_out, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t('🔄 Обновить'), callback_data="admin_feedback_menu")],
-        [InlineKeyboardButton(text=t('◀ К панели'), callback_data="admin_center")],
+        [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")],
     ]))
     await callback.answer()
 
@@ -294,12 +312,12 @@ async def cb_queue(callback: CallbackQuery):
     async with async_session() as session:
         p, a, r = await count_pending_videos(session), await count_approved_videos(session), await count_rejected_videos(session)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t('▶ Модерировать'), callback_data="admin_get_pending")],
+        [InlineKeyboardButton(text=t('▶️ Начать модерацию'), callback_data="admin_get_pending")],
         [InlineKeyboardButton(text=t('🗄 Отклонённые ({r})', r=r), callback_data="admin_rejected:0")],
         [InlineKeyboardButton(text=t('🔎 Найти публикацию по #ID'), callback_data="admin_video_search")],
-        [InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")],
+        [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")],
     ])
-    await _safe_edit(callback, t('📊 <b>Очередь</b>\n\n⏳ Ожидает: {p}\n✅ Одобрено: {a}\n❌ Отклонено: {r}', p=p, a=a, r=r), parse_mode="HTML", reply_markup=kb)
+    await _safe_edit(callback, t('🛡 <b>Модерация</b>\n\n⏳ Ждут проверки: <b>{p}</b>\n✅ Одобрено: <b>{a}</b>\n❌ Отклонено: <b>{r}</b>', p=p, a=a, r=r), parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
@@ -324,7 +342,7 @@ def _video_admin_keyboard(video: Video, *, back_callback: str = "admin_queue_inf
         rows.append([InlineKeyboardButton(text=t('❌ Снять с публикации'), callback_data=f"mod_reject:{video.id}")])
     elif video.status == "rejected":
         rows.append([InlineKeyboardButton(text=t('↩️ Вернуть на модерацию'), callback_data=f"admin_video_restore:{video.id}")])
-    rows.append([InlineKeyboardButton(text=t('◀ Назад'), callback_data=back_callback)])
+    rows.append([InlineKeyboardButton(text=t('◀️ Назад'), callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -356,7 +374,7 @@ async def admin_rejected_archive(callback: CallbackQuery):
         total = await count_rejected_videos(session)
         if not total:
             await _safe_edit(callback, t('🗄 Хранилище отклонённых публикаций пусто.'), reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_queue_info")]
+                [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_queue_info")]
             ]))
             await callback.answer()
             return
@@ -376,7 +394,7 @@ async def admin_rejected_archive(callback: CallbackQuery):
         rows.append([InlineKeyboardButton(text=t('↩️ Вернуть на модерацию'), callback_data=f"admin_video_restore:{video.id}")])
     rows.extend([
         [InlineKeyboardButton(text=t('🔎 Найти по #ID'), callback_data="admin_video_search")],
-        [InlineKeyboardButton(text=t('◀ К очереди'), callback_data="admin_queue_info")],
+        [InlineKeyboardButton(text=t('◀️ К очереди'), callback_data="admin_queue_info")],
     ])
     try:
         await callback.message.delete()
@@ -447,7 +465,7 @@ async def admin_video_restore(callback: CallbackQuery):
         callback,
         t('↩️ Публикация #{video_id} возвращена в очередь модерации.', video_id=video_id),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t('▶ Модерировать'), callback_data="admin_get_pending")],
+            [InlineKeyboardButton(text=t('▶️ Начать модерацию'), callback_data="admin_get_pending")],
             [InlineKeyboardButton(text=t('🗄 К отклонённым'), callback_data="admin_rejected:0")],
         ]),
     )
@@ -462,7 +480,7 @@ async def admin_get_pending(callback: CallbackQuery, state: FSMContext | None = 
     async with async_session() as session:
         video = await get_next_pending_video(session)
         if not video:
-            await _safe_edit(callback, t('✅ Очередь пуста!'), reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")]]))
+            await _safe_edit(callback, t('🎉 Очередь пуста — всё проверено!'), reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")]]))
             await callback.answer()
             return
         uploader = await get_user_by_id(session, video.uploader_user_id)
@@ -565,7 +583,7 @@ async def reject_reason_comment(message: Message, state: FSMContext):
 
     # Если пользователь нажал кнопку меню или команду вместо ввода комментария
     NAV_BUTTONS = {
-        t('🔧 Админка'), t('◀️ Админ-центр'), t('◀ Назад'), t('🎬 Смотреть'), t('👤 Профиль'),
+        t('🔧 Админка'), t('◀️ Админ-панель'), t('◀️ Назад'), t('🎬 Смотреть'), t('👤 Профиль'),
         t('📤 Загрузить'), "👑 VIP", t('📊 Уровень'), t('🏆 Топы'), t('💬 Поддержка'),
         t('🎰 Секслото'), t('🎟 Промокоды'), t('🎁 Лутбоксы')
     }
@@ -625,12 +643,41 @@ def event_applies_keyboard(selected: dict) -> InlineKeyboardMarkup:
 async def admin_events_menu(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
     try:
+        from app.services import holiday_events_enabled
+        now = utc_now()
         async with async_session() as session:
-            active = (await session.execute(select(Event).where(Event.is_active.is_(True), Event.end_date > utc_now()).order_by(Event.start_date.desc()))).scalars().all()
-        text = t('🎉 <b>События</b>\n\n') + ("\n".join([f"• {escape(ev.name)} ({ev.discount_percent}%)" for ev in active[:5]]) if active else t('Нет активных событий.'))
+            active = (await session.execute(select(Event).where(
+                Event.is_active.is_(True), Event.start_date <= now, Event.end_date > now,
+            ).order_by(Event.discount_percent.desc()))).scalars().all()
+            upcoming = (await session.execute(select(Event).where(
+                Event.is_active.is_(True), Event.start_date > now,
+            ).order_by(Event.start_date.asc()).limit(4))).scalars().all()
+            auto_on = await holiday_events_enabled(session)
+
+        text = t('🎉 <b>События</b>\n\n')
+        if active:
+            text += "\n".join([
+                t('🟢 {name} — скидка {discount}% до {end}',
+                  name=escape(ev.name), discount=ev.discount_percent,
+                  end=ev.end_date.strftime('%d.%m'))
+                for ev in active[:5]
+            ])
+        else:
+            text += t('Сейчас нет активных событий.')
+        if upcoming:
+            text += "\n\n" + t('⏳ <b>Запланированы:</b>') + "\n" + "\n".join([
+                t('• {name} — старт {start} (скидка {discount}%)',
+                  name=escape(ev.name), start=ev.start_date.strftime('%d.%m'), discount=ev.discount_percent)
+                for ev in upcoming
+            ])
+        text += "\n\n" + t('🤖 Праздничные авто-события: {status}', status=t('включены') if auto_on else t('выключены'))
+        text += "\n" + t('Бот сам создаёт события по календарю праздников: на неделю окна автоматически применяются скидки, праздничный постер, реклама в ротации и блок в приветствии.')
+
+        auto_label = t('🤖 Авто-события: выключить') if auto_on else t('🤖 Авто-события: включить')
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t('➕ Создать'), callback_data="event_create_start")],
-            [InlineKeyboardButton(text=t('📋 Все'), callback_data="event_list_all")],
+            [InlineKeyboardButton(text=t('➕ Создать'), callback_data="event_create_start"),
+             InlineKeyboardButton(text=t('📋 Все'), callback_data="event_list_all")],
+            [InlineKeyboardButton(text=auto_label, callback_data="event_auto_toggle")],
             [InlineKeyboardButton(text=t('🛍 Акции (Sale)'), callback_data="admin_sales")],
             [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")]
         ])
@@ -639,6 +686,22 @@ async def admin_events_menu(callback: CallbackQuery):
         await callback.answer(t('Ошибка: {e}', e=e), show_alert=True)
     finally:
         await callback.answer()
+
+
+@router.callback_query(F.data == "event_auto_toggle")
+async def event_auto_toggle(callback: CallbackQuery):
+    """Вкл/выкл праздничные авто-события (каталог app/holidays.py)."""
+    if not await check_admin(callback.from_user.id): return
+    from app.services import ensure_holiday_events, holiday_events_enabled, set_holiday_events_enabled
+    async with async_session() as session:
+        enable = not await holiday_events_enabled(session)
+        await set_holiday_events_enabled(session, enable)
+        created = await ensure_holiday_events(session) if enable else 0
+    if enable:
+        await callback.answer(t('✅ Авто-события включены. Создано новых: {created}.', created=created), show_alert=True)
+    else:
+        await callback.answer(t('🛑 Авто-события выключены: будущие праздничные события деактивированы.'), show_alert=True)
+    await admin_events_menu(callback)
 
 
 @router.callback_query(F.data == "event_create_start")
@@ -678,9 +741,27 @@ async def event_discount(message: Message, state: FSMContext):
 async def event_duration(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     if not message.text.isdigit(): return
-    await state.update_data(duration_days=int(message.text), applies={"vip": False, "coins": False, "lootbox": False})
+    await state.update_data(duration_days=int(message.text))
+    await state.set_state(EventCreationState.waiting_start)
+    await message.answer(t('Шаг 5: Когда начать? Отправь «сейчас» или дату старта (например 25.12 или 25.12.2026). До этой даты событие не действует — скидки, постеры и реклама включатся автоматически в день старта.'))
+
+
+@router.message(EventCreationState.waiting_start)
+async def event_start_date(message: Message, state: FSMContext):
+    """Дата старта события: «сейчас» или ДД.ММ[.ГГГГ] (ближайшая будущая)."""
+    if not await check_admin(message.from_user.id): return
+    from app.holidays import parse_start_date
+    now = utc_now()
+    try:
+        start = parse_start_date(message.text or "", now)
+    except ValueError:
+        await message.answer(t('❌ Не понял дату. Отправь «сейчас» или дату вида 25.12 / 25.12.2026.'))
+        return
+    if start is not None and start < now:
+        start = None  # дата уже прошла — старт немедленно
+    await state.update_data(start_date=start, applies={"vip": False, "coins": False, "lootbox": False})
     await state.set_state(EventCreationState.waiting_applies)
-    await message.answer(t('Шаг 5: На что?'), reply_markup=event_applies_keyboard({"vip": False, "coins": False, "lootbox": False}))
+    await message.answer(t('Шаг 6: На что действует скидка?'), reply_markup=event_applies_keyboard({"vip": False, "coins": False, "lootbox": False}))
 
 
 @router.callback_query(EventCreationState.waiting_applies, F.data.startswith("event_toggle:"))
@@ -697,7 +778,7 @@ async def event_toggle_applies(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(EventCreationState.waiting_applies, F.data == "event_applies_done")
 async def event_applies_done(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EventCreationState.waiting_image)
-    await callback.message.answer(t("Шаг 6: Фото или 'пропустить':"))
+    await callback.message.answer(t("Шаг 7: Пришли фото (постер события) или напиши 'пропустить':"))
     await callback.answer()
 
 
@@ -708,8 +789,10 @@ async def event_image(message: Message, state: FSMContext):
     await state.update_data(image_file_id=file_id)
     data = await state.get_data()
     await state.set_state(EventCreationState.confirm)
+    start = data.get("start_date")
+    when = t('сейчас') if not start else start.strftime('%d.%m.%Y %H:%M') + " UTC"
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t('✅ Создать'), callback_data="event_confirm_yes"), InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_events_menu")]])
-    await message.answer(t('Создать событие {arg0}?', arg0=escape(data['name'])), reply_markup=kb)
+    await message.answer(t('Создать событие {arg0}?\nСтарт: {when}\nДлительность: {days} дн.', arg0=escape(data['name']), when=when, days=data.get("duration_days", 0)), parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(EventCreationState.confirm, F.data == "event_confirm_yes")
@@ -717,15 +800,30 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     data = await state.get_data()
     applies = data.get("applies", {})
-    start = utc_now()
+    # Старт: явная дата из мастера («Шаг 5») или немедленно. Прошедшую дату
+    # подтягиваем к сейчас, чтобы событие не рождалось «мёртвым».
+    start = data.get("start_date") or utc_now()
+    if start < utc_now():
+        start = utc_now()
     end = start + timedelta(days=data["duration_days"])
+    scheduled = data.get("start_date") is not None and start > utc_now()
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
         ev = Event(name=data["name"], description=data["description"], discount_percent=data["discount_percent"], duration_days=data["duration_days"], applies_vip=applies.get("vip", False), applies_coins=applies.get("coins", False), applies_lootbox=applies.get("lootbox", False), image_file_id=data.get("image_file_id"), start_date=start, end_date=end, is_active=True, created_by=admin.id if admin else None)
         session.add(ev)
         await session.commit()
     await state.clear()
-    
+
+    if scheduled:
+        # Запланированное событие: рассылка уйдёт автоматически в день старта
+        # (см. announce_started_events в services), сейчас спамить не нужно.
+        from app.services import set_setting
+        async with async_session() as session:
+            await set_setting(session, f"event_announce_pending:{ev.id}", "1")
+        await callback.message.answer(t('✅ Событие создано и запланировано!\n⏳ Старт: {when}. Скидки, постер, реклама и приветствие применятся автоматически; рассылка уйдёт в день старта.', when=start.strftime('%d.%m.%Y %H:%M')))
+        await callback.answer()
+        return
+
     # Рассылаем уведомление всем пользователям
     from app.services import broadcast_event_to_users
     try:
@@ -740,6 +838,7 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "event_list_all")
 async def event_list_all(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
+    now = utc_now()
     async with async_session() as session:
         events = (await session.execute(select(Event).order_by(Event.created_at.desc()).limit(20))).scalars().all()
     if not events:
@@ -747,12 +846,23 @@ async def event_list_all(callback: CallbackQuery):
         await callback.answer()
         return
     for ev in events:
-        status = t('🟢 Активно') if ev.is_active and ev.end_date > utc_now() else t('🔴 Завершено')
+        if not ev.is_active:
+            status = t('🔴 Отключено')
+        elif ev.start_date > now:
+            status = t('⏳ Запланировано')
+        elif ev.end_date > now:
+            status = t('🟢 Активно')
+        else:
+            status = t('🔴 Завершено')
+        auto_badge = t(' | 🤖 авто') if ev.slug else ''
         text = (
-            t('🎉 <b>{arg0}</b>\nСкидка: {discount_percent}% | {status}\nДо: {arg3}', arg0=escape(ev.name), discount_percent=ev.discount_percent, status=status, arg3=ev.end_date.strftime('%d.%m.%Y %H:%M'))
+            t('🎉 <b>{arg0}</b>\nСкидка: {discount_percent}% | {status}{auto_badge}\nСтарт: {start_txt}\nДо: {arg3}',
+              arg0=escape(ev.name), discount_percent=ev.discount_percent, status=status,
+              auto_badge=auto_badge, start_txt=ev.start_date.strftime('%d.%m.%Y %H:%M'),
+              arg3=ev.end_date.strftime('%d.%m.%Y %H:%M'))
         )
         kb_rows = []
-        if ev.is_active and ev.end_date > utc_now():
+        if ev.is_active and ev.end_date > now:
             kb_rows.append([InlineKeyboardButton(text=t('🛑 Остановить'), callback_data=f"event_stop:{ev.id}")])
         kb_rows.append([InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_events_menu")])
         await callback.message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -768,7 +878,7 @@ async def admin_sales_start(callback: CallbackQuery, state: FSMContext):
     async with async_session() as session:
         sale = await get_active_sale(session)
     text = t('🛍 <b>Глобальные акции</b>\n\n') + (t('🟢 Активна: {discount_percent}%', discount_percent=sale.discount_percent) if sale else t('🔴 Нет активных акций.'))
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t('🛑 Остановить'), callback_data="admin_sale_stop")] if sale else [InlineKeyboardButton(text=t('➕ Создать'), callback_data="admin_sale_create")], [InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t('🛑 Остановить'), callback_data="admin_sale_stop")] if sale else [InlineKeyboardButton(text=t('➕ Создать'), callback_data="admin_sale_create")], [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")]])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
@@ -851,7 +961,7 @@ async def admin_direct_message_all(callback: CallbackQuery, state: FSMContext):
     await state.update_data(broadcast_mode="admin_direct")
     await _safe_edit(
         callback,
-        t('📨 <b>Сообщение всем от админа</b>\n\nНапиши текст, который бот отправит всем активным пользователям.\n\nПользователь увидит это в формате:\n<code>📢 Тебе сообщение от админа: ...</code>'),
+        t('📨 <b>Рассылка всем</b>\n\nНапиши текст, который бот отправит всем активным пользователям.\n\nПользователь увидит это в формате:\n<code>📢 Тебе сообщение от админа: ...</code>'),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_center")]
@@ -1404,7 +1514,7 @@ async def admin_manage_users(callback: CallbackQuery, state: FSMContext):
         kb_rows.append(nav_row)
         
     kb_rows.append([InlineKeyboardButton(text=t('🔎 Поиск по нику/ID'), callback_data="admin_user_search")])
-    kb_rows.append([InlineKeyboardButton(text=t('◀ Назад в админку'), callback_data="admin_center")])
+    kb_rows.append([InlineKeyboardButton(text=t('◀️ Админ-панель'), callback_data="admin_center")])
     
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
     await callback.answer()
@@ -1438,7 +1548,7 @@ async def admin_user_search_process(message: Message, state: FSMContext):
         found = await search_users_admin(session, query_text)
 
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t('◀ Назад к списку'), callback_data="admin_manage_users:0")]
+        [InlineKeyboardButton(text=t('◀️ Назад к списку'), callback_data="admin_manage_users:0")]
     ])
     if not found:
         await message.answer(
@@ -1456,7 +1566,7 @@ async def admin_user_search_process(message: Message, state: FSMContext):
             text=f"{status_icon} {name[:24]} (ID: {u.telegram_id})",
             callback_data=f"admin_select_user:{u.id}"
         )])
-    kb_rows.append([InlineKeyboardButton(text=t('◀ Назад к списку'), callback_data="admin_manage_users:0")])
+    kb_rows.append([InlineKeyboardButton(text=t('◀️ Назад к списку'), callback_data="admin_manage_users:0")])
     await message.answer(
         t('🔎 <b>Найдено: {arg0}</b> (показано до 8). Выбери пользователя:', arg0=len(found)),
         parse_mode="HTML",
@@ -2062,7 +2172,7 @@ async def admin_extended_stats(callback: CallbackQuery):
     if is_super_admin(callback.from_user.id):
         rows.append([InlineKeyboardButton(text=t('📊 Экспорт PDF по боту'), callback_data="admin_export_bot_pdf")])
         rows.append([InlineKeyboardButton(text=t('👥 Экспорт PDF по всем пользователям'), callback_data="admin_export_all_users_pdf")])
-    rows.append([InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")])
+    rows.append([InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")])
 
     await _safe_edit(
         callback,
@@ -2163,7 +2273,7 @@ async def admin_offers_menu(callback: CallbackQuery):
             callback_data="admin_offers_list:all:0",
         )],
         [InlineKeyboardButton(text=t('➕ Создать оффер'), callback_data="admin_create_offer")],
-        [InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")],
+        [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")],
     ])
     text_value = (
         t('📢 <b>Офферы и реклама</b>\n\n⏳ Ожидают модерации: <b>{pending}</b>\n✅ Одобрено: <b>{approved}</b>\n❌ Отклонено: <b>{rejected}</b>\n\nЗдесь можно открыть заявку, проверить ссылку и одобрить или отклонить её.', pending=pending, approved=approved, rejected=rejected)
@@ -2263,7 +2373,7 @@ async def admin_offers_list(callback: CallbackQuery):
         ))
     if navigation:
         rows.append(navigation)
-    rows.append([InlineKeyboardButton(text=t('◀ К офферам'), callback_data="admin_offers_menu")])
+    rows.append([InlineKeyboardButton(text=t('◀️ К офферам'), callback_data="admin_offers_menu")])
 
     body = f"📋 <b>{title}</b>\n\n"
     body += t('Выбери заявку:') if offers else t('На этой странице заявок нет.')
@@ -2334,7 +2444,7 @@ async def admin_offer_view(callback: CallbackQuery):
         )])
     rows.extend([
         [InlineKeyboardButton(text=t('⏳ К очереди'), callback_data="admin_offers_list:pending:0")],
-        [InlineKeyboardButton(text=t('◀ К офферам'), callback_data="admin_offers_menu")],
+        [InlineKeyboardButton(text=t('◀️ К офферам'), callback_data="admin_offers_menu")],
     ])
     await _safe_edit(
         callback,
@@ -2375,7 +2485,7 @@ async def admin_offer_reject(callback: CallbackQuery):
         text=t(label),
         callback_data=f"admin_offer_reject_reason:{offer_id}:{code}",
     )] for code, label in _OFFER_REJECTION_REASONS.items()]
-    rows.append([InlineKeyboardButton(text=t('◀ Назад'), callback_data=f"admin_offer_view:{offer_id}")])
+    rows.append([InlineKeyboardButton(text=t('◀️ Назад'), callback_data=f"admin_offer_view:{offer_id}")])
     await _safe_edit(
         callback,
         t('❌ <b>Причина отклонения оффера</b>\n\nОна будет отправлена автору.'),
@@ -2890,7 +3000,7 @@ async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None
     ))
     automation_status = t('🟢 OAuth-синхронизация включена') if oauth_ready else t('🟡 Нужны OAuth-реквизиты')
     text = (
-        t('💳 <b>Управление DonationAlerts</b>\n\n🔗 <b>Ссылка для оплаты:</b> <code>{DONATION_ALERTS_URL}</code>\n🤖 <b>Автоматизация:</b> {automation_status}\n⚠️ <b>Очередь сверки:</b> {pending_exceptions}\n\n📊 <b>Текущие настройки:</b>\n• 1 RUB ➔ <b>{arg3} монет</b>\n• VIP-подписка ➔ <b>{arg4} RUB / 30 дней</b>\n\nЦены пакетов в рублях пересчитываются от курса 1 RUB = N монет (точечные цены пакетов — в настройках «🛍 Магазин (цены)»).\n\nАвтоматически зачисляются только платежи с действующим одноразовым кодом заказа и точной суммой. Всё остальное попадает в очередь сверки.', DONATION_ALERTS_URL=DONATION_ALERTS_URL, automation_status=automation_status, pending_exceptions=pending_exceptions, arg3=int(rub_rate), arg4=int(vip_price_rub))
+        t('💳 <b>Платежи (DonationAlerts)</b>\n\n🔗 <b>Ссылка для оплаты:</b> <code>{DONATION_ALERTS_URL}</code>\n🤖 <b>Автоматизация:</b> {automation_status}\n⚠️ <b>Очередь сверки:</b> {pending_exceptions}\n\n📊 <b>Текущие настройки:</b>\n• 1 RUB ➔ <b>{arg3} монет</b>\n• VIP-подписка ➔ <b>{arg4} RUB / 30 дней</b>\n\nЦены пакетов в рублях пересчитываются от курса 1 RUB = N монет (точечные цены пакетов — в настройках «🛍 Магазин (цены)»).\n\nАвтоматически зачисляются только платежи с действующим одноразовым кодом заказа и точной суммой. Всё остальное попадает в очередь сверки.', DONATION_ALERTS_URL=DONATION_ALERTS_URL, automation_status=automation_status, pending_exceptions=pending_exceptions, arg3=int(rub_rate), arg4=int(vip_price_rub))
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3300,7 +3410,7 @@ async def admin_auto_moderation(callback: CallbackQuery):
             callback_data="toggle_auto_mod"
         )],
         [InlineKeyboardButton(text=t('🤝 Доверенные авторы'), callback_data="admin_trusted_uploaders")],
-        [InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")],
+        [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")],
     ])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
@@ -3379,7 +3489,7 @@ async def admin_trusted_uploaders(callback: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t('➕ Добавить автора'), callback_data="trusted_add_start")],
         [InlineKeyboardButton(text=t('➖ Удалить автора'), callback_data="trusted_remove_start")],
-        [InlineKeyboardButton(text=t('◀ Назад'), callback_data="admin_center")],
+        [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")],
     ])
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
@@ -3518,13 +3628,21 @@ async def admin_events_list_full(callback: CallbackQuery):
         await callback.answer()
         return
 
+    now = utc_now()
     for ev in events:
-        status = t('🟢 Активно') if ev.is_active and ev.end_date > utc_now() else t('🔴 Завершено')
+        if not ev.is_active:
+            status = t('🔴 Отключено')
+        elif ev.start_date > now:
+            status = t('⏳ Запланировано')
+        elif ev.end_date > now:
+            status = t('🟢 Активно')
+        else:
+            status = t('🔴 Завершено')
         text = (
             t('🎉 <b>{arg0}</b>\nСкидка: {discount_percent}% | {status}\nДо: {arg3}', arg0=escape(ev.name), discount_percent=ev.discount_percent, status=status, arg3=ev.end_date.strftime('%d.%m.%Y %H:%M'))
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[])
-        if ev.is_active and ev.end_date > utc_now():
+        if ev.is_active and ev.end_date > now:
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('🛑 Остановить'), callback_data=f"event_stop:{ev.id}")],
             ])
@@ -3698,7 +3816,7 @@ async def admin_approve_all_confirm(callback: CallbackQuery, bot):
         t('⏳ <b>Запущено фоновое одобрение!</b>\n\nБот начал обрабатывать <b>{total_pending}</b> файлов в фоновом режиме.\nТы можешь закрыть бота и заниматься своими делами. По завершении ты получишь личное сообщение от бота! 🚀', total_pending=total_pending),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t('◀️ В админку'), callback_data="admin_center")]
+            [InlineKeyboardButton(text=t('◀️ Админ-панель'), callback_data="admin_center")]
         ])
     )
     await callback.answer(t('Фоновое одобрение запущено!'))
@@ -4308,7 +4426,7 @@ def _poll_admin_keyboard(polls: list[AdminPoll]) -> InlineKeyboardMarkup:
                 callback_data=f"admin_poll_view:{poll.id}",
             )
         ])
-    rows.append([InlineKeyboardButton(text=t('◀️ В админку'), callback_data="admin_center")])
+    rows.append([InlineKeyboardButton(text=t('◀️ Админ-панель'), callback_data="admin_center")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -4322,7 +4440,7 @@ async def _render_admin_polls_menu(callback: CallbackQuery) -> None:
         )).scalar_one() or 0)
 
     text = (
-        t('📊 <b>Опросы с наградой</b>\n\nСоздавайте опросы с выбором одного варианта, несколькими вариантами или свободным ответом. За одно успешное прохождение активного опроса пользователь получает <b>{_POLL_REWARD:.0f} монет</b>.\n\nАктивных опросов: <b>{active_count}</b>', _POLL_REWARD=_POLL_REWARD, active_count=active_count)
+        t('🎯 <b>Опросы с наградой</b>\n\nСоздавайте опросы с выбором одного варианта, несколькими вариантами или свободным ответом. За одно успешное прохождение активного опроса пользователь получает <b>{_POLL_REWARD:.0f} монет</b>.\n\nАктивных опросов: <b>{active_count}</b>', _POLL_REWARD=_POLL_REWARD, active_count=active_count)
     )
     await _safe_edit(
         callback,

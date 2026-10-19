@@ -3748,13 +3748,155 @@ async def get_current_prices(session: AsyncSession, user_id: int | None = None):
 
 
 async def get_active_events(session: AsyncSession):
-    """Получить все активные события"""
+    """Получить все ДЕЙСТВУЮЩИЕ события: окно стартовало и ещё не закончилось.
+
+    `start_date` учитывается обязательно: праздничные события создаются
+    заранее (см. `ensure_holiday_events`), и до дня старта скидки/постеры
+    применяться не должны.
+    """
+    now = utc_now()
     stmt = select(Event).where(
         Event.is_active == True,
-        Event.end_date > utc_now()
+        Event.start_date <= now,
+        Event.end_date > now
     ).order_by(Event.discount_percent.desc())
     result = await session.execute(stmt)
     return result.scalars().all()
+
+
+# ============================
+# АВТОМАТИЧЕСКИЕ ПРАЗДНИЧНЫЕ СОБЫТИЯ (каталог app/holidays.py)
+# ============================
+HOLIDAY_EVENTS_ENABLED_KEY = "holiday_events_enabled"
+
+
+async def holiday_events_enabled(session: AsyncSession) -> bool:
+    """Включены ли авто-события по календарю праздников (переключатель в админке)."""
+    return (await get_setting(session, HOLIDAY_EVENTS_ENABLED_KEY, "1")) != "0"
+
+
+async def set_holiday_events_enabled(session: AsyncSession, enabled: bool) -> None:
+    """Включить/выключить праздничные авто-события.
+
+    При выключении уже созданные будущие авто-события деактивируются
+    (скидки и постеры не применяются); при включении — снова активируются.
+    Ручные события (без slug) переключатель не трогает.
+    """
+    await set_setting(session, HOLIDAY_EVENTS_ENABLED_KEY, "1" if enabled else "0")
+    now = utc_now()
+    auto_events = (await session.execute(
+        select(Event).where(Event.slug.isnot(None), Event.end_date > now)
+    )).scalars().all()
+    for ev in auto_events:
+        ev.is_active = bool(enabled)
+    await session.commit()
+
+
+async def ensure_holiday_events(session: AsyncSession, now=None) -> int:
+    """Создать предстоящие праздничные события из каталога и закрыть истёкшие.
+
+    Идемпотентно: экземпляр праздника (slug + год старта) создаётся один раз —
+    дедупликация и по маркеру в bot_settings (`holiday_event:<slug>:<year>`),
+    и по уже существующему событию с теми же slug/start_date (защита от гонки
+    нескольких инстансов). События создаются за 30 дней до старта и «просыпаются»
+    сами в `start_date` (см. `get_active_events`). Возвращает число созданных.
+
+    Вызывается: на старте бота, каждым циклом промо-ротации (polling) и лениво
+    один раз на инстанс в webhook-режиме (api/index.py).
+    """
+    from app.holidays import holiday_windows_around
+    now = now or utc_now()
+    created = 0
+
+    # Прибираем истёкшие события (любые, не только праздничные), чтобы в
+    # админ-панели не висели «активные», у которых окно уже закончилось.
+    expired = (await session.execute(
+        select(Event).where(Event.is_active == True, Event.end_date <= now)  # noqa: E712
+    )).scalars().all()
+    for ev in expired:
+        ev.is_active = False
+    if expired:
+        await session.commit()
+
+    if not await holiday_events_enabled(session):
+        return 0
+
+    for spec, start, end in holiday_windows_around(now):
+        marker = f"holiday_event:{spec.slug}:{start.year}"
+        if await get_setting(session, marker, ""):
+            continue
+        # Гонка нескольких инстансов: событие могло создаться без маркера.
+        existing = (await session.execute(
+            select(Event).where(Event.slug == spec.slug, Event.start_date == start)
+        )).scalars().first()
+        if existing:
+            await set_setting(session, marker, str(existing.id))
+            continue
+        ev = Event(
+            name=spec.name,
+            description=spec.description,
+            discount_percent=spec.discount_percent,
+            duration_days=max(1, (end - start).days),
+            applies_vip=spec.applies_vip,
+            applies_coins=spec.applies_coins,
+            applies_lootbox=spec.applies_lootbox,
+            applies_cases=False,
+            image_file_id=None,
+            slug=spec.slug,
+            poster_path=spec.poster,
+            start_date=start,
+            end_date=end,
+            is_active=True,
+            created_by=None,
+        )
+        session.add(ev)
+        await session.flush()
+        await set_setting(session, marker, str(ev.id))
+        # Отложенная рассылка «событие началось» — уйдёт в день старта окна
+        # (см. announce_started_events), а не в момент создания.
+        await set_setting(session, f"event_announce_pending:{ev.id}", "1")
+        created += 1
+    if created:
+        await session.commit()
+    return created
+
+
+async def announce_started_events(bot, session: AsyncSession) -> int:
+    """Разовая рассылка «событие началось» для запланированных событий.
+
+    События (праздничные авто и ручные с будущей датой старта) создаются
+    заранее, поэтому рассылка уходит не в момент создания, а когда окно
+    события фактически открылось. Кандидаты — события с маркером
+    `event_announce_pending:<id>` (ставится при создании); после успешной
+    рассылки маркер гасится. Уже идущие «старые» события без маркера не
+    затрагиваются — неожиданной массовой рассылки при деплое не будет.
+
+    Вызывается из auto_broadcast_worker (polling-режим); в serverless-режиме
+    событие и так видно через постер приветствия, рекламу между видео и пул
+    ротации.
+    """
+    now = utc_now()
+    events = (await session.execute(
+        select(Event).where(
+            Event.is_active == True,  # noqa: E712
+            Event.start_date <= now,
+            Event.end_date > now,
+        )
+    )).scalars().all()
+    announced = 0
+    for ev in events:
+        pending_key = f"event_announce_pending:{ev.id}"
+        if not await get_setting(session, pending_key, ""):
+            continue
+        try:
+            await broadcast_event_to_users(bot, ev)
+        except Exception as e:
+            # Маркер не гасим — следующий цикл воркера повторит рассылку.
+            log_error(logger, f"Event announce failed for event {ev.id}: {e}")
+            continue
+        await set_setting(session, pending_key, "")
+        announced += 1
+    return announced
 
 
 # ============================
@@ -4477,7 +4619,9 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
     Возвращает количество отправленных сообщений.
     """
     from app.db import async_session
-    
+    from aiogram.types import FSInputFile
+    from app.holidays import resolve_event_poster
+
     async with async_session() as session:
         users = (await session.execute(
             select(User.telegram_id, User.first_name).where(User.status == "active")
@@ -4485,7 +4629,10 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
 
     # Caption к фото ограничен 1024 символами — build_event_promo_text при
     # необходимости обрежет длинное описание, иначе send_photo упадёт молча.
-    max_len = PROMO_CAPTION_MAX if event.image_file_id else PROMO_TEXT_MAX
+    # Постер события: file_id (ручные) или файл на диске (праздничные авто).
+    poster_path = resolve_event_poster(event)
+    has_image = bool(event.image_file_id or poster_path)
+    max_len = PROMO_CAPTION_MAX if has_image else PROMO_TEXT_MAX
     text = build_event_promo_text(event, max_len=max_len)
 
     sent = 0
@@ -4493,6 +4640,8 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
         try:
             if event.image_file_id:
                 await bot.send_photo(tid, event.image_file_id, caption=text, parse_mode="HTML")
+            elif poster_path:
+                await bot.send_photo(tid, FSInputFile(poster_path), caption=text, parse_mode="HTML")
             else:
                 await bot.send_message(tid, text, parse_mode="HTML")
             sent += 1
@@ -4604,13 +4753,16 @@ def build_event_promo_text(event: Event, max_len: int | None = None) -> str:
         applies.append(t('кейсы'))
     applies_text = ", ".join(applies) if applies else t('всё')
     end_text = event.end_date.strftime("%d.%m.%Y")
+    # Название/описание переводятся по исходнику (праздничные события из
+    # каталога app/holidays.py имеют EN-пары; ручные — фолбэк на русский).
+    event_name = t(event.name) if event.name else ""
 
     def _render(descr: str) -> str:
         return (
-            t('🎉 <b>{name}</b>\n\n{descr}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ Акция до {end_text}\n\nНе пропусти!', name=event.name, descr=descr, discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
+            t('🎉 <b>{name}</b>\n\n{descr}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ Акция до {end_text}\n\nНе пропусти!', name=event_name, descr=descr, discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
         )
 
-    descr = event.description or ""
+    descr = t(event.description) if event.description else ""
     text = _render(descr)
     if max_len and len(text) > max_len:
         overhead = len(_render(""))
@@ -4626,8 +4778,12 @@ async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
     - по карточке на каждое активное событие (с фото, если есть) — чтобы
       события напоминали о себе по тому же принципу, что и промо-рассылки.
 
-    Возвращает список словарей {"text": str, "image_file_id": str|None}.
+    Возвращает список словарей {"text": str, "image_file_id": str|None,
+    "image_path": str|None, "poll": dict|None}; `image_path` — постер
+    праздничного события на диске (папки «постеры/» или banners/).
     """
+    from app.holidays import resolve_event_poster
+
     pool: list[dict] = []
     messages = (await session.execute(
         select(PromoMessage).where(PromoMessage.is_active == True).order_by(PromoMessage.id.asc())  # noqa: E712
@@ -4637,10 +4793,14 @@ async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
 
     events = await get_active_events(session)
     for ev in events:
-        max_len = PROMO_CAPTION_MAX if ev.image_file_id else PROMO_TEXT_MAX
+        # Постер события: telegram file_id (ручные события) или файл на диске
+        # (праздничные авто-события, папки «постеры/» и banners/).
+        poster_path = resolve_event_poster(ev)
+        max_len = PROMO_CAPTION_MAX if (ev.image_file_id or poster_path) else PROMO_TEXT_MAX
         pool.append({
             "text": build_event_promo_text(ev, max_len=max_len),
             "image_file_id": ev.image_file_id,
+            "image_path": poster_path,
         })
 
     # Активные опросы тоже участвуют в промо-ротации: напоминают о себе

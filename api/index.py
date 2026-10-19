@@ -57,6 +57,8 @@ import urllib.parse
 _bot = None
 _dp = None
 _playlist_schema_ready = False
+_bot_commands_ready = False
+_holiday_events_ready = False
 
 
 async def _ensure_playlist_schema() -> None:
@@ -99,6 +101,48 @@ async def _ensure_playlist_schema() -> None:
         if not tables_exist:
             raise
     _playlist_schema_ready = True
+
+
+async def _ensure_holiday_events() -> None:
+    """Create upcoming holiday events once per serverless instance.
+
+    Vercel does not run ``app.main.on_startup`` or the background workers,
+    so the holiday-event catalog (app/holidays.py) is synced lazily on the
+    first webhook call of a warm instance. The routine is idempotent
+    (dedupe markers in bot_settings + slug/start_date check), cheap, and
+    failures are non-fatal: the flag stays unset and the next call retries.
+    """
+    global _holiday_events_ready
+    if _holiday_events_ready:
+        return
+    try:
+        from app.db import async_session
+        from app.services import ensure_holiday_events
+
+        async with async_session() as session:
+            await ensure_holiday_events(session)
+        _holiday_events_ready = True
+    except Exception as exc:
+        print(f"vercel holiday events error: {exc!r}", flush=True)
+
+
+async def _ensure_bot_commands(bot) -> None:
+    """Set the native Telegram command menu once per serverless instance.
+
+    Vercel does not run ``app.main.on_startup``, so the command menu is
+    applied lazily on the first webhook call of a warm instance. Failures
+    are non-fatal: the flag stays unset and the next call retries.
+    """
+    global _bot_commands_ready
+    if _bot_commands_ready:
+        return
+    try:
+        from app.main import apply_bot_commands
+
+        await apply_bot_commands(bot)
+        _bot_commands_ready = True
+    except Exception as exc:
+        print(f"vercel set_my_commands error: {exc!r}", flush=True)
 
 
 def _get_bot_and_dispatcher():
@@ -339,6 +383,8 @@ async def app(scope, receive, send):
 
             bot, dp = _get_bot_and_dispatcher()
             await _ensure_playlist_schema()
+            await _ensure_bot_commands(bot)
+            await _ensure_holiday_events()
             update = Update.model_validate(data, context={"bot": bot})
             await dp.feed_update(bot, update)
         except Exception as exc:  # не роняем функцию: Telegram иначе ретраит штормом
