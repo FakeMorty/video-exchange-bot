@@ -156,6 +156,7 @@ class EventCreationState(StatesGroup):
     waiting_description = State()
     waiting_discount = State()
     waiting_duration = State()
+    waiting_start = State()      # «сейчас» или дата старта (ДД.ММ[.ГГГГ])
     waiting_applies = State()
     waiting_image = State()      # опциональная картинка
     confirm = State()
@@ -642,12 +643,41 @@ def event_applies_keyboard(selected: dict) -> InlineKeyboardMarkup:
 async def admin_events_menu(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
     try:
+        from app.services import holiday_events_enabled
+        now = utc_now()
         async with async_session() as session:
-            active = (await session.execute(select(Event).where(Event.is_active.is_(True), Event.end_date > utc_now()).order_by(Event.start_date.desc()))).scalars().all()
-        text = t('🎉 <b>События</b>\n\n') + ("\n".join([f"• {escape(ev.name)} ({ev.discount_percent}%)" for ev in active[:5]]) if active else t('Нет активных событий.'))
+            active = (await session.execute(select(Event).where(
+                Event.is_active.is_(True), Event.start_date <= now, Event.end_date > now,
+            ).order_by(Event.discount_percent.desc()))).scalars().all()
+            upcoming = (await session.execute(select(Event).where(
+                Event.is_active.is_(True), Event.start_date > now,
+            ).order_by(Event.start_date.asc()).limit(4))).scalars().all()
+            auto_on = await holiday_events_enabled(session)
+
+        text = t('🎉 <b>События</b>\n\n')
+        if active:
+            text += "\n".join([
+                t('🟢 {name} — скидка {discount}% до {end}',
+                  name=escape(ev.name), discount=ev.discount_percent,
+                  end=ev.end_date.strftime('%d.%m'))
+                for ev in active[:5]
+            ])
+        else:
+            text += t('Сейчас нет активных событий.')
+        if upcoming:
+            text += "\n\n" + t('⏳ <b>Запланированы:</b>') + "\n" + "\n".join([
+                t('• {name} — старт {start} (скидка {discount}%)',
+                  name=escape(ev.name), start=ev.start_date.strftime('%d.%m'), discount=ev.discount_percent)
+                for ev in upcoming
+            ])
+        text += "\n\n" + t('🤖 Праздничные авто-события: {status}', status=t('включены') if auto_on else t('выключены'))
+        text += "\n" + t('Бот сам создаёт события по календарю праздников: на неделю окна автоматически применяются скидки, праздничный постер, реклама в ротации и блок в приветствии.')
+
+        auto_label = t('🤖 Авто-события: выключить') if auto_on else t('🤖 Авто-события: включить')
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t('➕ Создать'), callback_data="event_create_start")],
-            [InlineKeyboardButton(text=t('📋 Все'), callback_data="event_list_all")],
+            [InlineKeyboardButton(text=t('➕ Создать'), callback_data="event_create_start"),
+             InlineKeyboardButton(text=t('📋 Все'), callback_data="event_list_all")],
+            [InlineKeyboardButton(text=auto_label, callback_data="event_auto_toggle")],
             [InlineKeyboardButton(text=t('🛍 Акции (Sale)'), callback_data="admin_sales")],
             [InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_center")]
         ])
@@ -656,6 +686,22 @@ async def admin_events_menu(callback: CallbackQuery):
         await callback.answer(t('Ошибка: {e}', e=e), show_alert=True)
     finally:
         await callback.answer()
+
+
+@router.callback_query(F.data == "event_auto_toggle")
+async def event_auto_toggle(callback: CallbackQuery):
+    """Вкл/выкл праздничные авто-события (каталог app/holidays.py)."""
+    if not await check_admin(callback.from_user.id): return
+    from app.services import ensure_holiday_events, holiday_events_enabled, set_holiday_events_enabled
+    async with async_session() as session:
+        enable = not await holiday_events_enabled(session)
+        await set_holiday_events_enabled(session, enable)
+        created = await ensure_holiday_events(session) if enable else 0
+    if enable:
+        await callback.answer(t('✅ Авто-события включены. Создано новых: {created}.', created=created), show_alert=True)
+    else:
+        await callback.answer(t('🛑 Авто-события выключены: будущие праздничные события деактивированы.'), show_alert=True)
+    await admin_events_menu(callback)
 
 
 @router.callback_query(F.data == "event_create_start")
@@ -695,9 +741,27 @@ async def event_discount(message: Message, state: FSMContext):
 async def event_duration(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     if not message.text.isdigit(): return
-    await state.update_data(duration_days=int(message.text), applies={"vip": False, "coins": False, "lootbox": False})
+    await state.update_data(duration_days=int(message.text))
+    await state.set_state(EventCreationState.waiting_start)
+    await message.answer(t('Шаг 5: Когда начать? Отправь «сейчас» или дату старта (например 25.12 или 25.12.2026). До этой даты событие не действует — скидки, постеры и реклама включатся автоматически в день старта.'))
+
+
+@router.message(EventCreationState.waiting_start)
+async def event_start_date(message: Message, state: FSMContext):
+    """Дата старта события: «сейчас» или ДД.ММ[.ГГГГ] (ближайшая будущая)."""
+    if not await check_admin(message.from_user.id): return
+    from app.holidays import parse_start_date
+    now = utc_now()
+    try:
+        start = parse_start_date(message.text or "", now)
+    except ValueError:
+        await message.answer(t('❌ Не понял дату. Отправь «сейчас» или дату вида 25.12 / 25.12.2026.'))
+        return
+    if start is not None and start < now:
+        start = None  # дата уже прошла — старт немедленно
+    await state.update_data(start_date=start, applies={"vip": False, "coins": False, "lootbox": False})
     await state.set_state(EventCreationState.waiting_applies)
-    await message.answer(t('Шаг 5: На что?'), reply_markup=event_applies_keyboard({"vip": False, "coins": False, "lootbox": False}))
+    await message.answer(t('Шаг 6: На что действует скидка?'), reply_markup=event_applies_keyboard({"vip": False, "coins": False, "lootbox": False}))
 
 
 @router.callback_query(EventCreationState.waiting_applies, F.data.startswith("event_toggle:"))
@@ -714,7 +778,7 @@ async def event_toggle_applies(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(EventCreationState.waiting_applies, F.data == "event_applies_done")
 async def event_applies_done(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EventCreationState.waiting_image)
-    await callback.message.answer(t("Шаг 6: Фото или 'пропустить':"))
+    await callback.message.answer(t("Шаг 7: Пришли фото (постер события) или напиши 'пропустить':"))
     await callback.answer()
 
 
@@ -725,8 +789,10 @@ async def event_image(message: Message, state: FSMContext):
     await state.update_data(image_file_id=file_id)
     data = await state.get_data()
     await state.set_state(EventCreationState.confirm)
+    start = data.get("start_date")
+    when = t('сейчас') if not start else start.strftime('%d.%m.%Y %H:%M') + " UTC"
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t('✅ Создать'), callback_data="event_confirm_yes"), InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_events_menu")]])
-    await message.answer(t('Создать событие {arg0}?', arg0=escape(data['name'])), reply_markup=kb)
+    await message.answer(t('Создать событие {arg0}?\nСтарт: {when}\nДлительность: {days} дн.', arg0=escape(data['name']), when=when, days=data.get("duration_days", 0)), parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(EventCreationState.confirm, F.data == "event_confirm_yes")
@@ -734,15 +800,30 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id): return
     data = await state.get_data()
     applies = data.get("applies", {})
-    start = utc_now()
+    # Старт: явная дата из мастера («Шаг 5») или немедленно. Прошедшую дату
+    # подтягиваем к сейчас, чтобы событие не рождалось «мёртвым».
+    start = data.get("start_date") or utc_now()
+    if start < utc_now():
+        start = utc_now()
     end = start + timedelta(days=data["duration_days"])
+    scheduled = data.get("start_date") is not None and start > utc_now()
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
         ev = Event(name=data["name"], description=data["description"], discount_percent=data["discount_percent"], duration_days=data["duration_days"], applies_vip=applies.get("vip", False), applies_coins=applies.get("coins", False), applies_lootbox=applies.get("lootbox", False), image_file_id=data.get("image_file_id"), start_date=start, end_date=end, is_active=True, created_by=admin.id if admin else None)
         session.add(ev)
         await session.commit()
     await state.clear()
-    
+
+    if scheduled:
+        # Запланированное событие: рассылка уйдёт автоматически в день старта
+        # (см. announce_started_events в services), сейчас спамить не нужно.
+        from app.services import set_setting
+        async with async_session() as session:
+            await set_setting(session, f"event_announce_pending:{ev.id}", "1")
+        await callback.message.answer(t('✅ Событие создано и запланировано!\n⏳ Старт: {when}. Скидки, постер, реклама и приветствие применятся автоматически; рассылка уйдёт в день старта.', when=start.strftime('%d.%m.%Y %H:%M')))
+        await callback.answer()
+        return
+
     # Рассылаем уведомление всем пользователям
     from app.services import broadcast_event_to_users
     try:
@@ -757,6 +838,7 @@ async def event_confirm_yes(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "event_list_all")
 async def event_list_all(callback: CallbackQuery):
     if not await check_admin(callback.from_user.id): return
+    now = utc_now()
     async with async_session() as session:
         events = (await session.execute(select(Event).order_by(Event.created_at.desc()).limit(20))).scalars().all()
     if not events:
@@ -764,12 +846,23 @@ async def event_list_all(callback: CallbackQuery):
         await callback.answer()
         return
     for ev in events:
-        status = t('🟢 Активно') if ev.is_active and ev.end_date > utc_now() else t('🔴 Завершено')
+        if not ev.is_active:
+            status = t('🔴 Отключено')
+        elif ev.start_date > now:
+            status = t('⏳ Запланировано')
+        elif ev.end_date > now:
+            status = t('🟢 Активно')
+        else:
+            status = t('🔴 Завершено')
+        auto_badge = t(' | 🤖 авто') if ev.slug else ''
         text = (
-            t('🎉 <b>{arg0}</b>\nСкидка: {discount_percent}% | {status}\nДо: {arg3}', arg0=escape(ev.name), discount_percent=ev.discount_percent, status=status, arg3=ev.end_date.strftime('%d.%m.%Y %H:%M'))
+            t('🎉 <b>{arg0}</b>\nСкидка: {discount_percent}% | {status}{auto_badge}\nСтарт: {start_txt}\nДо: {arg3}',
+              arg0=escape(ev.name), discount_percent=ev.discount_percent, status=status,
+              auto_badge=auto_badge, start_txt=ev.start_date.strftime('%d.%m.%Y %H:%M'),
+              arg3=ev.end_date.strftime('%d.%m.%Y %H:%M'))
         )
         kb_rows = []
-        if ev.is_active and ev.end_date > utc_now():
+        if ev.is_active and ev.end_date > now:
             kb_rows.append([InlineKeyboardButton(text=t('🛑 Остановить'), callback_data=f"event_stop:{ev.id}")])
         kb_rows.append([InlineKeyboardButton(text=t('◀️ Назад'), callback_data="admin_events_menu")])
         await callback.message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -3535,13 +3628,21 @@ async def admin_events_list_full(callback: CallbackQuery):
         await callback.answer()
         return
 
+    now = utc_now()
     for ev in events:
-        status = t('🟢 Активно') if ev.is_active and ev.end_date > utc_now() else t('🔴 Завершено')
+        if not ev.is_active:
+            status = t('🔴 Отключено')
+        elif ev.start_date > now:
+            status = t('⏳ Запланировано')
+        elif ev.end_date > now:
+            status = t('🟢 Активно')
+        else:
+            status = t('🔴 Завершено')
         text = (
             t('🎉 <b>{arg0}</b>\nСкидка: {discount_percent}% | {status}\nДо: {arg3}', arg0=escape(ev.name), discount_percent=ev.discount_percent, status=status, arg3=ev.end_date.strftime('%d.%m.%Y %H:%M'))
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[])
-        if ev.is_active and ev.end_date > utc_now():
+        if ev.is_active and ev.end_date > now:
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('🛑 Остановить'), callback_data=f"event_stop:{ev.id}")],
             ])

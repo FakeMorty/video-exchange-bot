@@ -614,6 +614,12 @@ class Event(Base):
     # Опциональная картинка (telegram_file_id)
     image_file_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Автоматические праздничные события (каталог app/holidays.py):
+    # slug — стабильный ключ праздника (дедупликация и переводы),
+    # poster_path — имя файла постера в папке «постеры/» или banners/.
+    slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    poster_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     start_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

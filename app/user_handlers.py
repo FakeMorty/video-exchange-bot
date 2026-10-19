@@ -581,42 +581,52 @@ async def send_welcome_banner(message_or_callback, session, user):
     if custom_welcome:
         msg_text += f"\n\n{custom_welcome}"
 
-    banner_file_id = await get_setting(session, "welcome_banner_id", "")
+    # Действующее событие (в т.ч. праздничное авто-событие): на время окна
+    # постер события заменяет приветственный баннер, а к тексту добавляется
+    # праздничный блок со скидкой и датой окончания.
+    event_poster = None
+    try:
+        from app.holidays import build_event_welcome_block, resolve_event_poster
+        events = await get_active_events(session)
+        if events:
+            event = max(events, key=lambda e: e.discount_percent)
+            msg_text += "\n\n" + build_event_welcome_block(event)
+            event_poster = resolve_event_poster(event)
+    except Exception:
+        logger.exception("welcome: не удалось применить активное событие (некритично)")
 
-    if banner_file_id:
+    banner_file_id = await get_setting(session, "welcome_banner_id", "")
+    menu_kb = main_menu(is_admin=admin_flag, lang=lang)
+
+    async def _send_photo(photo) -> bool:
         try:
             await target.answer_photo(
-                photo=banner_file_id,
+                photo=photo,
                 caption=msg_text,
                 parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
+                reply_markup=menu_kb,
             )
+            return True
         except Exception:
-            await target.answer(
-                msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
-            )
-    elif os.path.exists("app/banner.jpg"):
-        try:
-            await target.answer_photo(
-                photo=FSInputFile("app/banner.jpg"),
-                caption=msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
-            )
-        except Exception:
-            await target.answer(
-                msg_text,
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
-            )
-    else:
+            return False
+
+    async def _send_text():
         await target.answer(
             msg_text,
             parse_mode="HTML",
-            reply_markup=main_menu(is_admin=admin_flag, lang=lang)
+            reply_markup=menu_kb,
         )
+
+    # Приоритет картинок: постер события -> баннер из админки -> app/banner.jpg.
+    sent = False
+    if event_poster:
+        sent = await _send_photo(FSInputFile(event_poster))
+    if not sent and banner_file_id:
+        sent = await _send_photo(banner_file_id)
+    if not sent and os.path.exists("app/banner.jpg"):
+        sent = await _send_photo(FSInputFile("app/banner.jpg"))
+    if not sent:
+        await _send_text()
 
     # Стартовый лутбокс показываем только новым пользователям (до 24 часов с регистрации)
     # и только один раз.
@@ -1408,7 +1418,7 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
         end_text = event.end_date.strftime("%d.%m")
         
         ad_text = (
-            t('🎉 <b>Акция: {name}</b>\n\n{description}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ До {end_text}\n\nСкорее в магазин, пока действует акция!', name=event.name, description=event.description, discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
+            t('🎉 <b>Акция: {name}</b>\n\n{description}\n\n🔥 Скидка <b>{discount_percent}%</b> на {applies_text}!\n⏰ До {end_text}\n\nСкорее в магазин, пока действует акция!', name=t(event.name), description=t(event.description) if event.description else "", discount_percent=event.discount_percent, applies_text=applies_text, end_text=end_text)
         )
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1416,8 +1426,14 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
             [InlineKeyboardButton(text=t('▶️ Смотреть дальше'), callback_data="watch_video_content")],
         ])
         
+        # Постер события: telegram file_id (ручные) или файл на диске
+        # (праздничные авто-события из «постеры/» или banners/).
+        from app.holidays import resolve_event_poster
+        event_poster = resolve_event_poster(event)
         if event.image_file_id:
             await callback.message.answer_photo(event.image_file_id, caption=ad_text, parse_mode="HTML", reply_markup=kb)
+        elif event_poster:
+            await callback.message.answer_photo(FSInputFile(event_poster), caption=ad_text, parse_mode="HTML", reply_markup=kb)
         else:
             await callback.message.answer(ad_text, parse_mode="HTML", reply_markup=kb)
         
