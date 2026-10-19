@@ -23,8 +23,9 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
   `app` / `application` / `handler`, отвечает на health-check'и и принимает
   Telegram-апдейты вебхуком (`dp.feed_update`) — polling на serverless
   невозможен.
-- `vercel.json` — функция `api/index.py` (maxDuration 60 c) и rewrites для
-  `/`, `/health`, `/healthz`, `/webhook`.
+- `vercel.json` — функция `api/index.py` (maxDuration 60 c), rewrites для
+  `/`, `/health`, `/healthz`, `/webhook` и регион `fra1` (Frankfurt), ближе к
+  Supabase Central EU для сокращения задержек между функцией и базой.
 - `app/main.py` — сборка Bot + Dispatcher вынесена в
   `create_bot_and_dispatcher()`, её переиспользуют и polling-режим
   (Render/Docker), и Vercel-вебхук. Поведение polling-режима не изменилось.
