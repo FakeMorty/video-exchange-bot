@@ -100,11 +100,11 @@ def test_holiday_windows_do_not_overlap():
 
 
 def test_holiday_windows_around_returns_current_and_upcoming():
-    # Середина октября 2026: в пределах 30 дней только окно 4 Ноября.
+    # Середина октября 2026: в пределах 30 дней Хэллоуин (25—31.10) и 4 Ноября (1—8.11).
     now = datetime(2026, 10, 19, 12, 0)
     upcoming = holiday_windows_around(now)
     slugs = [spec.slug for spec, _s, _e in upcoming]
-    assert slugs == ["nov_4"]
+    assert slugs == ["halloween", "nov_4"]
 
     # 31 декабря: новогоднее окно (30.12—06.01) уже идёт, рождественское закончилось.
     now = datetime(2026, 12, 31, 12, 0)
@@ -131,7 +131,7 @@ def test_holiday_windows_around_returns_current_and_upcoming():
 async def test_ensure_holiday_events_creates_once(db_session):
     now = datetime(2026, 10, 19, 12, 0)
     created = await ensure_holiday_events(db_session, now=now)
-    assert created == 1  # в 30-дневном окне только 4 Ноября
+    assert created == 2  # в 30-дневном окне Хэллоуин и 4 Ноября
 
     spec = SPEC_BY_SLUG["nov_4"]
     start, end = holiday_window(spec, 2026)
@@ -162,7 +162,7 @@ async def test_ensure_holiday_events_respects_toggle(db_session):
     # Включение сразу создаёт предстоящие события.
     await set_holiday_events_enabled(db_session, True)
     assert await holiday_events_enabled(db_session)
-    assert await ensure_holiday_events(db_session, now=now) == 1
+    assert await ensure_holiday_events(db_session, now=now) == 2
 
 
 @pytest.mark.asyncio

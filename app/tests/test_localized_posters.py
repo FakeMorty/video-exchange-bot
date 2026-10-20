@@ -7,7 +7,7 @@
 * язык берётся из контекста апдейта, если его не передали явно;
 * промо-ротация и пул событий отдают английский текст вместе с постером.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -116,3 +116,38 @@ async def test_promo_pool_uses_english_text_and_poster(db_session):
 def test_mar_8_spec_is_the_one_used_in_pool_fixture():
     """Защита от рассинхрона: фикстура карточки должна совпадать с каталогом."""
     assert SPEC_BY_SLUG["mar_8"].poster == "mar_8.jpg"
+
+
+def test_new_holidays_from_user_posters_are_wired():
+    """День космонавтики, Валентин день и Хэллоуин добавлены по постерам.
+
+    У каждого — окно, в которое попадает сам день праздника, постер на диске
+    и английский перевод названия (иначе событие осталось бы без картинки,
+    а у англоязычных — с русской подписью).
+    """
+    from app.holidays import holiday_window
+    from app.i18n import t
+
+    for slug, month, day in (("valentine", 2, 14), ("cosmonautics", 4, 12), ("halloween", 10, 31)):
+        spec = SPEC_BY_SLUG[slug]
+        start, end = holiday_window(spec, 2026)
+        assert (start.month, start.day) <= (month, day) <= (end.month, end.day), slug
+        assert resolve_poster(spec.poster), f"нет постера {slug}"
+        assert resolve_poster(spec.poster, lang="en"), f"нет английского постера {slug}"
+        assert t("en", spec.name) != spec.name, f"нет перевода названия {slug}"
+
+
+def test_halloween_and_november_windows_do_not_clash():
+    """Хэллоуин (25—31.10) и 4 Ноября идут друг за другом, без наложения."""
+    from app.holidays import holiday_window
+
+    # Окна хранятся в naive-UTC (даты заданы по Москве), поэтому «1 ноября»
+    # проверяем со сдвигом +3 часа обратно на MSK.
+    from datetime import timedelta
+
+    hw_start, hw_end = holiday_window(SPEC_BY_SLUG["halloween"], 2026)
+    nv_start, nv_end = holiday_window(SPEC_BY_SLUG["nov_4"], 2026)
+    assert hw_end < nv_start, "окна Хэллоуина и 4 Ноября накладываются"
+    assert (hw_start + timedelta(hours=3)).date() == date(2026, 10, 25)
+    assert (nv_start + timedelta(hours=3)).date() == date(2026, 11, 1)
+    assert (nv_start + timedelta(hours=3)).date() <= date(2026, 11, 4) <= (nv_end + timedelta(hours=3)).date()

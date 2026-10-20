@@ -83,6 +83,13 @@ HOLIDAYS: list[HolidaySpec] = [
         discount_percent=20, poster="new_year.jpg",
     ),
     HolidaySpec(
+        slug="valentine",
+        name="💝 Неделя ко Дню святого Валентина",
+        description="Неделя ко Дню всех влюблённых: скидки на всё в магазине — порадуй себя и того, кто тебе дорог!",
+        start_md=(2, 7), end_md=(2, 14),
+        discount_percent=15, poster="valentine.jpg",
+    ),
+    HolidaySpec(
         slug="feb_23",
         name="⭐ Неделя к 23 Февраля",
         description="Праздничная неделя ко Дню защитника Отечества: скидки на всё в магазине — порадуй себя и друзей!",
@@ -102,6 +109,13 @@ HOLIDAYS: list[HolidaySpec] = [
         description="Первоапрельская неделя: несерьёзные цены — серьёзные скидки на всё в магазине!",
         start_md=(3, 29), end_md=(4, 5),
         discount_percent=10, poster="apr_1.jpg",
+    ),
+    HolidaySpec(
+        slug="cosmonautics",
+        name="🚀 Неделя ко Дню космонавтики",
+        description="Неделя ко Дню космонавтики: скидки на всё — взлетаем вместе с ценами вниз!",
+        start_md=(4, 6), end_md=(4, 13),
+        discount_percent=10, poster="cosmonautics.jpg",
     ),
     HolidaySpec(
         slug="may_1",
@@ -132,10 +146,19 @@ HOLIDAYS: list[HolidaySpec] = [
         discount_percent=10, poster="sep_1.jpg",
     ),
     HolidaySpec(
+        slug="halloween",
+        name="🎃 Неделя Хэллоуина",
+        description="Жуткая неделя скидок: Хэллоуин в боте — монеты и VIP по сниженным ценам!",
+        start_md=(10, 25), end_md=(10, 31),
+        discount_percent=15, poster="halloween.jpg",
+    ),
+    HolidaySpec(
+        # Окно сдвинуто на 1–8 ноября: раньше было 29.10–5.11 и пересекалось
+        # с Хэллоуином (25–31 октября), из-за чего события накладывались.
         slug="nov_4",
         name="🎆 Неделя к 4 Ноября",
         description="Праздничная неделя ко Дню народного единства: осенние скидки в магазине!",
-        start_md=(10, 29), end_md=(11, 5),
+        start_md=(11, 1), end_md=(11, 8),
         discount_percent=15, poster="nov_4.jpg",
     ),
 ]
