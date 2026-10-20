@@ -200,3 +200,23 @@ def test_portuguese_menu_labels_are_translated():
     assert t("pt", "menu.buy") == "🛍 Loja"
     # Кнопку на португальском обработчик должен узнавать так же, как русскую.
     assert t("pt", "menu.watch") in menu_button_variants("watch")
+
+
+@pytest.mark.parametrize("lang,source", [("en", EN_SOURCE), ("es", ES_SOURCE), ("pt", PT_SOURCE)])
+def test_translation_keeps_leading_emoji_of_the_source(lang, source):
+    """Перевод начинается с того же значка, что и русский исходник.
+
+    Ловит тихую беду: перевод уехал на соседнюю строку («◀️ Назад» однажды
+    уехало на «Ср» и стало «Mi»). По-настоящему проверить смысл перевода
+    тест не может, а рассогласование значка видно сразу — и у пользователя
+    кнопка «Назад» без стрелки выглядит обманом.
+    """
+
+    def mark(s: str) -> str:
+        m = re.match(r"^((?:[^\w\sЀ-ӿ{<]️?)+)", s)
+        return m.group(1) if m else ""
+
+    broken = [
+        (k, v) for k, v in source.items() if mark(k) and not mark(v).startswith(mark(k))
+    ]
+    assert not broken, f"{lang}: потерян значок в начале {broken[:3]}"
