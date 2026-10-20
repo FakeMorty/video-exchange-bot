@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.i18n import current_language, normalize_language, t
+from app.i18n import DEFAULT_LANGUAGE, current_language, normalize_language, t
 
 # Москва: даты праздников заданы в локальном времени, а не UTC.
 MSK = timezone(timedelta(hours=3))
@@ -245,6 +245,10 @@ def resolve_poster(filename: str | None, lang: str | None = None) -> str | None:
     if subdir:
         # Сначала — переведенные постеры во всех папках, затем оригиналы.
         order.extend((folder, subdir) for folder in POSTER_DIRS)
+    if code not in (DEFAULT_LANGUAGE, subdir) and code != "en":
+        # Своих постеров у языка нет: английский понятнее русского, поэтому
+        # сначала показываем EN-копию, и только потом русский оригинал.
+        order.extend((folder, "en") for folder in POSTER_DIRS)
     order.extend((folder, None) for folder in POSTER_DIRS)
 
     for folder, sub in order:

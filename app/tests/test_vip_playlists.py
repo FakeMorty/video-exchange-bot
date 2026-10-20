@@ -187,7 +187,7 @@ def test_playlist_menu_and_video_save_button_are_present():
 
     assert BTN_PLAYLISTS in ru_buttons
     assert "🎵 Playlists" in en_buttons
-    assert menu_button_variants("playlists") == {"🎵 Плейлисты", "🎵 Playlists"}
+    assert {"🎵 Плейлисты", "🎵 Playlists"} <= menu_button_variants("playlists")
     assert t("en", "menu.playlists") == "🎵 Playlists"
     assert "playlist_add:42" in video_callbacks
 

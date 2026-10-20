@@ -4609,9 +4609,11 @@ def test_main_menu_is_localized_and_has_language_button():
     assert "🔧 Admin" in admin_labels
 
     # Варианты для матчинга обработчиков покрывают все языки
-    assert menu_button_variants("watch") == {"🎬 Смотреть", "🎬 Watch"}
-    assert menu_button_variants("playlists") == {"🎵 Плейлисты", "🎵 Playlists"}
-    assert menu_button_variants("lang") == {"🌐 Язык", "🌐 Language"}
+    # Варианты собираются по всем языкам интерфейса, поэтому проверяем,
+    # что нужные подписи там есть (а не равенство множества целиком).
+    assert {"🎬 Смотреть", "🎬 Watch"} <= menu_button_variants("watch")
+    assert {"🎵 Плейлисты", "🎵 Playlists"} <= menu_button_variants("playlists")
+    assert {"🌐 Язык", "🌐 Language"} <= menu_button_variants("lang")
 
     # Клавиатура выбора языка: оба языка, текущий отмечен, есть возврат в меню
     kb = language_keyboard("en")

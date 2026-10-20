@@ -1197,7 +1197,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
       },
     };
     const L = (k, p) => {
-      let s = (I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k;
+      let s = (I18N[window.BOT_LANG] || {})[k] ?? I18N.en[k] ?? I18N.ru[k] ?? k;
       if (p) for (const n in p) s = s.replaceAll('{' + n + '}', p[n]);
       return s;
     };
@@ -1951,7 +1951,7 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
          "Ошибка загрузки видео.": "Failed to load videos.",
        },
      };
-     const L = (k) => ((I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k);
+     const L = (k) => ((I18N[window.BOT_LANG] || {})[k] ?? I18N.en[k] ?? I18N.ru[k] ?? k);
      document.querySelectorAll('[data-i18n]').forEach(el => { el.innerHTML = L(el.dataset.i18n); });
 
      let isMuted = true;
@@ -3186,7 +3186,7 @@ const I18N = {
   },
 };
 const L = (k, p) => {
-  let s = (I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k;
+  let s = (I18N[window.BOT_LANG] || {})[k] ?? I18N.en[k] ?? I18N.ru[k] ?? k;
   if (p) for (const n in p) s = s.replaceAll('{' + n + '}', p[n]);
   return s;
 };
@@ -3620,7 +3620,7 @@ var I18N = {
   },
 };
 function L(k, p){
-  var s = (I18N[window.BOT_LANG] || I18N.ru)[k] || I18N.ru[k] || k;
+  var s = (I18N[window.BOT_LANG] || {})[k] || I18N.en[k] || I18N.ru[k] || k;
   if (p) for (var n in p) s = s.split('{' + n + '}').join(p[n]);
   return s;
 }

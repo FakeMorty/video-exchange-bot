@@ -38,13 +38,19 @@ from contextvars import ContextVar
 # Массовые переводы «по исходному русскому тексту» вынесены в отдельный модуль,
 # чтобы файл ядра оставался обозримым (тысячи пар «русский → английский»).
 from app.i18n_en import EN_SOURCE
+from app.i18n_es import ES_SOURCE
 
 DEFAULT_LANGUAGE = "ru"
 
 # Код языка -> (флаг, собственное название языка).
+# Порядок = порядок кнопок в «🌐 Язык». Новый язык добавляется одной записью
+# здесь плюс словарём переводов (см. ниже): меню, обработчики и клавиатура
+# подхватывают его сами. Непереведённые строки падают сначала на английский,
+# затем на русский (см. t()) — поэтому язык можно вводить постепенно.
 SUPPORTED_LANGUAGES: dict[str, tuple[str, str]] = {
     "ru": ("🇷🇺", "Русский"),
     "en": ("🇬🇧", "English"),
+    "es": ("🇪🇸", "Español"),
 }
 
 # Семантические переводы (короткие подписи меню, профиля, приветствия и т.п.).
@@ -182,10 +188,80 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Please try again later."
         ),
     },
+    "es": {
+        # Кнопки главного меню
+        "menu.watch": "🎬 Ver",
+        "menu.playlists": "🎵 Listas",
+        "menu.upload": "📤 Subir",
+        "menu.profile": "👤 Perfil",
+        "menu.buy": "🛍 Tienda",
+        "menu.offers": "📢 Ofertas",
+        "menu.referrals": "👥 Referidos",
+        "menu.games": "🎮 Juegos",
+        "menu.tops": "🏆 Top",
+        "menu.promo": "🎟 Cupones",
+        "menu.feedback": "💬 Contacto",
+        "menu.rules": "📜 Reglas",
+        "menu.faq": "ℹ️ Ayuda",
+        "menu.admin": "🔧 Admin",
+        "menu.lang": "🌐 Idioma",
+        # Выбор языка
+        "lang.title": "🌐 <b>Elige el idioma del bot</b>",
+        "lang.changed_alert": "✅ Idioma: 🇪🇸 español",
+        # Главное меню
+        "main_menu.title": "🏠 <b>Menú principal</b>\n\nElige qué hacer 👇",
+        "main_menu.button": "🏠 Menú principal",
+        # Приветствие / старт
+        "welcome.greeting": "👋 ¡Hola, <b>{name}</b>{vip}!\n\n💰 Saldo: <b>{balance}</b> monedas",
+        "welcome.pitch": (
+            "Has llegado al proyecto más avanzado y singular en el nicho del intercambio de vídeos. "
+            "Te esperan montones de contenido, una administración viva y atenta, y condiciones honestas. 📹🎬👥\n\n"
+            "El bot está hecho por personas y para personas. 🤖🙏 Cada mensaje tuyo lo leen nuestros "
+            "administradores (solo hay 2). 👀❤️ Cada deseo tuyo nos llega al corazón. 💓 "
+            "Por eso nos esforzaremos por ti. 👍\n\n"
+            "¡Relájate y bienvenido a Wseksbot! 😌📣"
+        ),
+        "welcome.no_nickname_hint": (
+            "🎬 Sin apodo puedes ver solo 3 fotos o vídeos. Luego pon un apodo gratis en tu perfil; "
+            "también lo necesitarás para subir contenido."
+        ),
+        # Отмена действия
+        "cancel.done": "✅ Modo reiniciado. Pulsa /start o elige una acción en el menú.",
+        "cancel.aborted": "❌ Acción cancelada.",
+        # Профиль
+        "profile.title": "👤 <b>Perfil</b>",
+        "profile.nick": "🏷 Apodo:",
+        "profile.telegram_id": "🆔 ID de Telegram:",
+        "profile.balance": "💰 Saldo: <b>{balance}</b> monedas",
+        "profile.level": "🏆 Nivel: <b>{level}</b>",
+        "profile.xp": "⭐ XP: {current}/{needed} [{bar}]",
+        "profile.referrals": "👥 Amigos invitados: {count}",
+        "profile.earned": "💎 Ganado con referidos: {amount} monedas",
+        "profile.status": "📊 Estado: {status}",
+        "profile.vip_until": "👑 VIP hasta: {date}",
+        "profile.nick_cost": "Cambiar el apodo cuesta {cost} monedas",
+        "profile.change_nick": "✏️ Cambiar apodo",
+        "profile.blocked_authors": "🚫 Autores bloqueados ({count})",
+        # Бан и сервисные сообщения
+        "ban.blocked": "🚫 El acceso al bot está bloqueado para ti.",
+        "bonus.daily": (
+            "🔥 <b>¡Bono diario por volver!</b>\n\n"
+            "Recibido: <b>+{reward}</b> monedas\n"
+            "Días seguidos: <b>{streak}</b>\n\n"
+            "El bono crece con la racha hasta el límite diario de <b>{cap}</b> monedas."
+        ),
+        "db.down": (
+            "⚠️ El bot no está disponible temporalmente (trabajos técnicos). "
+            "Inténtalo de nuevo más tarde, por favor."
+        ),
+    },
 }
 
 # Английские переводы основного массива — по исходному русскому тексту.
 TRANSLATIONS["en"] = {**TRANSLATIONS["en"], **EN_SOURCE}
+
+# Испанские переводы основного массива — по исходному русскому тексту.
+TRANSLATIONS["es"] = {**TRANSLATIONS["es"], **ES_SOURCE}
 
 # Язык текущего апдейта (выставляется BanCheckMiddleware для каждого
 # message/callback; в воркерах/рассылках задаётся явно через set_current_language).
@@ -259,6 +335,10 @@ def t(lang: str | None = None, key: str | None = None, **kwargs) -> str:
     else:
         lang = current_language()
     text = TRANSLATIONS.get(lang, {}).get(key)
+    if text is None and lang not in (DEFAULT_LANGUAGE, "en"):
+        # Для нерусских языков английский понятнее русского: пока строка не
+        # переведена, показываем её по-английски, и только затем по-русски.
+        text = TRANSLATIONS.get("en", {}).get(key)
     if text is None:
         text = TRANSLATIONS.get(DEFAULT_LANGUAGE, {}).get(key)
     if text is None:
