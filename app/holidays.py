@@ -15,6 +15,8 @@
 Постеры ищутся в папке `постеры/` (приоритет), затем в `banners/`.
 Имена файлов заданы в каталоге (поле `poster`): чтобы обновить картинку,
 достаточно положить файл с тем же именем в `постеры/` — код трогать не нужно.
+Для английского интерфейса постер берётся из подпапки `en/` той же папки
+(`banners/en/<имя>`), а если её нет — русский оригинал.
 
 Даты заданы по Москве (MSK, UTC+3): событие начинается в 00:00 MSK дня
 `start_md` и заканчивается в 23:59 MSK дня `end_md`. В БД хранится naive-UTC
@@ -30,7 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.i18n import t
+from app.i18n import current_language, normalize_language, t
 
 # Москва: даты праздников заданы в локальном времени, а не UTC.
 MSK = timezone(timedelta(hours=3))
@@ -38,6 +40,11 @@ MSK = timezone(timedelta(hours=3))
 # Где лежат постеры: пользовательская папка «постеры» приоритетнее
 # репозиторного banners/ (можно переопределить картинку без смены кода).
 POSTER_DIRS = ("постеры", "banners")
+
+# Подпапки с переводами постеров: `постеры/en/<имя>`, `banners/en/<имя>`.
+# Английские копии генерируются нейросетью из русских оригиналов; если для
+# языка файла нет, показывается русский постер (фолбэк в resolve_poster).
+LOCALIZED_POSTER_DIRS = {"en": "en"}
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -186,27 +193,45 @@ def holiday_windows_around(
     return out
 
 
-def resolve_poster(filename: str | None) -> str | None:
+def resolve_poster(filename: str | None, lang: str | None = None) -> str | None:
     """Путь к постеру на диске или None.
 
     Порядок поиска: `постеры/<имя>` (приоритет) -> `banners/<имя>`; каждая
     папка проверяется относительно cwd и корня репозитория (на Vercel/в
     Docker рабочая директория может отличаться).
+
+    `lang` — язык получателя: для него сначала ищется локализованная копия
+    (`постеры/en/<имя>`, затем `banners/en/<имя>`), а если перевода нет —
+    берётся русский оригинал. Переведённые постеры необязательны: отсутствие
+    файла в подпапке языка не ломает показ события. По умолчанию язык берётся
+    из контекста текущего апдейта (см. `app.i18n.current_language`).
     """
     if not filename:
         return None
     name = Path(str(filename)).name  # защита от выхода за пределы папки
-    for folder in POSTER_DIRS:
+    code = normalize_language(lang or current_language())
+    subdir = LOCALIZED_POSTER_DIRS.get(code)
+
+    order: list[tuple[str, str | None]] = []
+    if subdir:
+        # Сначала — переведенные постеры во всех папках, затем оригиналы.
+        order.extend((folder, subdir) for folder in POSTER_DIRS)
+    order.extend((folder, None) for folder in POSTER_DIRS)
+
+    for folder, sub in order:
         for base in (Path(folder), _PROJECT_ROOT / folder):
-            candidate = base / name
+            candidate = base / sub / name if sub else base / name
             if candidate.is_file():
                 return str(candidate)
     return None
 
 
-def resolve_event_poster(event) -> str | None:
-    """Постер события (Event.poster_path из каталога) или None, если файла нет."""
-    return resolve_poster(getattr(event, "poster_path", None))
+def resolve_event_poster(event, lang: str | None = None) -> str | None:
+    """Постер события (Event.poster_path из каталога) или None, если файла нет.
+
+    `lang` — язык получателя: английские копии лежат в подпапках `en/`.
+    """
+    return resolve_poster(getattr(event, "poster_path", None), lang=lang)
 
 
 def build_event_welcome_block(event) -> str:

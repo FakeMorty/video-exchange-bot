@@ -2174,10 +2174,21 @@ async def auto_broadcast_worker(bot):
                     await ensure_holiday_events(session)
                 except Exception:
                     logger.exception("Holiday events ensure failed (non-critical)")
-                pool = await get_auto_broadcast_pool(session)
                 users = (await session.execute(
-                    select(User.telegram_id).where(User.status == "active")
-                )).scalars().all()
+                    select(User.telegram_id, User.language).where(User.status == "active")
+                )).all()
+
+            # Пул ротации (текст карточки + постер события) собирается для
+            # каждого языка интерфейса отдельно: англоязычные пользователи
+            # получают английские тексты и постеры из banners/en/, остальные —
+            # русские оригиналы.
+            users_by_lang: dict[str, list[int]] = {}
+            for tid, user_lang in users:
+                users_by_lang.setdefault(normalize_language(user_lang), []).append(tid)
+            pools: dict[str, list] = {}
+            async with async_session() as session:
+                for lang in users_by_lang:
+                    pools[lang] = await get_auto_broadcast_pool(session, lang=lang)
 
             # Разовая рассылка «событие началось» для запланированных событий
             # (праздничные авто-события и ручные с будущей датой старта).
@@ -2189,37 +2200,42 @@ async def auto_broadcast_worker(bot):
             except Exception:
                 logger.exception("Event announce cycle failed (non-critical)")
 
-            if not pool:
+            if not any(pools.values()):
                 logger.info("Promo rotation: пул пуст (нет шаблонов и событий) — пропуск цикла.")
                 continue
 
-            # Выбираем случайное сообщение из актуального пула
-            item = random.choice(pool)
-            msg_text = item["text"]
-            image = item.get("image_file_id")
-            image_path = item.get("image_path")  # постер события на диске
-            poll_info = item.get("poll")
-            reply_markup = None
-            if poll_info:
-                from app.keyboards import poll_answer_keyboard
-                reply_markup = poll_answer_keyboard(
-                    poll_info["type"], poll_info["id"], poll_info.get("options", [])
-                )
-
             sent = 0
-            for tid in users:
-                try:
-                    if image:
-                        await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
-                    elif image_path:
-                        await bot.send_photo(tid, FSInputFile(image_path), caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
-                    else:
-                        await bot.send_message(tid, msg_text, parse_mode="HTML", reply_markup=reply_markup)
-                    sent += 1
-                    if sent % 30 == 0:
-                        await asyncio.sleep(0.5)
-                except Exception:
-                    pass
+            for lang, lang_users in users_by_lang.items():
+                pool = pools.get(lang) or []
+                if not pool:
+                    continue
+
+                # Выбираем случайное сообщение из актуального пула языка
+                item = random.choice(pool)
+                msg_text = item["text"]
+                image = item.get("image_file_id")
+                image_path = item.get("image_path")  # постер события на диске
+                poll_info = item.get("poll")
+                reply_markup = None
+                if poll_info:
+                    from app.keyboards import poll_answer_keyboard
+                    reply_markup = poll_answer_keyboard(
+                        poll_info["type"], poll_info["id"], poll_info.get("options", [])
+                    )
+
+                for tid in lang_users:
+                    try:
+                        if image:
+                            await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
+                        elif image_path:
+                            await bot.send_photo(tid, FSInputFile(image_path), caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
+                        else:
+                            await bot.send_message(tid, msg_text, parse_mode="HTML", reply_markup=reply_markup)
+                        sent += 1
+                        if sent % 30 == 0:
+                            await asyncio.sleep(0.5)
+                    except Exception:
+                        pass
         except Exception:
             logger.exception("auto_broadcast_worker cycle failed")
             await asyncio.sleep(60)

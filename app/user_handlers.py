@@ -567,6 +567,17 @@ async def process_nickname(message: Message, state: FSMContext):
 # Штатный баннер приветствия. Его можно заменить из админки
 # («🖼 Приветствие» → загрузить баннер): тогда используется file_id из настроек.
 WELCOME_BANNER_PATH = "app/banner.jpg"
+# Английская копия баннера (перевод нейросетью). Если файла нет — отдаётся
+# русский оригинал, поэтому перевод баннера не обязателен.
+WELCOME_BANNER_LOCALIZED = {"en": "app/banner_en.jpg"}
+
+
+def welcome_banner_path(lang: str | None = None) -> str:
+    """Путь к баннеру приветствия для языка интерфейса (фолбэк — русский)."""
+    localized = WELCOME_BANNER_LOCALIZED.get(normalize_language(lang))
+    if localized and os.path.exists(localized):
+        return localized
+    return WELCOME_BANNER_PATH
 # Лимит Telegram на подпись к фото. Приветствие собирается блоками, поэтому при
 # длинном тексте из админки или событии «хвост» уходит отдельным сообщением,
 # а не роняет отправку картинки (раньше весь текст был одной подписью).
@@ -604,7 +615,8 @@ async def build_welcome_blocks(session, user, lang: str) -> tuple[list[str], str
         if events:
             event = max(events, key=lambda e: e.discount_percent)
             blocks.append(build_event_welcome_block(event))
-            event_poster = resolve_event_poster(event)
+            # Постер берётся на языке пользователя (английские копии — в en/).
+            event_poster = resolve_event_poster(event, lang=lang)
     except Exception:
         logger.exception("welcome: не удалось применить активное событие (некритично)")
 
@@ -660,14 +672,16 @@ async def send_welcome_banner(message_or_callback, session, user):
             reply_markup=banner_kb,
         )
 
-    # Приоритет картинок: постер события -> баннер из админки -> app/banner.jpg.
+    # Приоритет картинок: постер события -> баннер из админки -> app/banner.jpg
+    # (для английского интерфейса — app/banner_en.jpg, если он есть).
     sent = False
     if event_poster:
         sent = await _send_photo(FSInputFile(event_poster))
     if not sent and banner_file_id:
         sent = await _send_photo(banner_file_id)
-    if not sent and os.path.exists(WELCOME_BANNER_PATH):
-        sent = await _send_photo(FSInputFile(WELCOME_BANNER_PATH))
+    banner_path = welcome_banner_path(lang)
+    if not sent and os.path.exists(banner_path):
+        sent = await _send_photo(FSInputFile(banner_path))
     if not sent:
         await _send_text()
 
@@ -1479,7 +1493,8 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
         # Постер события: telegram file_id (ручные) или файл на диске
         # (праздничные авто-события из «постеры/» или banners/).
         from app.holidays import resolve_event_poster
-        event_poster = resolve_event_poster(event)
+        # Постер и текст рекламы — на языке зрителя (английские копии в en/).
+        event_poster = resolve_event_poster(event, lang=get_user_language(user))
         if event.image_file_id:
             await callback.message.answer_photo(event.image_file_id, caption=ad_text, parse_mode="HTML", reply_markup=kb)
         elif event_poster:

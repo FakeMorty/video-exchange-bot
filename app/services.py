@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select, func, desc, update, delete, or_, and_, Text
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.i18n import t
+from app.i18n import current_language, language_scope, normalize_language, t
 from app.logger import get_logger, log_error
 from app.models import (
     utc_now,
@@ -4624,19 +4624,25 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
 
     async with async_session() as session:
         users = (await session.execute(
-            select(User.telegram_id, User.first_name).where(User.status == "active")
+            select(User.telegram_id, User.first_name, User.language).where(User.status == "active")
         )).all()
 
     # Caption к фото ограничен 1024 символами — build_event_promo_text при
     # необходимости обрежет длинное описание, иначе send_photo упадёт молча.
-    # Постер события: file_id (ручные) или файл на диске (праздничные авто).
-    poster_path = resolve_event_poster(event)
-    has_image = bool(event.image_file_id or poster_path)
-    max_len = PROMO_CAPTION_MAX if has_image else PROMO_TEXT_MAX
-    text = build_event_promo_text(event, max_len=max_len)
+    # Постер события: file_id (ручные) или файл на диске (праздничные авто),
+    # для английского интерфейса — копия из подпапки en/. Текст и постер
+    # готовятся один раз на язык, а не на каждого получателя.
+    variants: dict[str, tuple[str, str | None]] = {}
+    for lang in {normalize_language(lang) for _, _, lang in users} | {"ru"}:
+        with language_scope(lang):
+            poster_path = resolve_event_poster(event, lang=lang)
+            has_image = bool(event.image_file_id or poster_path)
+            max_len = PROMO_CAPTION_MAX if has_image else PROMO_TEXT_MAX
+            variants[lang] = (build_event_promo_text(event, max_len=max_len), poster_path)
 
     sent = 0
-    for tid, first_name in users:
+    for tid, first_name, user_lang in users:
+        text, poster_path = variants.get(normalize_language(user_lang)) or variants["ru"]
         try:
             if event.image_file_id:
                 await bot.send_photo(tid, event.image_file_id, caption=text, parse_mode="HTML")
@@ -4771,7 +4777,10 @@ def build_event_promo_text(event: Event, max_len: int | None = None) -> str:
     return text
 
 
-async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
+async def get_auto_broadcast_pool(
+    session: AsyncSession,
+    lang: str | None = None,
+) -> list[dict]:
     """Пул сообщений для автоматической ротации:
 
     - активные промо-сообщения из БД (дефолтные + добавленные админом);
@@ -4780,48 +4789,54 @@ async def get_auto_broadcast_pool(session: AsyncSession) -> list[dict]:
 
     Возвращает список словарей {"text": str, "image_file_id": str|None,
     "image_path": str|None, "poll": dict|None}; `image_path` — постер
-    праздничного события на диске (папки «постеры/» или banners/).
+    праздничного события на диске (папки «постеры/» или banners/, для
+    английского интерфейса — подпапка en/).
+
+    `lang` — язык получателя ротации: текст и постер события готовятся на нём
+    (None = язык из контекста текущего апдейта).
     """
     from app.holidays import resolve_event_poster
 
-    pool: list[dict] = []
-    messages = (await session.execute(
-        select(PromoMessage).where(PromoMessage.is_active == True).order_by(PromoMessage.id.asc())  # noqa: E712
-    )).scalars().all()
-    for m in messages:
-        pool.append({"text": m.text, "image_file_id": None})
+    with language_scope(lang):
 
-    events = await get_active_events(session)
-    for ev in events:
-        # Постер события: telegram file_id (ручные события) или файл на диске
-        # (праздничные авто-события, папки «постеры/» и banners/).
-        poster_path = resolve_event_poster(ev)
-        max_len = PROMO_CAPTION_MAX if (ev.image_file_id or poster_path) else PROMO_TEXT_MAX
-        pool.append({
-            "text": build_event_promo_text(ev, max_len=max_len),
-            "image_file_id": ev.image_file_id,
-            "image_path": poster_path,
-        })
+        pool: list[dict] = []
+        messages = (await session.execute(
+            select(PromoMessage).where(PromoMessage.is_active == True).order_by(PromoMessage.id.asc())  # noqa: E712
+        )).scalars().all()
+        for m in messages:
+            pool.append({"text": m.text, "image_file_id": None})
 
-    # Активные опросы тоже участвуют в промо-ротации: напоминают о себе
-    # случайным пользователям наравне с промо-сообщениями и событиями.
-    polls = (await session.execute(
-        select(AdminPoll).where(AdminPoll.is_active == True).order_by(AdminPoll.id.asc())  # noqa: E712
-    )).scalars().all()
-    for poll in polls:
-        try:
-            options = json.loads(poll.options_json or "[]")
-        except (TypeError, json.JSONDecodeError):
-            options = []
-        reward = int(Decimal(str(poll.reward or Decimal("100.00"))))
-        pool.append({
-            "text": (
-                t('📊 <b>Опрос от администрации</b>\n\n{question}\n\nПройди опрос один раз и получи <b>{reward} монет</b>.', question=poll.question, reward=reward)
-            ),
-            "image_file_id": None,
-            "poll": {"id": poll.id, "type": poll.poll_type, "options": options},
-        })
-    return pool
+        events = await get_active_events(session)
+        for ev in events:
+            # Постер события: telegram file_id (ручные события) или файл на диске
+            # (праздничные авто-события, папки «постеры/» и banners/).
+            poster_path = resolve_event_poster(ev, lang=lang)
+            max_len = PROMO_CAPTION_MAX if (ev.image_file_id or poster_path) else PROMO_TEXT_MAX
+            pool.append({
+                "text": build_event_promo_text(ev, max_len=max_len),
+                "image_file_id": ev.image_file_id,
+                "image_path": poster_path,
+            })
+
+        # Активные опросы тоже участвуют в промо-ротации: напоминают о себе
+        # случайным пользователям наравне с промо-сообщениями и событиями.
+        polls = (await session.execute(
+            select(AdminPoll).where(AdminPoll.is_active == True).order_by(AdminPoll.id.asc())  # noqa: E712
+        )).scalars().all()
+        for poll in polls:
+            try:
+                options = json.loads(poll.options_json or "[]")
+            except (TypeError, json.JSONDecodeError):
+                options = []
+            reward = int(Decimal(str(poll.reward or Decimal("100.00"))))
+            pool.append({
+                "text": (
+                    t('📊 <b>Опрос от администрации</b>\n\n{question}\n\nПройди опрос один раз и получи <b>{reward} монет</b>.', question=poll.question, reward=reward)
+                ),
+                "image_file_id": None,
+                "poll": {"id": poll.id, "type": poll.poll_type, "options": options},
+            })
+        return pool
 
 
 async def broadcast_sale_to_users(bot, sale: ActiveSale) -> int:
