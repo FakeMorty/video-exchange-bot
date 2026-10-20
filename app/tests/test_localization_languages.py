@@ -119,3 +119,66 @@ def test_poster_for_language_without_folder_uses_english():
     assert "/en/" in resolve_poster("mar_8.jpg", lang="es").replace("\\", "/")
     ru = resolve_poster("mar_8.jpg", lang="ru").replace("\\", "/")
     assert "/en/" not in ru
+
+
+def _mini_app_i18n_blocks() -> list[dict[str, list[tuple[str, str]]]]:
+    """JS-словари Mini App из app/main.py: [{язык: [(ключ, значение)]}].
+
+    Внутри страниц Mini App свои словари (`const I18N = {ru: {...}, en: {...}}`),
+    они не видны из Python — поэтому разбираем исходник: считаем скобки, следя
+    за кавычками (в значениях попадаются `\\n` и экранированные кавычки).
+    """
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "main.py"
+    text = src.read_text(encoding="utf-8")
+    blocks = []
+    for m in re.finditer(r"\bI18N\s*=\s*\{", text):
+        i = text.index("{", m.start())
+        depth = 0
+        in_str = esc = False
+        while i < len(text):
+            ch = text[i]
+            if in_str:
+                esc = not esc and ch == "\\"
+                if ch == '"' and not esc:
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        body = text[text.index("{", m.start()): i + 1]
+        langs = {}
+        for lang, inner in re.findall(r'(\w+):\s*\{\n((?:.*?\n)*?)\s*\}', body):
+            langs[lang] = re.findall(r'"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"', inner)
+        blocks.append(langs)
+    return blocks
+
+
+def test_mini_app_is_translated_to_spanish_with_placeholders_intact():
+    """Страницы Mini App переведены полностью и без потери плейсхолдеров.
+
+    Это второй, отдельный от бота массив строк: словари лежат прямо в JS-коде
+    страниц, поэтому Python-тесты их не видят — проверяем по исходнику.
+    """
+    blocks = _mini_app_i18n_blocks()
+    assert len(blocks) >= 4, f"ожидали 4 словаря Mini App, нашли {len(blocks)}"
+    for n, langs in enumerate(blocks, 1):
+        assert "es" in langs, f"Mini App, словарь {n}: нет испанского"
+        ru_keys = [k for k, _ in langs["ru"]]
+        assert [k for k, _ in langs["es"]] == ru_keys, f"Mini App, словарь {n}: ключи es != ru"
+        for rk, (_, ev) in zip(ru_keys, langs["es"]):
+            assert re.findall(r"\{(\w+)\}", rk) == re.findall(r"\{(\w+)\}", ev), (
+                f"Mini App, словарь {n}: потерян плейсхолдер в {rk!r}"
+            )
+        # перевод действительно отличается от русского там, где он есть и в en
+        same_as_ru = [k for (k, v), (_, rv) in zip(langs["es"], langs["ru"]) if v == rv]
+        en_differs = [k for (k, v), (_, rv) in zip(langs["en"], langs["ru"]) if v != rv]
+        assert not [k for k in en_differs if k in same_as_ru], (
+            f"Mini App, словарь {n}: не переведено {[k for k in en_differs if k in same_as_ru][:3]}"
+        )
