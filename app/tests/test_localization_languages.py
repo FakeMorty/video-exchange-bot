@@ -23,6 +23,7 @@ from app.i18n import (
 )
 from app.i18n_en import EN_SOURCE
 from app.i18n_es import ES_SOURCE
+from app.i18n_pt import PT_SOURCE
 from app.keyboards import language_keyboard, menu_button_variants
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
@@ -44,14 +45,14 @@ def test_spanish_menu_labels_are_translated():
     assert t("es", "menu.watch") in menu_button_variants("watch")
 
 
-@pytest.mark.parametrize("lang", ["en", "es"])
+@pytest.mark.parametrize("lang", ["en", "es", "pt"])
 def test_semantic_keys_are_fully_translated(lang):
     """Все семантические ключи русского словаря переведены на язык."""
     missing = [k for k in TRANSLATIONS["ru"] if k not in TRANSLATIONS[lang]]
     assert not missing, f"не переведены: {missing}"
 
 
-@pytest.mark.parametrize("lang", ["en", "es"])
+@pytest.mark.parametrize("lang", ["en", "es", "pt"])
 def test_placeholders_match_russian_source(lang):
     """Плейсхолдеры в переводе должны повторять русский исходник.
 
@@ -62,23 +63,24 @@ def test_placeholders_match_russian_source(lang):
         assert set(_PLACEHOLDER.findall(translated)) == set(_PLACEHOLDER.findall(ru_text)), key
 
 
-@pytest.mark.parametrize("lang", ["en", "es"])
+@pytest.mark.parametrize("lang", ["en", "es", "pt"])
 def test_source_dictionary_placeholders_match_keys(lang):
     """То же для массовых словарей: ключ — русская строка, значение — перевод."""
-    source = {"en": EN_SOURCE, "es": ES_SOURCE}[lang]
+    source = {"en": EN_SOURCE, "es": ES_SOURCE, "pt": PT_SOURCE}[lang]
     for ru_text, translated in source.items():
         assert set(_PLACEHOLDER.findall(translated)) == set(_PLACEHOLDER.findall(ru_text)), (
             f"{lang}: плейсхолдеры не совпадают в строке {ru_text[:60]!r}"
         )
 
 
-def test_spanish_source_keys_are_a_subset_of_english():
-    """Испанский словарь не должен содержать ключей, которых нет в английском.
+@pytest.mark.parametrize("lang,source", [("es", ES_SOURCE), ("pt", PT_SOURCE)])
+def test_translation_keys_are_a_subset_of_english(lang, source):
+    """Словарь языка не должен содержать ключей, которых нет в английском.
 
     Иначе перевод «висел» бы на строке, которой в боте уже нет.
     """
-    extra = set(ES_SOURCE) - set(EN_SOURCE)
-    assert not extra, f"лишние ключи: {list(extra)[:5]}"
+    extra = set(source) - set(EN_SOURCE)
+    assert not extra, f"{lang}: лишние ключи: {list(extra)[:5]}"
 
 
 def test_spanish_covers_every_string_of_the_bot():
@@ -182,3 +184,19 @@ def test_mini_app_is_translated_to_spanish_with_placeholders_intact():
         assert not [k for k in en_differs if k in same_as_ru], (
             f"Mini App, словарь {n}: не переведено {[k for k in en_differs if k in same_as_ru][:3]}"
         )
+
+
+def test_portuguese_is_supported_and_shown_in_picker():
+    assert "pt" in SUPPORTED_LANGUAGES
+    assert normalize_language("pt") == "pt"
+    assert normalize_language("pt-BR") == "pt"
+    assert language_label("pt") == "🇧🇷 Português"
+    labels = [btn.text for row in language_keyboard().inline_keyboard for btn in row]
+    assert any("Português" in lbl for lbl in labels)
+
+
+def test_portuguese_menu_labels_are_translated():
+    assert t("pt", "menu.watch") == "🎬 Assistir"
+    assert t("pt", "menu.buy") == "🛍 Loja"
+    # Кнопку на португальском обработчик должен узнавать так же, как русскую.
+    assert t("pt", "menu.watch") in menu_button_variants("watch")

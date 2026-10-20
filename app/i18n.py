@@ -39,6 +39,7 @@ from contextvars import ContextVar
 # чтобы файл ядра оставался обозримым (тысячи пар «русский → английский»).
 from app.i18n_en import EN_SOURCE
 from app.i18n_es import ES_SOURCE
+from app.i18n_pt import PT_SOURCE
 
 DEFAULT_LANGUAGE = "ru"
 
@@ -51,6 +52,7 @@ SUPPORTED_LANGUAGES: dict[str, tuple[str, str]] = {
     "ru": ("🇷🇺", "Русский"),
     "en": ("🇬🇧", "English"),
     "es": ("🇪🇸", "Español"),
+    "pt": ("🇧🇷", "Português"),
 }
 
 # Семантические переводы (короткие подписи меню, профиля, приветствия и т.п.).
@@ -255,6 +257,73 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Inténtalo de nuevo más tarde, por favor."
         ),
     },
+    "pt": {
+        # Кнопки главного меню
+        "menu.watch": "🎬 Assistir",
+        "menu.playlists": "🎵 Playlists",
+        "menu.upload": "📤 Enviar",
+        "menu.profile": "👤 Perfil",
+        "menu.buy": "🛍 Loja",
+        "menu.offers": "📢 Ofertas",
+        "menu.referrals": "👥 Indicações",
+        "menu.games": "🎮 Jogos",
+        "menu.tops": "🏆 Ranking",
+        "menu.promo": "🎟 Cupons",
+        "menu.feedback": "💬 Contato",
+        "menu.rules": "📜 Regras",
+        "menu.faq": "ℹ️ Ajuda",
+        "menu.admin": "🔧 Admin",
+        "menu.lang": "🌐 Idioma",
+        # Выбор языка
+        "lang.title": "🌐 <b>Escolha o idioma do bot</b>",
+        "lang.changed_alert": "✅ Idioma: 🇧🇷 português",
+        # Главное меню
+        "main_menu.title": "🏠 <b>Menu principal</b>\n\nEscolha o que fazer 👇",
+        "main_menu.button": "🏠 Menu principal",
+        # Приветствие / старт
+        "welcome.greeting": "👋 Olá, <b>{name}</b>{vip}!\n\n💰 Saldo: <b>{balance}</b> moedas",
+        "welcome.pitch": (
+            "Você chegou ao projeto mais avançado e fora do comum no nicho de troca de vídeos. "
+            "Tem muito conteúdo, uma administração atenciosa e humana, e condições de uso honestas. 📹🎬👥\n\n"
+            "O bot é feito por pessoas, para pessoas. 🤖🙏 Cada mensagem que você manda é lida pelos nossos "
+            "administradores (são só 2). 👀❤️ Cada pedido seu toca os nossos corações. 💓 "
+            "Por isso vamos fazer o possível por você. 👍\n\n"
+            "Relaxe e seja bem-vindo ao Wseksbot! 😌📣"
+        ),
+        "welcome.no_nickname_hint": (
+            "🎬 Sem apelido você pode ver só 3 fotos ou vídeos. "
+            "Depois defina um apelido grátis no perfil — ele também será necessário para os envios."
+        ),
+        # Отмена FSM-сценариев
+        "cancel.done": "✅ Modo reiniciado. Toque em /start ou escolha uma ação no menu.",
+        "cancel.aborted": "❌ Ação cancelada.",
+        # Профиль
+        "profile.title": "👤 <b>Perfil</b>",
+        "profile.nick": "🏷 Apelido:",
+        "profile.telegram_id": "🆔 Telegram ID:",
+        "profile.balance": "💰 Saldo: <b>{balance}</b> moedas",
+        "profile.level": "🏆 Nível: <b>{level}</b>",
+        "profile.xp": "⭐ XP: {current}/{needed} [{bar}]",
+        "profile.referrals": "👥 Amigos convidados: {count}",
+        "profile.earned": "💎 Ganho com indicações: {amount} moedas",
+        "profile.status": "📊 Status: {status}",
+        "profile.vip_until": "👑 VIP até: {date}",
+        "profile.nick_cost": "Trocar de apelido custa {cost} moedas",
+        "profile.change_nick": "✏️ Trocar apelido",
+        "profile.blocked_authors": "🚫 Autores bloqueados ({count})",
+        # Служебные уведомления (middleware)
+        "ban.blocked": "🚫 Seu acesso ao bot foi bloqueado.",
+        "bonus.daily": (
+            "🔥 <b>Bônus diário de volta!</b>\n\n"
+            "Creditado: <b>+{reward}</b> moedas\n"
+            "Dias seguidos: <b>{streak}</b>\n\n"
+            "O bônus cresce com a sequência até o limite diário — <b>{cap}</b> moedas."
+        ),
+        "db.down": (
+            "⚠️ O bot está temporariamente indisponível (manutenção em andamento). "
+            "Tente de novo mais tarde, por favor."
+        ),
+    },
 }
 
 # Английские переводы основного массива — по исходному русскому тексту.
@@ -262,6 +331,9 @@ TRANSLATIONS["en"] = {**TRANSLATIONS["en"], **EN_SOURCE}
 
 # Испанские переводы основного массива — по исходному русскому тексту.
 TRANSLATIONS["es"] = {**TRANSLATIONS["es"], **ES_SOURCE}
+
+# Португальские переводы основного массива — по исходному русскому тексту.
+TRANSLATIONS["pt"] = {**TRANSLATIONS["pt"], **PT_SOURCE}
 
 # Язык текущего апдейта (выставляется BanCheckMiddleware для каждого
 # message/callback; в воркерах/рассылках задаётся явно через set_current_language).
