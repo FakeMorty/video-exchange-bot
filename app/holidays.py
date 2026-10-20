@@ -67,55 +67,61 @@ class HolidaySpec:
 
 # Окна подобраны так, чтобы события не пересекались и длились ~неделю,
 # а праздник попадал в конец окна (скидки действуют до и в сам день).
+#
+# ВАЖНО: `discount_percent` — ровно то число, что напечатано на основном
+# постере праздника в папке «постеры/» (прочитано с картинок). Если менять
+# скидку здесь, постер надо перерисовывать вместе с ней — иначе бот в
+# сообщении обещает одно, а пользователь видит на картинке другое.
+# Рассинхрон ловит тест test_catalog_discounts_match_posters.
 HOLIDAYS: list[HolidaySpec] = [
     HolidaySpec(
         slug="christmas",
         name="🎅 Рождественская распродажа",
         description="Рождественская распродажа: праздничные скидки в магазине — успей до конца недели!",
         start_md=(12, 22), end_md=(12, 29),
-        discount_percent=15, poster="christmas.jpg",
+        discount_percent=25, poster="christmas.jpg",
     ),
     HolidaySpec(
         slug="new_year",
         name="🎄 Новогодняя неделя",
         description="Новогодняя неделя в боте! Запасайся монетами, забирай VIP по праздничной цене и открывай лутбоксы — скидки всю неделю.",
         start_md=(12, 30), end_md=(1, 6),
-        discount_percent=20, poster="new_year.jpg",
+        discount_percent=30, poster="new_year.jpg",
     ),
     HolidaySpec(
         slug="valentine",
         name="💝 Неделя ко Дню святого Валентина",
         description="Неделя ко Дню всех влюблённых: скидки на всё в магазине — порадуй себя и того, кто тебе дорог!",
         start_md=(2, 7), end_md=(2, 14),
-        discount_percent=15, poster="valentine.jpg",
+        discount_percent=25, poster="valentine.jpg",
     ),
     HolidaySpec(
         slug="feb_23",
         name="⭐ Неделя к 23 Февраля",
         description="Праздничная неделя ко Дню защитника Отечества: скидки на всё в магазине — порадуй себя и друзей!",
         start_md=(2, 17), end_md=(2, 24),
-        discount_percent=15, poster="feb_23.jpg",
+        discount_percent=23, poster="feb_23.jpg",
     ),
     HolidaySpec(
         slug="mar_8",
         name="🌷 Неделя к 8 Марта",
         description="Праздничная неделя к Международному женскому дню: весенние скидки на всё в магазине!",
         start_md=(3, 2), end_md=(3, 9),
-        discount_percent=15, poster="mar_8.jpg",
+        discount_percent=25, poster="mar_8.jpg",
     ),
     HolidaySpec(
         slug="apr_1",
         name="😂 Неделя смеха",
         description="Первоапрельская неделя: несерьёзные цены — серьёзные скидки на всё в магазине!",
         start_md=(3, 29), end_md=(4, 5),
-        discount_percent=10, poster="apr_1.jpg",
+        discount_percent=15, poster="apr_1.jpg",
     ),
     HolidaySpec(
         slug="cosmonautics",
         name="🚀 Неделя ко Дню космонавтики",
         description="Неделя ко Дню космонавтики: скидки на всё — взлетаем вместе с ценами вниз!",
         start_md=(4, 6), end_md=(4, 13),
-        discount_percent=10, poster="cosmonautics.jpg",
+        discount_percent=12, poster="cosmonautics.jpg",
     ),
     HolidaySpec(
         slug="may_1",
@@ -129,28 +135,28 @@ HOLIDAYS: list[HolidaySpec] = [
         name="🎖 Неделя к 9 Мая",
         description="Праздничная неделя ко Дню Победы: скидки в магазине — с праздником!",
         start_md=(5, 3), end_md=(5, 10),
-        discount_percent=15, poster="may_9.jpg",
+        discount_percent=45, poster="may_9.jpg",
     ),
     HolidaySpec(
         slug="jun_1",
         name="☀️ Летняя неделя скидок",
         description="Неделя к 1 июня: летние скидки на всё — начни лето с обновками в боте!",
         start_md=(5, 26), end_md=(6, 2),
-        discount_percent=10, poster="jun_1.jpg",
+        discount_percent=15, poster="jun_1.jpg",
     ),
     HolidaySpec(
         slug="sep_1",
         name="📚 Неделя к 1 Сентября",
         description="Неделя ко Дню знаний: скидки на всё — начни сезон с обновками!",
         start_md=(8, 26), end_md=(9, 2),
-        discount_percent=10, poster="sep_1.jpg",
+        discount_percent=20, poster="sep_1.jpg",
     ),
     HolidaySpec(
         slug="halloween",
         name="🎃 Неделя Хэллоуина",
         description="Жуткая неделя скидок: Хэллоуин в боте — монеты и VIP по сниженным ценам!",
         start_md=(10, 25), end_md=(10, 31),
-        discount_percent=15, poster="halloween.jpg",
+        discount_percent=50, poster="halloween.jpg",
     ),
     HolidaySpec(
         # Окно сдвинуто на 1–8 ноября: раньше было 29.10–5.11 и пересекалось
@@ -159,7 +165,7 @@ HOLIDAYS: list[HolidaySpec] = [
         name="🎆 Неделя к 4 Ноября",
         description="Праздничная неделя ко Дню народного единства: осенние скидки в магазине!",
         start_md=(11, 1), end_md=(11, 8),
-        discount_percent=15, poster="nov_4.jpg",
+        discount_percent=20, poster="nov_4.jpg",
     ),
 ]
 

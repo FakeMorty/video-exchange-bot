@@ -151,3 +151,28 @@ def test_halloween_and_november_windows_do_not_clash():
     assert (hw_start + timedelta(hours=3)).date() == date(2026, 10, 25)
     assert (nv_start + timedelta(hours=3)).date() == date(2026, 11, 1)
     assert (nv_start + timedelta(hours=3)).date() <= date(2026, 11, 4) <= (nv_end + timedelta(hours=3)).date()
+
+
+def test_catalog_discounts_match_posters():
+    """Скидка в каталоге равна числу, напечатанному на основном постере.
+
+    Числа прочитаны с постеров в «постеры/» через OCR. Менять скидку нужно
+    в двух местах сразу — в каталоге и на картинке, иначе пользователь видит
+    на постере одно, а бот начисляет другое.
+    """
+    expected = {
+        "christmas": 25,
+        "new_year": 30,
+        "valentine": 25,
+        "feb_23": 23,
+        "mar_8": 25,
+        "apr_1": 15,
+        "cosmonautics": 12,
+        "may_1": 15,
+        "may_9": 45,
+        "jun_1": 15,
+        "sep_1": 20,
+        "halloween": 50,
+        "nov_4": 20,
+    }
+    assert {spec.slug: spec.discount_percent for spec in HOLIDAYS} == expected

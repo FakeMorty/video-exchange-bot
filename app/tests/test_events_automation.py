@@ -253,7 +253,8 @@ def test_event_card_and_welcome_block_are_translated():
         assert "Скидка" in card
         welcome = build_event_welcome_block(ev)
         assert "Сейчас идёт событие" in welcome
-        assert "20%" in welcome
+        # Скидка берётся из каталога (и совпадает с числом на постере).
+        assert f"{spec.discount_percent}%" in welcome
     with language_scope("en"):
         card = build_event_promo_text(ev)
         assert "New Year week" in card
