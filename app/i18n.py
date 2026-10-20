@@ -73,7 +73,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "main_menu.title": "🏠 <b>Главное меню</b>\n\nВыбери, чем заняться 👇",
         "main_menu.button": "🏠 Главное меню",
         # Приветствие / старт
-        "welcome.greeting": "👋 Привет, <b>{name}</b>{vip}!\n💰 Твой баланс: <b>{balance}</b> монет",
+        "welcome.greeting": "👋 Привет, <b>{name}</b>{vip}!\n\n💰 Баланс: <b>{balance}</b> монет",
+        "welcome.pitch": (
+            "Вы попали на наиболее продвинутый и необычный проект в нише обмена видео. "
+            "Вас ждёт куча контента, отзывчивая и живая администрация, а так же честные условия пользования. 📹🎬👥\n\n"
+            "Бот сделан от людей для людей. 🤖🙏 Каждое ваше обращение читается нашими администраторами (их всего 2). 👀❤️ "
+            "Каждое ваше пожелание трогает наши сердечки. 💓 Посему мы будем стараться для вас. 👍\n\n"
+            "Расслабьтесь и добро пожаловать в Wseksbot! 😌📣"
+        ),
         "welcome.no_nickname_hint": (
             "🎬 Без ника можно посмотреть всего 3 фото или видео. "
             "Затем установи ник бесплатно в профиле; для загрузок он тоже понадобится."
@@ -132,7 +139,15 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "main_menu.title": "🏠 <b>Main menu</b>\n\nPick what to do 👇",
         "main_menu.button": "🏠 Main menu",
         # Welcome / start
-        "welcome.greeting": "👋 Hi, <b>{name}</b>{vip}!\n💰 Your balance: <b>{balance}</b> coins",
+        "welcome.greeting": "👋 Hi, <b>{name}</b>{vip}!\n\n💰 Balance: <b>{balance}</b> coins",
+        "welcome.pitch": (
+            "You've joined the most advanced and unusual project in the video exchange niche. "
+            "Tons of content, a responsive and living admin team, and honest terms are waiting for you. 📹🎬👥\n\n"
+            "The bot is made by people, for people. 🤖🙏 Every message you send is read by our admins "
+            "(there are only 2 of them). 👀❤️ Every wish of yours touches our hearts. 💓 "
+            "That's why we'll do our best for you. 👍\n\n"
+            "Relax and welcome to Wseksbot! 😌📣"
+        ),
         "welcome.no_nickname_hint": (
             "🎬 Without a nickname you can watch just 3 photos or videos. "
             "Then set a nickname for free in your profile — you'll need it for uploads too."
