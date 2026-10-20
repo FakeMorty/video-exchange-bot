@@ -81,11 +81,28 @@ def test_spanish_source_keys_are_a_subset_of_english():
     assert not extra, f"лишние ключи: {list(extra)[:5]}"
 
 
-def test_untranslated_string_falls_back_to_english_not_russian():
-    """Пока строка не переведена — показываем английский, а не русский."""
-    untranslated = next(k for k in EN_SOURCE if k not in ES_SOURCE)
-    assert t("es", untranslated) == EN_SOURCE[untranslated]
-    assert t("es", untranslated) != untranslated
+def test_spanish_covers_every_string_of_the_bot():
+    """Испанский закрыт полностью: непереведённых строк не осталось.
+
+    Тест страхует от обратного: если в боте появится новая русская строка,
+    она сначала должна попасть и в испанский словарь (язык вводится целиком).
+    """
+    missing = [k for k in EN_SOURCE if k not in ES_SOURCE]
+    assert not missing, f"не переведено на испанский: {len(missing)} шт., например {missing[:3]!r}"
+
+
+def test_untranslated_string_falls_back_to_english_not_russian(monkeypatch):
+    """Пока строки нет в словаре языка — показываем английский, а не русский.
+
+    Испанский сейчас полный, поэтому строку временно убираем из словаря сами:
+    фолбэк должен работать и для следующих языков, которые переводятся по частям.
+    """
+    from app import i18n
+
+    probe = next(k for k in EN_SOURCE if EN_SOURCE[k] != k)
+    monkeypatch.delitem(i18n.TRANSLATIONS["es"], probe, raising=False)
+    assert t("es", probe) == EN_SOURCE[probe]
+    assert t("es", probe) != probe
 
 
 def test_russian_never_falls_back_to_english():
