@@ -1,4 +1,4 @@
-"""Регрессионные тесты многоязычности (русский -> английский -> испанский).
+"""Регрессионные тесты многоязычности (русский -> английский -> испанский -> португальский).
 
 Проверяют то, что легко сломать при добавлении языка:
 * язык появляется в списке и в кнопке «🌐 Язык»;
@@ -10,6 +10,8 @@
 * постер для языка без собственной папки берётся из `en/`.
 """
 import re
+import shutil
+import tempfile
 
 import pytest
 
@@ -162,7 +164,8 @@ def _mini_app_i18n_blocks() -> list[dict[str, list[tuple[str, str]]]]:
     return blocks
 
 
-def test_mini_app_is_translated_to_spanish_with_placeholders_intact():
+@pytest.mark.parametrize("lang", ["es", "pt"])
+def test_mini_app_is_translated_with_placeholders_intact(lang: str):
     """Страницы Mini App переведены полностью и без потери плейсхолдеров.
 
     Это второй, отдельный от бота массив строк: словари лежат прямо в JS-коде
@@ -171,19 +174,63 @@ def test_mini_app_is_translated_to_spanish_with_placeholders_intact():
     blocks = _mini_app_i18n_blocks()
     assert len(blocks) >= 4, f"ожидали 4 словаря Mini App, нашли {len(blocks)}"
     for n, langs in enumerate(blocks, 1):
-        assert "es" in langs, f"Mini App, словарь {n}: нет испанского"
+        assert lang in langs, f"Mini App, словарь {n}: нет языка {lang}"
         ru_keys = [k for k, _ in langs["ru"]]
-        assert [k for k, _ in langs["es"]] == ru_keys, f"Mini App, словарь {n}: ключи es != ru"
-        for rk, (_, ev) in zip(ru_keys, langs["es"]):
-            assert re.findall(r"\{(\w+)\}", rk) == re.findall(r"\{(\w+)\}", ev), (
+        assert [k for k, _ in langs[lang]] == ru_keys, (
+            f"Mini App, словарь {n}: ключи {lang} != ru"
+        )
+        for rk, (_, lv) in zip(ru_keys, langs[lang]):
+            assert re.findall(r"\{(\w+)\}", rk) == re.findall(r"\{(\w+)\}", lv), (
                 f"Mini App, словарь {n}: потерян плейсхолдер в {rk!r}"
             )
         # перевод действительно отличается от русского там, где он есть и в en
-        same_as_ru = [k for (k, v), (_, rv) in zip(langs["es"], langs["ru"]) if v == rv]
+        same_as_ru = [k for (k, v), (_, rv) in zip(langs[lang], langs["ru"]) if v == rv]
         en_differs = [k for (k, v), (_, rv) in zip(langs["en"], langs["ru"]) if v != rv]
         assert not [k for k in en_differs if k in same_as_ru], (
-            f"Mini App, словарь {n}: не переведено {[k for k in en_differs if k in same_as_ru][:3]}"
+            f"Mini App, словарь {n}: не переведено "
+            f"{[k for k in en_differs if k in same_as_ru][:3]}"
         )
+
+
+def test_mini_app_scripts_are_valid_javascript():
+    """JS страниц Mini App разбирается парсером.
+
+    Словари лежат внутри Python-строк, поэтому escape-последовательности
+    проходят через Питон: опечатка в `\\n` превращается в настоящий перевод
+    строки внутри JS-строки — и страница целиком падает с SyntaxError,
+    ещё до того как что-то покажет пользователю. Ловим это на тестах.
+    """
+    import ast
+    import pathlib
+    import subprocess
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "main.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    pages = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and re.search(r"\bI18N\s*=\s*\{", node.value)
+    ]
+    assert len(pages) >= 4, f"ожидали 4 страницы Mini App, нашли {len(pages)}"
+    node_bin = shutil.which("node")
+    if not node_bin:  # без Node.js проверяем хотя бы отсутствие «сырых» переносов
+        for page in pages:
+            for script in re.findall(r"<script[^>]*>(.*?)</script>", page, re.S):
+                for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', script):
+                    assert "\n" not in lit, f"сырой перенос строки в JS-строке: {lit!r}"
+        return
+    for i, page in enumerate(pages):
+        for j, script in enumerate(re.findall(r"<script[^>]*>(.*?)</script>", page, re.S)):
+            if "I18N" not in script:
+                continue
+            tmp = pathlib.Path(tempfile.gettempdir()) / f"mini_app_{i}_{j}.js"
+            tmp.write_text(script, encoding="utf-8")
+            res = subprocess.run(
+                [node_bin, "--check", str(tmp)], capture_output=True, text=True
+            )
+            assert res.returncode == 0, f"Mini App страница {i}, script {j}: {res.stderr}"
 
 
 def test_portuguese_is_supported_and_shown_in_picker():
