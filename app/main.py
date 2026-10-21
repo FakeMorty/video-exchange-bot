@@ -1125,7 +1125,7 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
         "❌ Сбой сервера ставок.": "❌ Сбой сервера ставок.",
         "Открыта": "Открыта",
         "Идет розыгрыш!": "Идет розыгрыш!",
-        "Завершена": "Завершена",
+        "Завершена": "Завершена"
       },
       en: {
         "Lottery Live — Секслото Шоу 🎰": "Lottery Live — Sexloto Show 🎰",
@@ -1193,11 +1193,147 @@ async def lottery_live_page_handler(request: web.Request) -> web.Response:
         "❌ Сбой сервера ставок.": "❌ Betting server failure.",
         "Открыта": "Open",
         "Идет розыгрыш!": "Drawing now!",
-        "Завершена": "Finished",
+        "Завершена": "Finished"
       },
+      es: {
+        "Lottery Live — Секслото Шоу 🎰": "Lottery Live — Show Sexloto 🎰",
+        "Гость": "Invitado",
+        "Загрузка...": "Cargando...",
+        "📱 Наклоняй телефон или таскай шары пальцем!": "📱 ¡Inclina el móvil o arrastra las bolas con el dedo!",
+        "⏱ До розыгрыша:": "⏱ Hasta el sorteo:",
+        "Призовой фонд 💰": "Fondo de premios 💰",
+        "Цена билета:": "Precio del boleto:",
+        "Куплено билетов:": "Boletos comprados:",
+        "Старт розыгрыша:": "Inicio del sorteo:",
+        "🔥 Акции и Ставки Секслото 🔥": "🔥 Promos y apuestas de Sexloto 🔥",
+        "🎟 Купить билеты Секслото": "🎟 Comprar boletos de Sexloto",
+        "Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!": "¡Prueba tu suerte y elige cuántos boletos quieres llevarte en esta ronda!",
+        "Купить билеты по": "Comprar boletos por",
+        "💎 Монеты за звёзды": "💎 Monedas por estrellas",
+        "Получи мгновенный буст баланса монет за Telegram Stars!": "¡Recibe un impulso instantáneo de monedas con Telegram Stars!",
+        "Купить монеты": "Comprar monedas",
+        "📋 Бесплатные монеты": "📋 Monedas gratis",
+        "Выполняй задания и подписки в разделе Офферы!": "¡Completa tareas y suscripciones en la sección Ofertas!",
+        "Открыть Офферы": "Abrir Ofertas",
+        "🎯 Ставки на бочонки": "🎯 Apuestas a los barriles",
+        "Угадай, чётный или нечётный выпадет первый/последний бочонок!": "¡Adivina si el primer o el último barril será par o impar!",
+        "Ставка на 1-й": "Apuesta al 1.º",
+        "Ставка на последний": "Apuesta al último",
+        "↔ Свайпай баннеры влево/вправо": "↔ Desliza los banners a la izquierda/derecha",
+        "🔵 Выпавшие бочонки «Секслото» 🔵": "🔵 Barriles sorteados «Sexloto» 🔵",
+        "Розыгрыш еще не начался...": "El sorteo todavía no ha empezado...",
+        "🎟 Купить билеты": "🎟 Comprar boletos",
+        "Укажи количество билетов или нажми «Максимум».": "Indica cuántos boletos o pulsa «Máximo».",
+        "Максимум": "Máximo",
+        "Сейчас можно купить до:": "Ahora puedes comprar hasta:",
+        "Купить": "Comprar",
+        "3 понятных пакета, чтобы быстро вернуться к просмотру:": "3 paquetes claros para volver a ver vídeos al instante:",
+        "⚡ 500 монет": "⚡ 500 monedas",
+        "Быстрый старт · 450 ★": "Arranque rápido · 450 ★",
+        "🔥 1 000 монет": "🔥 1.000 monedas",
+        "Популярный пакет · 900 ★": "Paquete popular · 900 ★",
+        "💎 2 200 монет": "💎 2.200 monedas",
+        "Самый выгодный · 1 800 ★": "El más ventajoso · 1.800 ★",
+        "Выполняй задания партнёров и получай монеты по условиям каждого оффера.": "Completa las tareas de los socios y gana monedas según las condiciones de cada oferta.",
+        "Загрузка заданий...": "Cargando tareas...",
+        "❌ Введи корректное количество билетов.": "❌ Introduce una cantidad de boletos válida.",
+        "🎟 Куплено билетов: {qty}. Баланс обновлен!": "🎟 Boletos comprados: {qty}. ¡Saldo actualizado!",
+        "❌ Ошибка покупки: {error}": "❌ Error de compra: {error}",
+        "неизвестно": "desconocido",
+        "❌ Сбой сервера покупки билетов.": "❌ Fallo del servidor de compra de boletos.",
+        "💎 Оплата успешно завершена! Пакет монет начислен!": "💎 ¡Pago completado! ¡Paquete de monedas acreditado!",
+        "❌ Ошибка создания инвойса: {error}": "❌ Error al crear la factura: {error}",
+        "❌ Сбой соединения с платежным шлюзом.": "❌ Fallo de conexión con la pasarela de pago.",
+        "Награда: +{reward} 🪙": "Recompensa: +{reward} 🪙",
+        "Выполнить": "Realizar",
+        "Доступных офферов пока нет.": "Todavía no hay ofertas disponibles.",
+        "Ошибка загрузки.": "Error de carga.",
+        "1-й": "1.º",
+        "последний": "último",
+        "первого": "primero",
+        "🎯 Ставка на {which} бочонок": "🎯 Apuesta al {which} barril",
+        "Сделай прогноз на чётность {which} бочонка. Стоимость ставки: 10 монет (удвоение при выигрыше!)": "Predice la paridad del {which} barril. Coste de la apuesta: 10 monedas (¡se duplican si aciertas!)",
+        "ЧЁТНЫЙ 🟢": "PAR 🟢",
+        "НЕЧЁТНЫЙ 🔴": "IMPAR 🔴",
+        "Отмена": "Cancelar",
+        "🎯 Ставка успешно зарегистрирована в Секслото! Баланс монет обновлен!": "🎯 ¡Apuesta registrada en Sexloto! ¡Saldo de monedas actualizado!",
+        "❌ Ставка отклонена: {error}": "❌ Apuesta rechazada: {error}",
+        "❌ Сбой сервера ставок.": "❌ Fallo del servidor de apuestas.",
+        "Открыта": "Abierta",
+        "Идет розыгрыш!": "¡Sorteo en curso!",
+        "Завершена": "Finalizada"
+      },
+      pt: {
+        "Lottery Live — Секслото Шоу 🎰": "Lottery Live — Show Sexloto 🎰",
+        "Гость": "Convidado",
+        "Загрузка...": "Carregando...",
+        "📱 Наклоняй телефон или таскай шары пальцем!": "📱 Incline o celular ou arraste as bolas com o dedo!",
+        "⏱ До розыгрыша:": "⏱ Até o sorteio:",
+        "Призовой фонд 💰": "Fundo de prêmios 💰",
+        "Цена билета:": "Preço do bilhete:",
+        "Куплено билетов:": "Bilhetes comprados:",
+        "Старт розыгрыша:": "Início do sorteio:",
+        "🔥 Акции и Ставки Секслото 🔥": "🔥 Promos e apostas do Sexloto 🔥",
+        "🎟 Купить билеты Секслото": "🎟 Comprar bilhetes do Sexloto",
+        "Испытай свою удачу и выбери, сколько билетов хочешь взять в этот раунд!": "Teste a sorte e escolha quantos bilhetes quer levar nesta rodada!",
+        "Купить билеты по": "Comprar bilhetes por",
+        "💎 Монеты за звёзды": "💎 Moedas por estrelas",
+        "Получи мгновенный буст баланса монет за Telegram Stars!": "Receba um reforço instantâneo de moedas com Telegram Stars!",
+        "Купить монеты": "Comprar moedas",
+        "📋 Бесплатные монеты": "📋 Moedas grátis",
+        "Выполняй задания и подписки в разделе Офферы!": "Cumpra tarefas e inscrições na seção Ofertas!",
+        "Открыть Офферы": "Abrir Ofertas",
+        "🎯 Ставки на бочонки": "🎯 Apostas nos barris",
+        "Угадай, чётный или нечётный выпадет первый/последний бочонок!": "Adivinhe se o primeiro/último barril vai sair par ou ímpar!",
+        "Ставка на 1-й": "Aposta no 1.º",
+        "Ставка на последний": "Aposta no último",
+        "↔ Свайпай баннеры влево/вправо": "↔ Deslize os banners para a esquerda/direita",
+        "🔵 Выпавшие бочонки «Секслото» 🔵": "🔵 Barris sorteados «Sexloto» 🔵",
+        "Розыгрыш еще не начался...": "O sorteio ainda não começou...",
+        "🎟 Купить билеты": "🎟 Comprar bilhetes",
+        "Укажи количество билетов или нажми «Максимум».": "Informe a quantidade de bilhetes ou toque em «Máximo».",
+        "Максимум": "Máximo",
+        "Сейчас можно купить до:": "Agora dá para comprar até:",
+        "Купить": "Comprar",
+        "3 понятных пакета, чтобы быстро вернуться к просмотру:": "3 pacotes simples para voltar logo a assistir:",
+        "⚡ 500 монет": "⚡ 500 moedas",
+        "Быстрый старт · 450 ★": "Começo rápido · 450 ★",
+        "🔥 1 000 монет": "🔥 1 000 moedas",
+        "Популярный пакет · 900 ★": "Pacote popular · 900 ★",
+        "💎 2 200 монет": "💎 2 200 moedas",
+        "Самый выгодный · 1 800 ★": "O mais vantajoso · 1 800 ★",
+        "Выполняй задания партнёров и получай монеты по условиям каждого оффера.": "Cumpra as tarefas dos parceiros e receba moedas conforme as condições de cada oferta.",
+        "Загрузка заданий...": "Carregando tarefas...",
+        "❌ Введи корректное количество билетов.": "❌ Digite uma quantidade de bilhetes válida.",
+        "🎟 Куплено билетов: {qty}. Баланс обновлен!": "🎟 Bilhetes comprados: {qty}. Saldo atualizado!",
+        "❌ Ошибка покупки: {error}": "❌ Erro na compra: {error}",
+        "неизвестно": "desconhecido",
+        "❌ Сбой сервера покупки билетов.": "❌ Falha no servidor de compra de bilhetes.",
+        "💎 Оплата успешно завершена! Пакет монет начислен!": "💎 Pagamento concluído! Pacote de moedas creditado!",
+        "❌ Ошибка создания инвойса: {error}": "❌ Erro ao criar a fatura: {error}",
+        "❌ Сбой соединения с платежным шлюзом.": "❌ Falha de conexão com a plataforma de pagamento.",
+        "Награда: +{reward} 🪙": "Recompensa: +{reward} 🪙",
+        "Выполнить": "Realizar",
+        "Доступных офферов пока нет.": "Ainda não há ofertas disponíveis.",
+        "Ошибка загрузки.": "Erro de carregamento.",
+        "1-й": "1.º",
+        "последний": "último",
+        "первого": "primeiro",
+        "🎯 Ставка на {which} бочонок": "🎯 Aposta no {which} barril",
+        "Сделай прогноз на чётность {which} бочонка. Стоимость ставки: 10 монет (удвоение при выигрыше!)": "Faça sua previsão sobre a paridade do {which} barril. Custo da aposta: 10 moedas (dobra se você ganhar!)",
+        "ЧЁТНЫЙ 🟢": "PAR 🟢",
+        "НЕЧЁТНЫЙ 🔴": "ÍMPAR 🔴",
+        "Отмена": "Cancelar",
+        "🎯 Ставка успешно зарегистрирована в Секслото! Баланс монет обновлен!": "🎯 Aposta registrada no Sexloto! Saldo de moedas atualizado!",
+        "❌ Ставка отклонена: {error}": "❌ Aposta rejeitada: {error}",
+        "❌ Сбой сервера ставок.": "❌ Falha no servidor de apostas.",
+        "Открыта": "Aberta",
+        "Идет розыгрыш!": "Sorteio em andamento!",
+        "Завершена": "Finalizada"
+      }
     };
     const L = (k, p) => {
-      let s = (I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k;
+      let s = (I18N[window.BOT_LANG] || {})[k] ?? I18N.en[k] ?? I18N.ru[k] ?? k;
       if (p) for (const n in p) s = s.replaceAll('{' + n + '}', p[n]);
       return s;
     };
@@ -1940,7 +2076,7 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
          "Загрузка видео...": "Загрузка видео...",
          "Функция лайков в разработке!": "Функция лайков в разработке!",
          "Донаты автору в разработке!": "Донаты автору в разработке!",
-         "Ошибка загрузки видео.": "Ошибка загрузки видео.",
+         "Ошибка загрузки видео.": "Ошибка загрузки видео."
        },
        en: {
          "Загрузка ленты...": "Loading feed...",
@@ -1948,10 +2084,26 @@ async def videofeed_page_handler(request: web.Request) -> web.Response:
          "Загрузка видео...": "Loading video...",
          "Функция лайков в разработке!": "Likes are coming soon!",
          "Донаты автору в разработке!": "Tips for creators are coming soon!",
-         "Ошибка загрузки видео.": "Failed to load videos.",
+         "Ошибка загрузки видео.": "Failed to load videos."
        },
+       es: {
+         "Загрузка ленты...": "Cargando el feed...",
+         "Нет доступных видео.<br>Загрузи видео в бота!": "No hay vídeos disponibles.<br>¡Sube un vídeo al bot!",
+         "Загрузка видео...": "Cargando vídeo...",
+         "Функция лайков в разработке!": "¡La función de «me gusta» está en desarrollo!",
+         "Донаты автору в разработке!": "¡Las donaciones al autor están en desarrollo!",
+         "Ошибка загрузки видео.": "Error al cargar los vídeos."
+       },
+       pt: {
+         "Загрузка ленты...": "Carregando o feed...",
+         "Нет доступных видео.<br>Загрузи видео в бота!": "Nenhum vídeo disponível.<br>Envie um vídeo para o bot!",
+         "Загрузка видео...": "Carregando vídeo...",
+         "Функция лайков в разработке!": "A função de curtidas está em desenvolvimento!",
+         "Донаты автору в разработке!": "As doações para o autor estão em desenvolvimento!",
+         "Ошибка загрузки видео.": "Erro ao carregar os vídeos."
+       }
      };
-     const L = (k) => ((I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k);
+     const L = (k) => ((I18N[window.BOT_LANG] || {})[k] ?? I18N.en[k] ?? I18N.ru[k] ?? k);
      document.querySelectorAll('[data-i18n]').forEach(el => { el.innerHTML = L(el.dataset.i18n); });
 
      let isMuted = true;
@@ -2174,10 +2326,21 @@ async def auto_broadcast_worker(bot):
                     await ensure_holiday_events(session)
                 except Exception:
                     logger.exception("Holiday events ensure failed (non-critical)")
-                pool = await get_auto_broadcast_pool(session)
                 users = (await session.execute(
-                    select(User.telegram_id).where(User.status == "active")
-                )).scalars().all()
+                    select(User.telegram_id, User.language).where(User.status == "active")
+                )).all()
+
+            # Пул ротации (текст карточки + постер события) собирается для
+            # каждого языка интерфейса отдельно: англоязычные пользователи
+            # получают английские тексты и постеры из banners/en/, остальные —
+            # русские оригиналы.
+            users_by_lang: dict[str, list[int]] = {}
+            for tid, user_lang in users:
+                users_by_lang.setdefault(normalize_language(user_lang), []).append(tid)
+            pools: dict[str, list] = {}
+            async with async_session() as session:
+                for lang in users_by_lang:
+                    pools[lang] = await get_auto_broadcast_pool(session, lang=lang)
 
             # Разовая рассылка «событие началось» для запланированных событий
             # (праздничные авто-события и ручные с будущей датой старта).
@@ -2189,37 +2352,42 @@ async def auto_broadcast_worker(bot):
             except Exception:
                 logger.exception("Event announce cycle failed (non-critical)")
 
-            if not pool:
+            if not any(pools.values()):
                 logger.info("Promo rotation: пул пуст (нет шаблонов и событий) — пропуск цикла.")
                 continue
 
-            # Выбираем случайное сообщение из актуального пула
-            item = random.choice(pool)
-            msg_text = item["text"]
-            image = item.get("image_file_id")
-            image_path = item.get("image_path")  # постер события на диске
-            poll_info = item.get("poll")
-            reply_markup = None
-            if poll_info:
-                from app.keyboards import poll_answer_keyboard
-                reply_markup = poll_answer_keyboard(
-                    poll_info["type"], poll_info["id"], poll_info.get("options", [])
-                )
-
             sent = 0
-            for tid in users:
-                try:
-                    if image:
-                        await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
-                    elif image_path:
-                        await bot.send_photo(tid, FSInputFile(image_path), caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
-                    else:
-                        await bot.send_message(tid, msg_text, parse_mode="HTML", reply_markup=reply_markup)
-                    sent += 1
-                    if sent % 30 == 0:
-                        await asyncio.sleep(0.5)
-                except Exception:
-                    pass
+            for lang, lang_users in users_by_lang.items():
+                pool = pools.get(lang) or []
+                if not pool:
+                    continue
+
+                # Выбираем случайное сообщение из актуального пула языка
+                item = random.choice(pool)
+                msg_text = item["text"]
+                image = item.get("image_file_id")
+                image_path = item.get("image_path")  # постер события на диске
+                poll_info = item.get("poll")
+                reply_markup = None
+                if poll_info:
+                    from app.keyboards import poll_answer_keyboard
+                    reply_markup = poll_answer_keyboard(
+                        poll_info["type"], poll_info["id"], poll_info.get("options", [])
+                    )
+
+                for tid in lang_users:
+                    try:
+                        if image:
+                            await bot.send_photo(tid, image, caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
+                        elif image_path:
+                            await bot.send_photo(tid, FSInputFile(image_path), caption=msg_text, parse_mode="HTML", reply_markup=reply_markup)
+                        else:
+                            await bot.send_message(tid, msg_text, parse_mode="HTML", reply_markup=reply_markup)
+                        sent += 1
+                        if sent % 30 == 0:
+                            await asyncio.sleep(0.5)
+                    except Exception:
+                        pass
         except Exception:
             logger.exception("auto_broadcast_worker cycle failed")
             await asyncio.sleep(60)
@@ -3145,7 +3313,7 @@ const I18N = {
     "Требуется уровень {level}": "Требуется уровень {level}",
     "Ошибка соединения. Попробуй ещё раз.": "Ошибка соединения. Попробуй ещё раз.",
     "Не удалось открыть кейс.": "Не удалось открыть кейс.",
-    "монет": "монет",
+    "монет": "монет"
   },
   en: {
     "Кейсы": "Cases",
@@ -3166,11 +3334,53 @@ const I18N = {
     "Требуется уровень {level}": "Level {level} required",
     "Ошибка соединения. Попробуй ещё раз.": "Connection error. Please try again.",
     "Не удалось открыть кейс.": "Failed to open the case.",
-    "монет": "coins",
+    "монет": "coins"
   },
+  es: {
+    "Кейсы": "Cajas",
+    "КЕЙСЫ": "CAJAS",
+    "ОБЫЧНЫЙ": "COMÚN",
+    "ОТКРЫТЬ ЗА": "ABRIR POR",
+    "До гаранта Редкого+:": "Rara+ garantizada en:",
+    "До гаранта Редкого+: {pity}": "Rara+ garantizada en: {pity}",
+    "ПРЕДМЕТ ПОЛУЧЕН!": "¡OBJETO CONSEGUIDO!",
+    "ОТЛИЧНО": "EXCELENTE",
+    "Обычная": "Común",
+    "Редкая": "Rara",
+    "Эпическая": "Épica",
+    "Джекпот": "Jackpot",
+    "Золотая": "Dorada",
+    "Монеты": "Monedas",
+    "Стиль ника": "Estilo de apodo",
+    "Требуется уровень {level}": "Se requiere nivel {level}",
+    "Ошибка соединения. Попробуй ещё раз.": "Error de conexión. Inténtalo de nuevo.",
+    "Не удалось открыть кейс.": "No se pudo abrir la caja.",
+    "монет": "monedas"
+  },
+  pt: {
+    "Кейсы": "Caixas",
+    "КЕЙСЫ": "CAIXAS",
+    "ОБЫЧНЫЙ": "COMUM",
+    "ОТКРЫТЬ ЗА": "ABRIR POR",
+    "До гаранта Редкого+:": "Raro+ garantido em:",
+    "До гаранта Редкого+: {pity}": "Raro+ garantido em: {pity}",
+    "ПРЕДМЕТ ПОЛУЧЕН!": "ITEM CONQUISTADO!",
+    "ОТЛИЧНО": "EXCELENTE",
+    "Обычная": "Comum",
+    "Редкая": "Rara",
+    "Эпическая": "Épica",
+    "Джекпот": "Jackpot",
+    "Золотая": "Dourada",
+    "Монеты": "Moedas",
+    "Стиль ника": "Estilo de apelido",
+    "Требуется уровень {level}": "Requer nível {level}",
+    "Ошибка соединения. Попробуй ещё раз.": "Erro de conexão. Tente de novo.",
+    "Не удалось открыть кейс.": "Não foi possível abrir a caixa.",
+    "монет": "moedas"
+  }
 };
 const L = (k, p) => {
-  let s = (I18N[window.BOT_LANG] || I18N.ru)[k] ?? I18N.ru[k] ?? k;
+  let s = (I18N[window.BOT_LANG] || {})[k] ?? I18N.en[k] ?? I18N.ru[k] ?? k;
   if (p) for (const n in p) s = s.replaceAll('{' + n + '}', p[n]);
   return s;
 };
@@ -3556,7 +3766,7 @@ var I18N = {
     "ВОЛНА {wave} ОТБИТА! 💥": "ВОЛНА {wave} ОТБИТА! 💥",
     "Сервер отменил забег": "Сервер отменил забег",
     "Прорыв флота!": "Прорыв флота!",
-    "Инопланетяне прорвались на волне {wave}.\nСтавка {bet} монет сгорела.": "Инопланетяне прорвались на волне {wave}.\nСтавка {bet} монет сгорела.",
+    "Инопланетяне прорвались на волне {wave}.\\nСтавка {bet} монет сгорела.": "Инопланетяне прорвались на волне {wave}.\\nСтавка {bet} монет сгорела.",
     "Ставка {bet} × x{mult} = {payout} монет зачислено!": "Ставка {bet} × x{mult} = {payout} монет зачислено!",
     "🌟 Множитель достиг потолка x{max}!": "🌟 Множитель достиг потолка x{max}!",
     "🛡 Часть прибыли срезана дневным лимитом.": "🛡 Часть прибыли срезана дневным лимитом.",
@@ -3565,13 +3775,13 @@ var I18N = {
     "🏆 Топ недели": "🏆 Топ недели",
     "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день": "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день",
     "Нет связи с сервером: {error}": "Нет связи с сервером: {error}",
-    "Введи ставку": "Введи ставку",
+    "Введи ставку": "Введи ставку"
   },
   en: {
     "Космическая Аркада": "Space Arcade",
     "💰 Забрать": "💰 Cash out",
     "💰 Забрать {amount}": "💰 Cash out {amount}",
-    "Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️": "Defend against the fleet waves 👾 — every wave grows your bet multiplier.<br/>Hit \"Cash out\" before the fleet breaks through! ☠️",
+    "Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️": "Defend against the fleet waves 👾 — every wave grows your bet multiplier.<br/>Hit \\\"Cash out\\\" before the fleet breaks through! ☠️",
     "Баланс:": "Balance:",
     "монет": "coins",
     "Своя ставка": "Your bet",
@@ -3591,7 +3801,7 @@ var I18N = {
     "ВОЛНА {wave} ОТБИТА! 💥": "WAVE {wave} DEFLECTED! 💥",
     "Сервер отменил забег": "Server cancelled the run",
     "Прорыв флота!": "Fleet breakthrough!",
-    "Инопланетяне прорвались на волне {wave}.\nСтавка {bet} монет сгорела.": "Aliens broke through on wave {wave}.\nYour bet of {bet} coins is lost.",
+    "Инопланетяне прорвались на волне {wave}.\\nСтавка {bet} монет сгорела.": "Aliens broke through on wave {wave}.\\nYour bet of {bet} coins is lost.",
     "Ставка {bet} × x{mult} = {payout} монет зачислено!": "Bet {bet} × x{mult} = {payout} coins credited!",
     "🌟 Множитель достиг потолка x{max}!": "🌟 Multiplier hit the x{max} cap!",
     "🛡 Часть прибыли срезана дневным лимитом.": "🛡 Part of the profit was cut by the daily limit.",
@@ -3600,11 +3810,81 @@ var I18N = {
     "🏆 Топ недели": "🏆 Top of the week",
     "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день": "Bet from {min} to {max} coins · max x{maxmult} · profit cap {cap}/day",
     "Нет связи с сервером: {error}": "No server connection: {error}",
-    "Введи ставку": "Enter a bet",
+    "Введи ставку": "Enter a bet"
   },
+  es: {
+    "Космическая Аркада": "Arcade Cósmica",
+    "💰 Забрать": "💰 Cobrar",
+    "💰 Забрать {amount}": "💰 Cobrar {amount}",
+    "Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️": "Rechaza las oleadas de la flota 👾 — cada oleada aumenta el multiplicador de la apuesta.<br/>¡Pulsa «Cobrar» antes de que la flota rompa tu defensa! ☠️",
+    "Баланс:": "Saldo:",
+    "монет": "monedas",
+    "Своя ставка": "Apuesta propia",
+    "▶️ Продолжить забег": "▶️ Continuar la partida",
+    "▶️ Продолжить (ставка {bet}, x{mult})": "▶️ Continuar (apuesta {bet}, x{mult})",
+    "🚀 В бой!": "🚀 ¡Al ataque!",
+    "Победа!": "¡Victoria!",
+    "🔁 Ещё раз": "🔁 Otra vez",
+    "✏️ Сменить ставку": "✏️ Cambiar apuesta",
+    "Не хватает монет 😢": "No hay monedas suficientes 😢",
+    "Ставка вне лимитов": "Apuesta fuera de los límites",
+    "Аркада временно отключена": "La arcade está desactivada temporalmente",
+    "У тебя уже идёт забег": "Ya tienes una partida en curso",
+    "Сначала отбей хотя бы одну волну!": "¡Rechaza al menos una oleada primero!",
+    "Забег уже завершён": "La partida ya ha terminado",
+    "Ошибка: {code}": "Error: {code}",
+    "ВОЛНА {wave} ОТБИТА! 💥": "¡OLEADA {wave} RECHAZADA! 💥",
+    "Сервер отменил забег": "El servidor canceló la partida",
+    "Прорыв флота!": "¡La flota ha roto la defensa!",
+    "Инопланетяне прорвались на волне {wave}.\\nСтавка {bet} монет сгорела.": "Los alienígenas rompieron la defensa en la oleada {wave}.\\nTu apuesta de {bet} monedas se ha perdido.",
+    "Ставка {bet} × x{mult} = {payout} монет зачислено!": "¡Apuesta {bet} × x{mult} = {payout} monedas acreditadas!",
+    "🌟 Множитель достиг потолка x{max}!": "¡El multiplicador ha alcanzado el tope x{max}!",
+    "🛡 Часть прибыли срезана дневным лимитом.": "🛡 Parte de las ganancias fue recortada por el límite diario.",
+    "Сверхновая!": "¡Supernova!",
+    "Выигрыш забран!": "¡Ganancias cobradas!",
+    "🏆 Топ недели": "🏆 Top de la semana",
+    "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день": "Apuesta de {min} a {max} monedas · máx. x{maxmult} · tope de ganancias {cap}/día",
+    "Нет связи с сервером: {error}": "Sin conexión con el servidor: {error}",
+    "Введи ставку": "Introduce una apuesta"
+  },
+  pt: {
+    "Космическая Аркада": "Arcade Cósmica",
+    "💰 Забрать": "💰 Resgatar",
+    "💰 Забрать {amount}": "💰 Resgatar {amount}",
+    "Отбивай волны флота 👾 — каждая волна растит множитель ставки.<br/>Успей нажать «Забрать», пока флот не прорвался! ☠️": "Rebata as ondas da frota 👾 — cada onda aumenta o multiplicador da aposta.<br/>Toque em «Resgatar» antes de a frota romper a defesa! ☠️",
+    "Баланс:": "Saldo:",
+    "монет": "moedas",
+    "Своя ставка": "Sua aposta",
+    "▶️ Продолжить забег": "▶️ Continuar a partida",
+    "▶️ Продолжить (ставка {bet}, x{mult})": "▶️ Continuar (aposta {bet}, x{mult})",
+    "🚀 В бой!": "🚀 Vamos lá!",
+    "Победа!": "Vitória!",
+    "🔁 Ещё раз": "🔁 De novo",
+    "✏️ Сменить ставку": "✏️ Trocar aposta",
+    "Не хватает монет 😢": "Moedas insuficientes 😢",
+    "Ставка вне лимитов": "Aposta fora dos limites",
+    "Аркада временно отключена": "A arcade está desativada temporariamente",
+    "У тебя уже идёт забег": "Você já tem uma partida em andamento",
+    "Сначала отбей хотя бы одну волну!": "Rebata pelo menos uma onda primeiro!",
+    "Забег уже завершён": "A partida já terminou",
+    "Ошибка: {code}": "Erro: {code}",
+    "ВОЛНА {wave} ОТБИТА! 💥": "ONDA {wave} REBATIDA! 💥",
+    "Сервер отменил забег": "O servidor cancelou a partida",
+    "Прорыв флота!": "A frota rompeu a defesa!",
+    "Инопланетяне прорвались на волне {wave}.\\nСтавка {bet} монет сгорела.": "Os alienígenas romperam a defesa na onda {wave}.\\nSua aposta de {bet} moedas queimou.",
+    "Ставка {bet} × x{mult} = {payout} монет зачислено!": "Aposta {bet} × x{mult} = {payout} moedas creditadas!",
+    "🌟 Множитель достиг потолка x{max}!": "🌟 O multiplicador chegou ao teto x{max}!",
+    "🛡 Часть прибыли срезана дневным лимитом.": "🛡 Parte do lucro foi cortada pelo limite diário.",
+    "Сверхновая!": "Supernova!",
+    "Выигрыш забран!": "Ganhos resgatados!",
+    "🏆 Топ недели": "🏆 Top da semana",
+    "Ставка от {min} до {max} монет · макс. x{maxmult} · кап прибыли {cap}/день": "Aposta de {min} a {max} moedas · máx. x{maxmult} · teto de lucro {cap}/dia",
+    "Нет связи с сервером: {error}": "Sem conexão com o servidor: {error}",
+    "Введи ставку": "Digite uma aposta"
+  }
 };
 function L(k, p){
-  var s = (I18N[window.BOT_LANG] || I18N.ru)[k] || I18N.ru[k] || k;
+  var s = (I18N[window.BOT_LANG] || {})[k] || I18N.en[k] || I18N.ru[k] || k;
   if (p) for (var n in p) s = s.split('{' + n + '}').join(p[n]);
   return s;
 }

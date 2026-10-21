@@ -38,13 +38,21 @@ from contextvars import ContextVar
 # Массовые переводы «по исходному русскому тексту» вынесены в отдельный модуль,
 # чтобы файл ядра оставался обозримым (тысячи пар «русский → английский»).
 from app.i18n_en import EN_SOURCE
+from app.i18n_es import ES_SOURCE
+from app.i18n_pt import PT_SOURCE
 
 DEFAULT_LANGUAGE = "ru"
 
 # Код языка -> (флаг, собственное название языка).
+# Порядок = порядок кнопок в «🌐 Язык». Новый язык добавляется одной записью
+# здесь плюс словарём переводов (см. ниже): меню, обработчики и клавиатура
+# подхватывают его сами. Непереведённые строки падают сначала на английский,
+# затем на русский (см. t()) — поэтому язык можно вводить постепенно.
 SUPPORTED_LANGUAGES: dict[str, tuple[str, str]] = {
     "ru": ("🇷🇺", "Русский"),
     "en": ("🇬🇧", "English"),
+    "es": ("🇪🇸", "Español"),
+    "pt": ("🇧🇷", "Português"),
 }
 
 # Семантические переводы (короткие подписи меню, профиля, приветствия и т.п.).
@@ -73,7 +81,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "main_menu.title": "🏠 <b>Главное меню</b>\n\nВыбери, чем заняться 👇",
         "main_menu.button": "🏠 Главное меню",
         # Приветствие / старт
-        "welcome.greeting": "👋 Привет, <b>{name}</b>{vip}!\n💰 Твой баланс: <b>{balance}</b> монет",
+        "welcome.greeting": "👋 Привет, <b>{name}</b>{vip}!\n\n💰 Баланс: <b>{balance}</b> монет",
+        "welcome.pitch": (
+            "Вы попали на наиболее продвинутый и необычный проект в нише обмена видео. "
+            "Вас ждёт куча контента, отзывчивая и живая администрация, а так же честные условия пользования. 📹🎬👥\n\n"
+            "Бот сделан от людей для людей. 🤖🙏 Каждое ваше обращение читается нашими администраторами (их всего 2). 👀❤️ "
+            "Каждое ваше пожелание трогает наши сердечки. 💓 Посему мы будем стараться для вас. 👍\n\n"
+            "Расслабьтесь и добро пожаловать в Wseksbot! 😌📣"
+        ),
         "welcome.no_nickname_hint": (
             "🎬 Без ника можно посмотреть всего 3 фото или видео. "
             "Затем установи ник бесплатно в профиле; для загрузок он тоже понадобится."
@@ -132,7 +147,15 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "main_menu.title": "🏠 <b>Main menu</b>\n\nPick what to do 👇",
         "main_menu.button": "🏠 Main menu",
         # Welcome / start
-        "welcome.greeting": "👋 Hi, <b>{name}</b>{vip}!\n💰 Your balance: <b>{balance}</b> coins",
+        "welcome.greeting": "👋 Hi, <b>{name}</b>{vip}!\n\n💰 Balance: <b>{balance}</b> coins",
+        "welcome.pitch": (
+            "You've joined the most advanced and unusual project in the video exchange niche. "
+            "Tons of content, a responsive and living admin team, and honest terms are waiting for you. 📹🎬👥\n\n"
+            "The bot is made by people, for people. 🤖🙏 Every message you send is read by our admins "
+            "(there are only 2 of them). 👀❤️ Every wish of yours touches our hearts. 💓 "
+            "That's why we'll do our best for you. 👍\n\n"
+            "Relax and welcome to Wseksbot! 😌📣"
+        ),
         "welcome.no_nickname_hint": (
             "🎬 Without a nickname you can watch just 3 photos or videos. "
             "Then set a nickname for free in your profile — you'll need it for uploads too."
@@ -167,10 +190,150 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Please try again later."
         ),
     },
+    "es": {
+        # Кнопки главного меню
+        "menu.watch": "🎬 Ver",
+        "menu.playlists": "🎵 Listas",
+        "menu.upload": "📤 Subir",
+        "menu.profile": "👤 Perfil",
+        "menu.buy": "🛍 Tienda",
+        "menu.offers": "📢 Ofertas",
+        "menu.referrals": "👥 Referidos",
+        "menu.games": "🎮 Juegos",
+        "menu.tops": "🏆 Top",
+        "menu.promo": "🎟 Cupones",
+        "menu.feedback": "💬 Contacto",
+        "menu.rules": "📜 Reglas",
+        "menu.faq": "ℹ️ Ayuda",
+        "menu.admin": "🔧 Admin",
+        "menu.lang": "🌐 Idioma",
+        # Выбор языка
+        "lang.title": "🌐 <b>Elige el idioma del bot</b>",
+        "lang.changed_alert": "✅ Idioma: 🇪🇸 español",
+        # Главное меню
+        "main_menu.title": "🏠 <b>Menú principal</b>\n\nElige qué hacer 👇",
+        "main_menu.button": "🏠 Menú principal",
+        # Приветствие / старт
+        "welcome.greeting": "👋 ¡Hola, <b>{name}</b>{vip}!\n\n💰 Saldo: <b>{balance}</b> monedas",
+        "welcome.pitch": (
+            "Has llegado al proyecto más avanzado y singular en el nicho del intercambio de vídeos. "
+            "Te esperan montones de contenido, una administración viva y atenta, y condiciones honestas. 📹🎬👥\n\n"
+            "El bot está hecho por personas y para personas. 🤖🙏 Cada mensaje tuyo lo leen nuestros "
+            "administradores (solo hay 2). 👀❤️ Cada deseo tuyo nos llega al corazón. 💓 "
+            "Por eso nos esforzaremos por ti. 👍\n\n"
+            "¡Relájate y bienvenido a Wseksbot! 😌📣"
+        ),
+        "welcome.no_nickname_hint": (
+            "🎬 Sin apodo puedes ver solo 3 fotos o vídeos. Luego pon un apodo gratis en tu perfil; "
+            "también lo necesitarás para subir contenido."
+        ),
+        # Отмена действия
+        "cancel.done": "✅ Modo reiniciado. Pulsa /start o elige una acción en el menú.",
+        "cancel.aborted": "❌ Acción cancelada.",
+        # Профиль
+        "profile.title": "👤 <b>Perfil</b>",
+        "profile.nick": "🏷 Apodo:",
+        "profile.telegram_id": "🆔 ID de Telegram:",
+        "profile.balance": "💰 Saldo: <b>{balance}</b> monedas",
+        "profile.level": "🏆 Nivel: <b>{level}</b>",
+        "profile.xp": "⭐ XP: {current}/{needed} [{bar}]",
+        "profile.referrals": "👥 Amigos invitados: {count}",
+        "profile.earned": "💎 Ganado con referidos: {amount} monedas",
+        "profile.status": "📊 Estado: {status}",
+        "profile.vip_until": "👑 VIP hasta: {date}",
+        "profile.nick_cost": "Cambiar el apodo cuesta {cost} monedas",
+        "profile.change_nick": "✏️ Cambiar apodo",
+        "profile.blocked_authors": "🚫 Autores bloqueados ({count})",
+        # Бан и сервисные сообщения
+        "ban.blocked": "🚫 El acceso al bot está bloqueado para ti.",
+        "bonus.daily": (
+            "🔥 <b>¡Bono diario por volver!</b>\n\n"
+            "Recibido: <b>+{reward}</b> monedas\n"
+            "Días seguidos: <b>{streak}</b>\n\n"
+            "El bono crece con la racha hasta el límite diario de <b>{cap}</b> monedas."
+        ),
+        "db.down": (
+            "⚠️ El bot no está disponible temporalmente (trabajos técnicos). "
+            "Inténtalo de nuevo más tarde, por favor."
+        ),
+    },
+    "pt": {
+        # Кнопки главного меню
+        "menu.watch": "🎬 Assistir",
+        "menu.playlists": "🎵 Playlists",
+        "menu.upload": "📤 Enviar",
+        "menu.profile": "👤 Perfil",
+        "menu.buy": "🛍 Loja",
+        "menu.offers": "📢 Ofertas",
+        "menu.referrals": "👥 Indicações",
+        "menu.games": "🎮 Jogos",
+        "menu.tops": "🏆 Ranking",
+        "menu.promo": "🎟 Cupons",
+        "menu.feedback": "💬 Contato",
+        "menu.rules": "📜 Regras",
+        "menu.faq": "ℹ️ Ajuda",
+        "menu.admin": "🔧 Admin",
+        "menu.lang": "🌐 Idioma",
+        # Выбор языка
+        "lang.title": "🌐 <b>Escolha o idioma do bot</b>",
+        "lang.changed_alert": "✅ Idioma: 🇧🇷 português",
+        # Главное меню
+        "main_menu.title": "🏠 <b>Menu principal</b>\n\nEscolha o que fazer 👇",
+        "main_menu.button": "🏠 Menu principal",
+        # Приветствие / старт
+        "welcome.greeting": "👋 Olá, <b>{name}</b>{vip}!\n\n💰 Saldo: <b>{balance}</b> moedas",
+        "welcome.pitch": (
+            "Você chegou ao projeto mais avançado e fora do comum no nicho de troca de vídeos. "
+            "Tem muito conteúdo, uma administração atenciosa e humana, e condições de uso honestas. 📹🎬👥\n\n"
+            "O bot é feito por pessoas, para pessoas. 🤖🙏 Cada mensagem que você manda é lida pelos nossos "
+            "administradores (são só 2). 👀❤️ Cada pedido seu toca os nossos corações. 💓 "
+            "Por isso vamos fazer o possível por você. 👍\n\n"
+            "Relaxe e seja bem-vindo ao Wseksbot! 😌📣"
+        ),
+        "welcome.no_nickname_hint": (
+            "🎬 Sem apelido você pode ver só 3 fotos ou vídeos. "
+            "Depois defina um apelido grátis no perfil — ele também será necessário para os envios."
+        ),
+        # Отмена FSM-сценариев
+        "cancel.done": "✅ Modo reiniciado. Toque em /start ou escolha uma ação no menu.",
+        "cancel.aborted": "❌ Ação cancelada.",
+        # Профиль
+        "profile.title": "👤 <b>Perfil</b>",
+        "profile.nick": "🏷 Apelido:",
+        "profile.telegram_id": "🆔 Telegram ID:",
+        "profile.balance": "💰 Saldo: <b>{balance}</b> moedas",
+        "profile.level": "🏆 Nível: <b>{level}</b>",
+        "profile.xp": "⭐ XP: {current}/{needed} [{bar}]",
+        "profile.referrals": "👥 Amigos convidados: {count}",
+        "profile.earned": "💎 Ganho com indicações: {amount} moedas",
+        "profile.status": "📊 Status: {status}",
+        "profile.vip_until": "👑 VIP até: {date}",
+        "profile.nick_cost": "Trocar de apelido custa {cost} moedas",
+        "profile.change_nick": "✏️ Trocar apelido",
+        "profile.blocked_authors": "🚫 Autores bloqueados ({count})",
+        # Служебные уведомления (middleware)
+        "ban.blocked": "🚫 Seu acesso ao bot foi bloqueado.",
+        "bonus.daily": (
+            "🔥 <b>Bônus diário de volta!</b>\n\n"
+            "Creditado: <b>+{reward}</b> moedas\n"
+            "Dias seguidos: <b>{streak}</b>\n\n"
+            "O bônus cresce com a sequência até o limite diário — <b>{cap}</b> moedas."
+        ),
+        "db.down": (
+            "⚠️ O bot está temporariamente indisponível (manutenção em andamento). "
+            "Tente de novo mais tarde, por favor."
+        ),
+    },
 }
 
 # Английские переводы основного массива — по исходному русскому тексту.
 TRANSLATIONS["en"] = {**TRANSLATIONS["en"], **EN_SOURCE}
+
+# Испанские переводы основного массива — по исходному русскому тексту.
+TRANSLATIONS["es"] = {**TRANSLATIONS["es"], **ES_SOURCE}
+
+# Португальские переводы основного массива — по исходному русскому тексту.
+TRANSLATIONS["pt"] = {**TRANSLATIONS["pt"], **PT_SOURCE}
 
 # Язык текущего апдейта (выставляется BanCheckMiddleware для каждого
 # message/callback; в воркерах/рассылках задаётся явно через set_current_language).
@@ -244,6 +407,10 @@ def t(lang: str | None = None, key: str | None = None, **kwargs) -> str:
     else:
         lang = current_language()
     text = TRANSLATIONS.get(lang, {}).get(key)
+    if text is None and lang not in (DEFAULT_LANGUAGE, "en"):
+        # Для нерусских языков английский понятнее русского: пока строка не
+        # переведена, показываем её по-английски, и только затем по-русски.
+        text = TRANSLATIONS.get("en", {}).get(key)
     if text is None:
         text = TRANSLATIONS.get(DEFAULT_LANGUAGE, {}).get(key)
     if text is None:

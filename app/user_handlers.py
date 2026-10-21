@@ -187,10 +187,9 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                 return
             admin_flag = is_any_admin(message.from_user.id, user)
             lang = get_user_language(user)
-            vip_str = " 👑" if is_vip(user) else ""
-            styled_name = await get_styled_display_name(session, user)
+            blocks, _event_poster = await build_welcome_blocks(session, user, lang)
             await message.answer(
-                t(lang, "welcome.greeting", name=styled_name, vip=vip_str, balance=user.balance),
+                "\n\n".join(blocks),
                 parse_mode="HTML",
                 reply_markup=main_menu(is_admin=admin_flag, lang=lang)
             )
@@ -565,21 +564,46 @@ async def process_nickname(message: Message, state: FSMContext):
 # =========================
 # START / RULES
 # =========================
-async def send_welcome_banner(message_or_callback, session, user):
-    target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
-    admin_flag = is_any_admin(user.telegram_id, user)
-    lang = get_user_language(user)
+# Штатный баннер приветствия. Его можно заменить из админки
+# («🖼 Приветствие» → загрузить баннер): тогда используется file_id из настроек.
+WELCOME_BANNER_PATH = "app/banner.jpg"
+# Английская копия баннера (перевод нейросетью). Если файла нет — отдаётся
+# русский оригинал, поэтому перевод баннера не обязателен.
+WELCOME_BANNER_LOCALIZED = {"en": "app/banner_en.jpg"}
+
+
+def welcome_banner_path(lang: str | None = None) -> str:
+    """Путь к баннеру приветствия для языка интерфейса (фолбэк — русский)."""
+    localized = WELCOME_BANNER_LOCALIZED.get(normalize_language(lang))
+    if localized and os.path.exists(localized):
+        return localized
+    return WELCOME_BANNER_PATH
+# Лимит Telegram на подпись к фото. Приветствие собирается блоками, поэтому при
+# длинном тексте из админки или событии «хвост» уходит отдельным сообщением,
+# а не роняет отправку картинки (раньше весь текст был одной подписью).
+WELCOME_CAPTION_LIMIT = 1024
+
+
+async def build_welcome_blocks(session, user, lang: str) -> tuple[list[str], str | None]:
+    """Собирает приветствие блоками + постер активного события (или None).
+
+    Порядок блоков: приветствие с балансом → презентация проекта → подсказка
+    про ник → кастомный текст из админки → блок текущего события.
+    """
     vip_str = " 👑" if is_vip(user) else ""
     styled_name = await get_styled_display_name(session, user)
-    msg_text = t(
-        lang, "welcome.greeting",
-        name=styled_name, vip=vip_str, balance=user.balance,
-    )
+    blocks = [
+        t(
+            lang, "welcome.greeting",
+            name=styled_name, vip=vip_str, balance=user.balance,
+        ),
+        t(lang, "welcome.pitch"),
+    ]
     if not has_valid_nickname(user):
-        msg_text += "\n\n" + t(lang, "welcome.no_nickname_hint")
+        blocks.append(t(lang, "welcome.no_nickname_hint"))
     custom_welcome = await get_setting(session, "welcome_text", "")
     if custom_welcome:
-        msg_text += f"\n\n{custom_welcome}"
+        blocks.append(custom_welcome)
 
     # Действующее событие (в т.ч. праздничное авто-событие): на время окна
     # постер события заменяет приветственный баннер, а к тексту добавляется
@@ -590,21 +614,52 @@ async def send_welcome_banner(message_or_callback, session, user):
         events = await get_active_events(session)
         if events:
             event = max(events, key=lambda e: e.discount_percent)
-            msg_text += "\n\n" + build_event_welcome_block(event)
-            event_poster = resolve_event_poster(event)
+            blocks.append(build_event_welcome_block(event))
+            # Постер берётся на языке пользователя (английские копии — в en/).
+            event_poster = resolve_event_poster(event, lang=lang)
     except Exception:
         logger.exception("welcome: не удалось применить активное событие (некритично)")
 
+    return blocks, event_poster
+
+
+def split_welcome_blocks(
+    blocks: list[str],
+    limit: int = WELCOME_CAPTION_LIMIT,
+) -> tuple[str, list[str]]:
+    """Склеивает блоки в подпись длиной до `limit`, остаток возвращает отдельно."""
+    caption_blocks: list[str] = []
+    rest: list[str] = []
+    for block in blocks:
+        if not caption_blocks:
+            caption_blocks.append(block)
+            continue
+        if len("\n\n".join(caption_blocks + [block])) <= limit:
+            caption_blocks.append(block)
+        else:
+            rest.append(block)
+    return "\n\n".join(caption_blocks), rest
+
+
+async def send_welcome_banner(message_or_callback, session, user):
+    target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
+    admin_flag = is_any_admin(user.telegram_id, user)
+    lang = get_user_language(user)
+
+    blocks, event_poster = await build_welcome_blocks(session, user, lang)
     banner_file_id = await get_setting(session, "welcome_banner_id", "")
     menu_kb = main_menu(is_admin=admin_flag, lang=lang)
+    caption, extra_blocks = split_welcome_blocks(blocks)
+    # Меню цепляем к последнему сообщению приветствия.
+    banner_kb = None if extra_blocks else menu_kb
 
     async def _send_photo(photo) -> bool:
         try:
             await target.answer_photo(
                 photo=photo,
-                caption=msg_text,
+                caption=caption,
                 parse_mode="HTML",
-                reply_markup=menu_kb,
+                reply_markup=banner_kb,
             )
             return True
         except Exception:
@@ -612,21 +667,30 @@ async def send_welcome_banner(message_or_callback, session, user):
 
     async def _send_text():
         await target.answer(
-            msg_text,
+            caption,
             parse_mode="HTML",
-            reply_markup=menu_kb,
+            reply_markup=banner_kb,
         )
 
-    # Приоритет картинок: постер события -> баннер из админки -> app/banner.jpg.
+    # Приоритет картинок: постер события -> баннер из админки -> app/banner.jpg
+    # (для английского интерфейса — app/banner_en.jpg, если он есть).
     sent = False
     if event_poster:
         sent = await _send_photo(FSInputFile(event_poster))
     if not sent and banner_file_id:
         sent = await _send_photo(banner_file_id)
-    if not sent and os.path.exists("app/banner.jpg"):
-        sent = await _send_photo(FSInputFile("app/banner.jpg"))
+    banner_path = welcome_banner_path(lang)
+    if not sent and os.path.exists(banner_path):
+        sent = await _send_photo(FSInputFile(banner_path))
     if not sent:
         await _send_text()
+
+    if extra_blocks:
+        await target.answer(
+            "\n\n".join(extra_blocks),
+            parse_mode="HTML",
+            reply_markup=menu_kb,
+        )
 
     # Стартовый лутбокс показываем только новым пользователям (до 24 часов с регистрации)
     # и только один раз.
@@ -1429,7 +1493,8 @@ async def _show_ad_or_event(callback: CallbackQuery, session, user):
         # Постер события: telegram file_id (ручные) или файл на диске
         # (праздничные авто-события из «постеры/» или banners/).
         from app.holidays import resolve_event_poster
-        event_poster = resolve_event_poster(event)
+        # Постер и текст рекламы — на языке зрителя (английские копии в en/).
+        event_poster = resolve_event_poster(event, lang=get_user_language(user))
         if event.image_file_id:
             await callback.message.answer_photo(event.image_file_id, caption=ad_text, parse_mode="HTML", reply_markup=kb)
         elif event_poster:
