@@ -6,18 +6,13 @@ from pathlib import Path
 
 from app.i18n import t
 
-# Единственный ручной источник версии для отображения в боте.
-# Все тексты изменений автоматически подтягиваются из CHANGELOG.md,
-# поэтому будущим агентам достаточно:
-# 1) обновить CURRENT_VERSION при релизе,
-# 2) добавить записи в CHANGELOG.md.
-CURRENT_VERSION = "v3.51.0-portuguese-miniapp"
-CURRENT_STATUS = "Актуальная боевая сборка"
+# Версия бота для экрана «Информация о версии».
+CURRENT_VERSION = "v3.52.0-wseksbot"
+CURRENT_STATUS = "Работаем стабильно"
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
 
-# Лимит сообщения Telegram — 4096 символов. Оставляем запас под шапку
-# и (для админов) подсказку, чтобы кнопка «Версия бота» не падала никогда.
+# Лимит сообщения Telegram — 4096 символов.
 _MAX_BODY_LEN = 3500
 _MAX_ITEM_LEN = 600
 
@@ -26,12 +21,7 @@ _CODE_RE = re.compile(r"`([^`]+)`")
 
 
 def _md_to_html(text: str) -> str:
-    """Мини-конвертер changelog-разметки в безопасный Telegram HTML.
-
-    Сначала экранируем любой HTML (в CHANGELOG.md встречались строки вида
-    `User <tg id>`, которые роняли панель с ошибкой парсинга сущностей),
-    затем превращаем **bold** в <b> и `code` в <code>.
-    """
+    """Мини-конвертер changelog-разметки в безопасный Telegram HTML."""
     escaped = html.escape(text, quote=False)
     escaped = _BOLD_RE.sub(r"<b>\1</b>", escaped)
     escaped = _CODE_RE.sub(r"<code>\1</code>", escaped)
@@ -75,13 +65,12 @@ def build_version_text(*, admin: bool = False, limit: int = 8) -> str:
     )
 
     if not items:
-        text += t("• История изменений пока недоступна. Проверь файл CHANGELOG.md.\n")
+        text += t("• История изменений пока недоступна.\n")
 
     shown = 0
     for item in items:
         clipped = item if len(item) <= _MAX_ITEM_LEN else item[: _MAX_ITEM_LEN - 1].rstrip() + "…"
         line = f"• {_md_to_html(clipped)}\n"
-        # Гарантия: сообщение целиком (с админской подсказкой) укладывается в 4096.
         if len(text) + len(line) > _MAX_BODY_LEN:
             break
         text += line
@@ -89,13 +78,12 @@ def build_version_text(*, admin: bool = False, limit: int = 8) -> str:
 
     omitted = len(items) - shown
     if omitted > 0:
-        text += t("• …и ещё {omitted} — полная история в CHANGELOG.md\n", omitted=omitted)
+        text += t("• …и ещё {omitted} — листай дальше\n", omitted=omitted)
 
     if admin:
         text += t(
-            "\n👑 <b>Подсказка для сопровождения:</b>\n"
-            "Панель версии читает список изменений прямо из <code>CHANGELOG.md</code>. "
-            "Перед релизом обновляйте версию в <code>app/release_notes.py</code> и добавляйте новые пункты в changelog."
+            "\n💡 <b>Для админов:</b> версия и список изменений берутся из файла проекта (CHANGELOG.md). "
+            "Обнови номер версии и добавь новость — она сразу появится у пользователей."
         )
 
     return text
