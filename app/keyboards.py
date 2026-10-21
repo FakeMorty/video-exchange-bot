@@ -32,6 +32,7 @@ BTN_ARCADE     = "🚀 Космическая аркада"
 BTN_RULES      = "📜 Правила"
 BTN_FAQ        = "ℹ️ Помощь"
 BTN_LANG       = "🌐 Язык"
+BTN_REGION     = "🌐 Регион"
 
 
 # =========================
@@ -59,6 +60,7 @@ def main_menu(is_admin: bool = False, lang: str | None = None) -> ReplyKeyboardM
         # Помощь и настройки.
         [KeyboardButton(text=t(lang, "menu.rules")), KeyboardButton(text=t(lang, "menu.faq"))],
         [KeyboardButton(text=t(lang, "menu.feedback")), KeyboardButton(text=t(lang, "menu.lang"))],
+        [KeyboardButton(text=BTN_REGION)],
     ]
     if is_admin:
         kb.append([KeyboardButton(text=t(lang, "menu.admin"))])
@@ -90,6 +92,43 @@ def language_keyboard(current_lang: str | None = None) -> InlineKeyboardMarkup:
         callback_data="btn_main_menu",
     )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── Регион ──────────────────────────────────────────────────
+
+REGION_LABELS: dict[str, str] = {
+    "RU": "🇷🇺 Россия",
+    "US": "🇺🇸 США",
+    "GB": "🇬🇧 Великобритания",
+    "AU": "🇦🇺 Австралия",
+    "CA": "🇨🇦 Канада",
+    "NZ": "🇳🇿 Новая Зеландия",
+    "ES": "🇪🇸 Испания",
+    "BR": "🇧🇷 Бразилия",
+    "PT": "🇵🇹 Португалия",
+}
+
+def region_keyboard(current_region: str | None = None) -> InlineKeyboardMarkup:
+    """Клавиатура выбора региона (текущий отмечен ✅)."""
+    cur = (current_region or "").upper()
+    rows = []
+    for code, label in REGION_LABELS.items():
+        mark = "✅ " if code == cur else ""
+        rows.append([InlineKeyboardButton(
+            text=f"{mark}{label}",
+            callback_data=f"region_set:{code}",
+        )])
+    rows.append([InlineKeyboardButton(
+        text=t(cur.lower() if cur else None, "main_menu.button"),
+        callback_data="btn_main_menu",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def region_label(code: str | None) -> str:
+    if not code:
+        return "—"
+    return REGION_LABELS.get(code.upper(), code.upper())
+
 
 
 # =========================

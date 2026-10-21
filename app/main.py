@@ -2297,7 +2297,7 @@ async def auto_broadcast_worker(bot):
     from app.models import User
     from app.services import (
         seed_default_promo_messages, get_auto_broadcast_pool,
-        ensure_holiday_events, announce_started_events,
+        ensure_holiday_events, ensure_regional_holiday_events, announce_started_events,
     )
     from sqlalchemy import select
 
@@ -2324,6 +2324,7 @@ async def auto_broadcast_worker(bot):
                 # (идемпотентно; каталог в app/holidays.py).
                 try:
                     await ensure_holiday_events(session)
+                    await ensure_regional_holiday_events(session)
                 except Exception:
                     logger.exception("Holiday events ensure failed (non-critical)")
                 users = (await session.execute(
@@ -2763,9 +2764,10 @@ async def on_startup(app):
     # Праздничные авто-события: создать предстоящие из каталога app/holidays.py
     # и закрыть истёкшие. Идемпотентно, дёшево — безопасно на каждом старте.
     try:
-        from app.services import ensure_holiday_events
+        from app.services import ensure_holiday_events, ensure_regional_holiday_events
         async with async_session() as session:
             created_events = await ensure_holiday_events(session)
+            created_events += await ensure_regional_holiday_events(session)
         if created_events:
             log_info(logger, f"Holiday events auto-created: {created_events}")
     except Exception as e:

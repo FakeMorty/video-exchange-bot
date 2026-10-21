@@ -692,11 +692,13 @@ async def admin_events_menu(callback: CallbackQuery):
 async def event_auto_toggle(callback: CallbackQuery):
     """Вкл/выкл праздничные авто-события (каталог app/holidays.py)."""
     if not await check_admin(callback.from_user.id): return
-    from app.services import ensure_holiday_events, holiday_events_enabled, set_holiday_events_enabled
+    from app.services import ensure_holiday_events, ensure_regional_holiday_events, holiday_events_enabled, set_holiday_events_enabled
     async with async_session() as session:
         enable = not await holiday_events_enabled(session)
         await set_holiday_events_enabled(session, enable)
         created = await ensure_holiday_events(session) if enable else 0
+        if enable:
+            created += await ensure_regional_holiday_events(session)
     if enable:
         await callback.answer(t('✅ Авто-события включены. Создано новых: {created}.', created=created), show_alert=True)
     else:

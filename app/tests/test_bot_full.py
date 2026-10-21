@@ -4956,12 +4956,14 @@ def test_main_menu_rows_are_paired_and_compact():
     from app.keyboards import main_menu
 
     rows = main_menu().keyboard
-    assert len(rows) == 7
-    for row in rows:
+    # 7 базовых рядов + ряд региона (🌐 Регион) — всего 8, последний одиночный
+    assert len(rows) == 8
+    for row in rows[:-1]:
         assert len(row) == 2
+    assert len(rows[-1]) == 1
 
     admin_rows = main_menu(is_admin=True).keyboard
-    assert len(admin_rows) == 8
+    assert len(admin_rows) == 9
     assert len(admin_rows[-1]) == 1  # «🔧 Админка» — отдельный ряд
 
 

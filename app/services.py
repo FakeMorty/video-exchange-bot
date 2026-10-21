@@ -3763,6 +3763,387 @@ async def get_active_events(session: AsyncSession):
     result = await session.execute(stmt)
     return result.scalars().all()
 
+REGION_CHANGE_COOLDOWN_DAYS = 180
+
+# Маппинг телефонных кодов -> регион (грубо, для подсказки)
+PHONE_CODE_TO_REGION: dict[str, str] = {
+    "7": "RU",
+    "1": "US",  # США/Канада — различить нельзя без доп. данных, считаем US
+    "44": "GB",
+    "61": "AU",
+    "64": "NZ",
+    "34": "ES",
+    "55": "BR",
+    "351": "PT",
+}
+
+LANG_CODE_TO_REGION: dict[str, str] = {
+    "en": "US",
+    "en-us": "US",
+    "en-gb": "GB",
+    "en-au": "AU",
+    "en-ca": "CA",
+    "en-nz": "NZ",
+    "es": "ES",
+    "es-es": "ES",
+    "es-mx": "ES",
+    "pt": "BR",
+    "pt-br": "BR",
+    "pt-pt": "PT",
+    "ru": "RU",
+}
+
+
+def guess_region_from_language_code(language_code: str | None) -> str | None:
+    """Пытается угадать регион по Telegram language_code (например en-GB -> GB)."""
+    if not language_code:
+        return None
+    code = str(language_code).strip().lower().replace("_", "-")
+    if code in LANG_CODE_TO_REGION:
+        return LANG_CODE_TO_REGION[code]
+    # общий вид xx-YY
+    if "-" in code:
+        base, sub = code.split("-", 1)
+        sub_up = sub.upper()
+        # если подтег — известная страна из наших календарей
+        if sub_up in ("US", "GB", "AU", "CA", "NZ", "ES", "BR", "PT", "RU"):
+            return sub_up
+        # иначе пробуем маппинг
+        return LANG_CODE_TO_REGION.get(code)
+    return None
+
+
+def guess_region_from_phone(phone: str | None) -> str | None:
+    """Код страны по номеру телефона (только как подсказка)."""
+    if not phone:
+        return None
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    # длинные коды проверяем первыми
+    for plen in (3, 2, 1):
+        if len(digits) >= plen:
+            code = digits[:plen] if plen != 1 else digits[0]
+            # для 351 — 3 цифры, для 44 — 2, для 1 — 1
+            if code in PHONE_CODE_TO_REGION:
+                # особая проверка для 1 — уже покрыта, но для 7 тоже
+                return PHONE_CODE_TO_REGION[code]
+            if plen == 3 and digits.startswith("351"):
+                return "PT"
+            if plen == 2 and digits.startswith("44"):
+                return "GB"
+            if plen == 2 and digits.startswith("61"):
+                return "AU"
+            if plen == 2 and digits.startswith("64"):
+                return "NZ"
+    return None
+
+
+def infer_region_for_new_user(
+    language_code: str | None = None,
+    phone: str | None = None,
+    user_language: str | None = None,
+) -> tuple[str, str]:
+    """Возвращает (region, source) для нового пользователя."""
+    # 1. language_code (самый дешевый сигнал)
+    r = guess_region_from_language_code(language_code)
+    if r:
+        return r, "lang_code"
+    # 2. телефон
+    r = guess_region_from_phone(phone)
+    if r:
+        return r, "phone"
+    # 3. язык интерфейса -> дефолт календаря
+    if user_language:
+        from app.holidays import DEFAULT_CALENDAR_BY_LANG as _D
+        from app.i18n import normalize_language as _nl
+        fb = _D.get(_nl(user_language))
+        if fb:
+            return fb, "default"
+    return "RU", "default"
+
+
+async def get_user_region_code(session: AsyncSession, user) -> str:
+    """Определяет регион пользователя с учётом БД и фолбэков."""
+    if user is None:
+        return "RU"
+    region = getattr(user, "region", None)
+    if region and region.upper() in ("RU","US","GB","AU","CA","NZ","ES","BR","PT"):
+        return region.upper()
+    # фолбэк по языку
+    lang = getattr(user, "language", None)
+    if lang:
+        from app.holidays import DEFAULT_CALENDAR_BY_LANG
+        from app.i18n import normalize_language
+        fb = DEFAULT_CALENDAR_BY_LANG.get(normalize_language(lang))
+        if fb:
+            return fb
+    return "RU"
+
+
+async def can_change_region(session: AsyncSession, user) -> tuple[bool, str]:
+    """Можно ли сейчас менять регион? Возвращает (ok, reason)."""
+    if user is None:
+        return False, "Пользователь не найден"
+    now = utc_now()
+    # Кулдаун 180 дней
+    changed_at = getattr(user, "region_changed_at", None)
+    if changed_at:
+        delta = now - changed_at
+        if delta.days < REGION_CHANGE_COOLDOWN_DAYS:
+            remain = REGION_CHANGE_COOLDOWN_DAYS - delta.days
+            return False, f"Смена региона доступна через {remain} дн."
+    # Заморозка на время активного события — нельзя менять регион когда идёт праздник
+    try:
+        active = await get_active_events(session)
+        # если есть активное событие, в котором участвует пользователь (по его текущему региону)
+        # — блокируем смену. Для RU это будет всегда в праздники, для других — их праздники.
+        # Проверка простая: если вообще есть активное событие — блокируем.
+        # Более точная — check по region, но пока общий лок.
+        if active:
+            # проверяем, есть ли событие с region == user.region или без региона (RU)
+            user_region = await get_user_region_code(session, user)
+            for ev in active:
+                ev_region = getattr(ev, "region", None)
+                if ev_region is None or ev_region == user_region:
+                    # есть активное событие для этого региона
+                    return False, "Нельзя менять регион во время активного события"
+    except Exception:
+        pass
+    return True, ""
+
+
+async def set_user_region(
+    session: AsyncSession,
+    user_id: int,
+    region_code: str,
+    source: str = "explicit",
+    bypass_cooldown: bool = False,
+) -> tuple[bool, str]:
+    """Установить регион пользователя с учётом кулдауна и логирования."""
+    from app.holidays import REGION_CALENDARS
+    if not region_code:
+        return False, "Не указан регион"
+    code = region_code.strip().upper()
+    if code not in REGION_CALENDARS:
+        return False, f"Неизвестный регион {code}"
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return False, "Пользователь не найден"
+    if not bypass_cooldown:
+        ok, reason = await can_change_region(session, user)
+        if not ok:
+            return False, reason
+    old_region = getattr(user, "region", None)
+    old_tz = getattr(user, "tz", None)
+    # Если регион не меняется — ничего не делаем
+    if old_region and old_region.upper() == code:
+        return True, "Регион уже установлен"
+    # Устанавливаем
+    # Определяем TZ по региону (если нет — оставляем)
+    from app.holidays import REGION_TZ
+    new_tz = REGION_TZ.get(code)
+    user.region = code
+    if new_tz:
+        user.tz = new_tz
+    user.region_source = source
+    now = utc_now()
+    user.region_changed_at = now
+    # region_locked_at — фиксируем первый раз
+    if not getattr(user, "region_locked_at", None):
+        user.region_locked_at = now
+    # лог
+    await log_user_action(session, user.id, "region_change", f"{old_region} -> {code} source={source} tz={new_tz} old_tz={old_tz}", auto_commit=False)
+    await session.commit()
+    return True, "Регион изменён"
+
+
+async def get_active_events_for_user(session: AsyncSession, user) -> list:
+    """Активные события для конкретного пользователя (по его региону)."""
+    if user is None:
+        return await get_active_events(session)
+    region = await get_user_region_code(session, user)
+    now = utc_now()
+    # выбираем события: либо без региона (легаси RU) либо с совпадающим регионом
+    # Но чтобы не показывать RU-праздники пользователю из US, фильтруем:
+    # если регион != RU, показываем только события с этим регионом (и без региона считаем RU-only)
+    # Для RU — показываем события без региона + с region==RU (если появятся)
+    if region == "RU":
+        stmt = select(Event).where(
+            Event.is_active == True,
+            Event.start_date <= now,
+            Event.end_date > now,
+            (Event.region.is_(None) | (Event.region == "RU")),
+        ).order_by(Event.discount_percent.desc())
+    else:
+        stmt = select(Event).where(
+            Event.is_active == True,
+            Event.start_date <= now,
+            Event.end_date > now,
+            Event.region == region,
+        ).order_by(Event.discount_percent.desc())
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+    # Если для региона нет событий, но есть легаси RU без региона — не показываем их (чтобы не было 9 мая для US)
+    # Поэтому пустой список — ок.
+    return events
+
+
+async def get_current_prices_for_user(session: AsyncSession, user) -> tuple:
+    """Цены с учётом региональных событий пользователя."""
+    from app.config import VIP_PRICE_STARS
+    sale = await get_active_sale(session)
+    active_events = await get_active_events_for_user(session, user)
+    vip_price = int(VIP_PRICE_STARS)
+    packs = await get_shop_star_packages(session)
+    best_discount = 0.0
+    applies_vip = False
+    applies_coins = False
+    if active_events:
+        for ev in active_events:
+            if ev.discount_percent > best_discount:
+                best_discount = ev.discount_percent
+                applies_vip = ev.applies_vip
+                applies_coins = ev.applies_coins
+    elif sale:
+        best_discount = sale.discount_percent
+        applies_vip = sale.applies_to in ("all", "vip")
+        applies_coins = sale.applies_to in ("all", "coins")
+    if best_discount > 0:
+        discount = best_discount / 100.0
+        if applies_vip:
+            vip_price = _discount_stars_amount(vip_price, discount)
+        if applies_coins:
+            for k in packs:
+                if k == "starterpack":
+                    continue
+                packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], discount)
+    # персональная скидка
+    if user is not None:
+        try:
+            stars_discount = await get_stars_discount(session, user.id)
+            if stars_discount > 0:
+                vip_price = _discount_stars_amount(vip_price, stars_discount)
+                for k in packs:
+                    if k == "starterpack":
+                        continue
+                    packs[k]["stars"] = _discount_stars_amount(packs[k]["stars"], stars_discount)
+        except Exception:
+            pass
+    return vip_price, packs, sale
+
+
+async def ensure_regional_holiday_events(session: AsyncSession, now=None) -> int:
+    """Создать события для всех региональных календарей (§3.2)."""
+    from app.holidays import REGION_CALENDARS, holiday_window
+    now = now or utc_now()
+    created = 0
+    # чистим истёкшие (общая логика уже в ensure_holiday_events, но дублируем)
+    expired = (await session.execute(
+        select(Event).where(Event.is_active == True, Event.end_date <= now)
+    )).scalars().all()
+    for ev in expired:
+        ev.is_active = False
+    if expired:
+        await session.commit()
+    if not await holiday_events_enabled(session):
+        return 0
+    for region_code, calendar in REGION_CALENDARS.items():
+        for spec in calendar:
+            # используем holiday_windows_around для этого региона
+            # Но для создания достаточно проверить окна в пределах 30 дней
+            for anchor_year in (now.year - 1, now.year, now.year + 1):
+                try:
+                    start, end = holiday_window(spec, anchor_year)
+                except Exception:
+                    continue
+                if end < now or start > now + timedelta(days=30):
+                    continue
+                marker = f"holiday_event:{region_code}:{spec.slug}:{start.year}"
+                if await get_setting(session, marker, ""):
+                    continue
+                existing = (await session.execute(
+                    select(Event).where(Event.slug == spec.slug, Event.start_date == start, Event.region == region_code)
+                )).scalars().first()
+                if existing:
+                    await set_setting(session, marker, str(existing.id))
+                    continue
+                # также проверяем легаси без региона (RU старые)
+                if region_code == "RU":
+                    existing2 = (await session.execute(
+                        select(Event).where(Event.slug == spec.slug, Event.start_date == start, Event.region.is_(None))
+                    )).scalars().first()
+                    if existing2:
+                        # апгрейдим легаси событие — ставим регион
+                        existing2.region = region_code
+                        await set_setting(session, marker, str(existing2.id))
+                        continue
+                ev = Event(
+                    name=spec.name,
+                    description=spec.description,
+                    discount_percent=spec.discount_percent,
+                    duration_days=max(1, (end - start).days),
+                    applies_vip=spec.applies_vip,
+                    applies_coins=spec.applies_coins,
+                    applies_lootbox=spec.applies_lootbox,
+                    applies_cases=False,
+                    image_file_id=None,
+                    slug=spec.slug,
+                    poster_path=spec.poster,
+                    start_date=start,
+                    end_date=end,
+                    region=region_code,
+                    is_active=True,
+                    created_by=None,
+                )
+                session.add(ev)
+                await session.flush()
+                await set_setting(session, marker, str(ev.id))
+                await set_setting(session, f"event_announce_pending:{ev.id}", "1")
+                created += 1
+    if created:
+        await session.commit()
+    return created
+
+
+async def claim_holiday_reward(
+    session: AsyncSession,
+    user_id: int,
+    holiday_slug: str,
+    year: int,
+    region: str | None = None,
+) -> bool:
+    """Идемпотентная выдача награды праздника. Возвращает True если впервые, False если уже была."""
+    from app.models import HolidayReward
+    # проверка существования
+    existing = (await session.execute(
+        select(HolidayReward).where(
+            HolidayReward.user_id == user_id,
+            HolidayReward.holiday_slug == holiday_slug,
+            HolidayReward.year == year,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        return False
+    # попытка создать (ловим гонку)
+    try:
+        rw = HolidayReward(user_id=user_id, holiday_slug=holiday_slug, year=year, region=region)
+        session.add(rw)
+        await session.flush()
+        await session.commit()
+        return True
+    except Exception:
+        await session.rollback()
+        # проверяем снова — возможно гонка уже создала
+        existing = (await session.execute(
+            select(HolidayReward).where(
+                HolidayReward.user_id == user_id,
+                HolidayReward.holiday_slug == holiday_slug,
+                HolidayReward.year == year,
+            )
+        )).scalar_one_or_none()
+        return False if existing else False
+
+
+
 
 # ============================
 # АВТОМАТИЧЕСКИЕ ПРАЗДНИЧНЫЕ СОБЫТИЯ (каталог app/holidays.py)
@@ -3846,6 +4227,7 @@ async def ensure_holiday_events(session: AsyncSession, now=None) -> int:
             poster_path=spec.poster,
             start_date=start,
             end_date=end,
+            region="RU",
             is_active=True,
             created_by=None,
         )
@@ -4624,8 +5006,35 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
 
     async with async_session() as session:
         users = (await session.execute(
-            select(User.telegram_id, User.first_name, User.language).where(User.status == "active")
+            select(User.telegram_id, User.first_name, User.language, User.region).where(User.status == "active")
         )).all()
+
+    # Фильтрация по региону: если событие привязано к региону, рассылаем только
+    # пользователям этого региона (или тем, чей фолбэк по языку совпадает).
+    # Легаси-события без региона — всем.
+    event_region = getattr(event, "region", None)
+    if event_region:
+        filtered = []
+        for tid, first_name, user_lang, user_region in users:
+            # прямой регион или фолбэк по языку
+            effective = (user_region or "").upper() if user_region else None
+            if not effective:
+                try:
+                    from app.holidays import DEFAULT_CALENDAR_BY_LANG as _D
+                    from app.i18n import normalize_language as _nl
+                    effective = _D.get(_nl(user_lang))
+                except Exception:
+                    effective = None
+            if effective == event_region or effective is None and event_region == "RU":
+                filtered.append((tid, first_name, user_lang))
+            elif user_region and user_region.upper() == event_region:
+                filtered.append((tid, first_name, user_lang))
+        # для простоты: если фильтр дал пусто, не шлём никому (не спамим чужие регионы)
+        # иначе используем filtered, но для совместимости оставляем как список кортежей без региона
+        users = filtered
+    else:
+        # убираем регион из кортежа для дальнейшей логики
+        users = [(tid, first_name, user_lang) for tid, first_name, user_lang, _ in users]
 
     # Caption к фото ограничен 1024 символами — build_event_promo_text при
     # необходимости обрежет длинное описание, иначе send_photo упадёт молча.
@@ -4633,9 +5042,11 @@ async def broadcast_event_to_users(bot, event: Event) -> int:
     # для английского интерфейса — копия из подпапки en/. Текст и постер
     # готовятся один раз на язык, а не на каждого получателя.
     variants: dict[str, tuple[str, str | None]] = {}
-    for lang in {normalize_language(lang) for _, _, lang in users} | {"ru"}:
+    langs_needed = {normalize_language(lang) for _, _, lang in users} | {"ru"} if users else {"ru"}
+    for lang in langs_needed:
         with language_scope(lang):
-            poster_path = resolve_event_poster(event, lang=lang)
+            # постер с учётом региона события
+            poster_path = resolve_event_poster(event, lang=lang, region=event_region)
             has_image = bool(event.image_file_id or poster_path)
             max_len = PROMO_CAPTION_MAX if has_image else PROMO_TEXT_MAX
             variants[lang] = (build_event_promo_text(event, max_len=max_len), poster_path)
@@ -4780,6 +5191,7 @@ def build_event_promo_text(event: Event, max_len: int | None = None) -> str:
 async def get_auto_broadcast_pool(
     session: AsyncSession,
     lang: str | None = None,
+    region: str | None = None,
 ) -> list[dict]:
     """Пул сообщений для автоматической ротации:
 
@@ -4807,10 +5219,26 @@ async def get_auto_broadcast_pool(
             pool.append({"text": m.text, "image_file_id": None})
 
         events = await get_active_events(session)
+        # Региональная фильтрация: показываем только события региона пользователя
+        # + глобальные (region=None) для совместимости. Старые тесты создают
+        # события без региона — они остаются видимыми всем.
+        # region явно приоритетнее lang-default; lang-default используется как fallback.
+        effective_region = region
+        if effective_region is None and lang is not None:
+            try:
+                from app.holidays import DEFAULT_CALENDAR_BY_LANG
+                from app.i18n import normalize_language as _nl
+                effective_region = DEFAULT_CALENDAR_BY_LANG.get(_nl(lang))
+            except Exception:
+                effective_region = None
+        if effective_region is not None:
+            events = [e for e in events if getattr(e, "region", None) in (None, effective_region)]
         for ev in events:
             # Постер события: telegram file_id (ручные события) или файл на диске
             # (праздничные авто-события, папки «постеры/» и banners/).
-            poster_path = resolve_event_poster(ev, lang=lang)
+            # Учитываем регион события для каскада постеров.
+            ev_region = getattr(ev, "region", None)
+            poster_path = resolve_event_poster(ev, lang=lang, region=ev_region)
             max_len = PROMO_CAPTION_MAX if (ev.image_file_id or poster_path) else PROMO_TEXT_MAX
             pool.append({
                 "text": build_event_promo_text(ev, max_len=max_len),

@@ -51,6 +51,12 @@ class User(Base):
     timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Язык интерфейса бота (i18n, см. app/i18n.py): "ru" по умолчанию, "en" — первый доп. язык
     language: Mapped[str] = mapped_column(String(8), default="ru", server_default="ru")
+    # Регион и часовой пояс пользователя (§3.1 постановки)
+    region: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    tz: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    region_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    region_locked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    region_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Отношения
@@ -623,6 +629,7 @@ class Event(Base):
     start_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     end_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    region: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
@@ -786,6 +793,21 @@ class LotteryBet(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=10.0)
     is_settled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_won: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class HolidayReward(Base):
+    """Выданная праздничная награда — идемпотентность по (user, slug, year)."""
+    __tablename__ = "holiday_rewards"
+    __table_args__ = (
+        UniqueConstraint("user_id", "holiday_slug", "year", name="uq_holiday_reward_user_slug_year"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    holiday_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    region: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class ArcadeRun(Base):

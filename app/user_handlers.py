@@ -608,15 +608,22 @@ async def build_welcome_blocks(session, user, lang: str) -> tuple[list[str], str
     # Действующее событие (в т.ч. праздничное авто-событие): на время окна
     # постер события заменяет приветственный баннер, а к тексту добавляется
     # праздничный блок со скидкой и датой окончания.
+    # Региональный календарь: пользователь видит только свой регион.
     event_poster = None
     try:
         from app.holidays import build_event_welcome_block, resolve_event_poster
-        events = await get_active_events(session)
+        from app.services import get_active_events_for_user
+        # Пробуем региональный пул, фолбэк — общий (для совместимости с тестами где region=None)
+        try:
+            events = await get_active_events_for_user(session, user)
+        except Exception:
+            events = await get_active_events(session)
         if events:
             event = max(events, key=lambda e: e.discount_percent)
             blocks.append(build_event_welcome_block(event))
-            # Постер берётся на языке пользователя (английские копии — в en/).
-            event_poster = resolve_event_poster(event, lang=lang)
+            # Постер берётся на языке и регионе пользователя (каскад постеров).
+            region = getattr(user, 'region', None)
+            event_poster = resolve_event_poster(event, lang=lang, region=region)
     except Exception:
         logger.exception("welcome: не удалось применить активное событие (некритично)")
 
@@ -812,7 +819,67 @@ async def cb_language_set(callback: CallbackQuery):
     )
 
 
+# ── Регион ──────────────────────────────────────────────────
+
+@router.message(F.text == "🌐 Регион")
+async def cmd_region_menu(message: Message, state: FSMContext):
+    await state.clear()
+    from app.keyboards import region_keyboard, region_label
+    from app.services import get_user_region_code
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        if not user:
+            return
+        lang = get_user_language(user)
+        region = await get_user_region_code(session, user)
+        await log_user_action(session, user.id, "open_region_menu")
+        guess = region
+        text = t(lang, "lang.region_title") + f"\n\nТекущий: <b>{region_label(region)}</b>\nСмена языка не меняет регион."
+        await message.answer(text, parse_mode="HTML", reply_markup=region_keyboard(region))
+
+@router.callback_query(F.data == "region_menu")
+async def cb_region_menu(callback: CallbackQuery):
+    from app.keyboards import region_keyboard, region_label
+    from app.services import get_user_region_code
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        lang = get_user_language(user)
+        region = await get_user_region_code(session, user)
+        text = t(lang, "lang.region_title") + f"\n\nТекущий: <b>{region_label(region)}</b>"
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=region_keyboard(region))
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("region_set:"))
+async def cb_region_set(callback: CallbackQuery):
+    parts = (callback.data or "").split(":", 1)
+    code = (parts[1] if len(parts) > 1 else "").strip().upper()
+    from app.services import set_user_region
+    from app.keyboards import region_label
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        lang = get_user_language(user)
+        ok, msg = await set_user_region(session, user.id, code, source="explicit")
+        if not ok:
+            await callback.answer(msg, show_alert=True)
+            return
+        # успех
+        await callback.answer(t(lang, "lang.region_changed", region=region_label(code)), show_alert=True)
+        admin_flag = is_any_admin(callback.from_user.id, user)
+        await callback.message.answer(
+            t(lang, "main_menu.title"),
+            parse_mode="HTML",
+            reply_markup=main_menu(is_admin=admin_flag, lang=lang),
+        )
+
+
 @router.message(F.text.in_(menu_button_variants("admin")))
+
 async def cmd_admin_redirect(message: Message):
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
@@ -872,6 +939,10 @@ async def show_profile(message: Message, state: FSMContext, *, telegram_id: int 
             [InlineKeyboardButton(
                 text=t(lang, "menu.lang"),
                 callback_data="lang_menu"
+            )],
+            [InlineKeyboardButton(
+                text="🌐 Регион",
+                callback_data="region_menu"
             )]
         ])
         # Стилизованный ник (card-режим для профиля)

@@ -74,8 +74,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu.faq": "ℹ️ Помощь",
         "menu.admin": "🔧 Админка",
         "menu.lang": "🌐 Язык",
+        "menu.region": "🌐 Регион",
         # Выбор языка
         "lang.title": "🌐 <b>Выбери язык бота</b>",
+        "lang.region_title": "🌐 <b>Выбери регион</b>",
+        "lang.region_changed": "✅ Регион: {region}",
+        "lang.region_cooldown": "⏳ Смена региона доступна через {days} дн.",
+        "lang.region_locked": "🔒 Нельзя менять регион во время активного события",
         "lang.changed_alert": "✅ Язык: 🇷🇺 русский",
         # Главное меню
         "main_menu.title": "🏠 <b>Главное меню</b>\n\nВыбери, чем заняться 👇",
@@ -140,8 +145,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu.faq": "ℹ️ Help",
         "menu.admin": "🔧 Admin",
         "menu.lang": "🌐 Language",
+        "menu.region": "🌐 Region",
         # Language picker
         "lang.title": "🌐 <b>Choose the bot language</b>",
+        "lang.region_title": "🌐 <b>Choose your region</b>",
+        "lang.region_changed": "✅ Region: {region}",
+        "lang.region_cooldown": "⏳ You can change region in {days} days",
+        "lang.region_locked": "🔒 You can't change region during an active event",
         "lang.changed_alert": "✅ Language: 🇬🇧 English",
         # Main menu
         "main_menu.title": "🏠 <b>Main menu</b>\n\nPick what to do 👇",
@@ -207,8 +217,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu.faq": "ℹ️ Ayuda",
         "menu.admin": "🔧 Admin",
         "menu.lang": "🌐 Idioma",
+        "menu.region": "🌐 Región",
         # Выбор языка
         "lang.title": "🌐 <b>Elige el idioma del bot</b>",
+        "lang.region_title": "🌐 <b>Elige tu región</b>",
+        "lang.region_changed": "✅ Región: {region}",
+        "lang.region_cooldown": "⏳ Podrás cambiar de región en {days} días",
+        "lang.region_locked": "🔒 No puedes cambiar de región durante un evento activo",
         "lang.changed_alert": "✅ Idioma: 🇪🇸 español",
         # Главное меню
         "main_menu.title": "🏠 <b>Menú principal</b>\n\nElige qué hacer 👇",
@@ -274,8 +289,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu.faq": "ℹ️ Ajuda",
         "menu.admin": "🔧 Admin",
         "menu.lang": "🌐 Idioma",
+        "menu.region": "🌐 Região",
         # Выбор языка
         "lang.title": "🌐 <b>Escolha o idioma do bot</b>",
+        "lang.region_title": "🌐 <b>Escolha sua região</b>",
+        "lang.region_changed": "✅ Região: {region}",
+        "lang.region_cooldown": "⏳ Você poderá mudar de região em {days} dias",
+        "lang.region_locked": "🔒 Não é possível mudar de região durante um evento ativo",
         "lang.changed_alert": "✅ Idioma: 🇧🇷 português",
         # Главное меню
         "main_menu.title": "🏠 <b>Menu principal</b>\n\nEscolha o que fazer 👇",
