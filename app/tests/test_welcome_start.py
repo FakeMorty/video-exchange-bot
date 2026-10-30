@@ -207,3 +207,51 @@ async def test_admin_banner_from_settings_wins_over_default_file(db_session):
     await send_welcome_banner(target, db_session, user)
 
     assert target.answer_photo.await_args.kwargs["photo"] == "AgACAgIAAxkBAAI"
+
+
+async def test_start_promo_uses_same_banner_as_normal_start(db_session, monkeypatch):
+    from app import user_handlers
+    user = _make_user()
+    db_session.add(user)
+    await db_session.commit()
+
+    class SessionContext:
+        async def __aenter__(self):
+            return db_session
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(user_handlers, 'async_session', SessionContext)
+    monkeypatch.setattr(user_handlers, 'get_or_create_user', AsyncMock(return_value=(user, False)))
+    monkeypatch.setattr(user_handlers, 'send_welcome_banner', AsyncMock())
+    monkeypatch.setattr(user_handlers, 'ENABLE_PROMOCODES', False)
+    message = SimpleNamespace(from_user=SimpleNamespace(id=1001, username='viperr', first_name='Viperr', last_name=None), answer=AsyncMock())
+    state = SimpleNamespace(clear=AsyncMock())
+    await user_handlers.cmd_start(message, SimpleNamespace(args='promo_TEST'), state)
+    user_handlers.send_welcome_banner.assert_awaited_once_with(message, db_session, user)
+
+
+async def test_halloween_welcome_on_october_30(db_session, monkeypatch):
+    from app import services
+    from app.services import ensure_holiday_events
+    now = datetime(2026, 10, 30, 12)
+    monkeypatch.setattr(services, 'utc_now', lambda: now)
+    await ensure_holiday_events(db_session, now=now)
+    user = _make_user(created_at=now - timedelta(days=2))
+    db_session.add(user)
+    await db_session.commit()
+    target = SimpleNamespace(answer_photo=AsyncMock(), answer=AsyncMock())
+    await send_welcome_banner(target, db_session, user)
+    photo = target.answer_photo.await_args.kwargs
+    assert photo['photo'].path.endswith('halloween.jpg')
+    assert 'Хэллоуина' in photo['caption']
+    assert '50%' in photo['caption']
+    assert all(part in photo['caption'] for part in PITCH_RU_PARTS)
+
+
+def test_welcome_banner_path_independent_of_working_directory(tmp_path, monkeypatch):
+    from app.user_handlers import welcome_banner_path
+    from pathlib import Path
+    monkeypatch.chdir(tmp_path)
+    assert Path(welcome_banner_path('ru')).is_file()

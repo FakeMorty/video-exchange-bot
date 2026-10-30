@@ -1,4 +1,5 @@
 from html import escape
+from pathlib import Path
 import os
 import uuid
 import math
@@ -185,14 +186,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                     reply_markup=rules_keyboard()
                 )
                 return
-            admin_flag = is_any_admin(message.from_user.id, user)
-            lang = get_user_language(user)
-            blocks, _event_poster = await build_welcome_blocks(session, user, lang)
-            await message.answer(
-                "\n\n".join(blocks),
-                parse_mode="HTML",
-                reply_markup=main_menu(is_admin=admin_flag, lang=lang)
-            )
+            await send_welcome_banner(message, session, user)
             return
 
     referral_code = args if args else None
@@ -566,10 +560,10 @@ async def process_nickname(message: Message, state: FSMContext):
 # =========================
 # Штатный баннер приветствия. Его можно заменить из админки
 # («🖼 Приветствие» → загрузить баннер): тогда используется file_id из настроек.
-WELCOME_BANNER_PATH = "app/banner.jpg"
+WELCOME_BANNER_PATH = str(Path(__file__).resolve().parent / "banner.jpg")
 # Английская копия баннера (перевод нейросетью). Если файла нет — отдаётся
 # русский оригинал, поэтому перевод баннера не обязателен.
-WELCOME_BANNER_LOCALIZED = {"en": "app/banner_en.jpg"}
+WELCOME_BANNER_LOCALIZED = {"en": str(Path(__file__).resolve().parent / "banner_en.jpg")}
 
 
 def welcome_banner_path(lang: str | None = None) -> str:
@@ -663,6 +657,7 @@ async def send_welcome_banner(message_or_callback, session, user):
             )
             return True
         except Exception:
+            logger.exception("welcome: не удалось отправить баннер")
             return False
 
     async def _send_text():
