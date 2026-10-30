@@ -58,6 +58,7 @@ from datetime import datetime, timezone
 _bot = None
 _dp = None
 _playlist_schema_ready = False
+_event_schema_ready = False
 _bot_commands_ready = False
 _holiday_events_synced_date = None
 
@@ -102,6 +103,31 @@ async def _ensure_playlist_schema() -> None:
         if not tables_exist:
             raise
     _playlist_schema_ready = True
+
+
+async def _ensure_event_schema() -> None:
+    """Apply the two additive holiday-event columns before processing updates.
+
+    Serverless deployments do not run Alembic; older databases may still have
+    the original events table. IF NOT EXISTS is safe for concurrent cold starts.
+    """
+    global _event_schema_ready
+    if _event_schema_ready:
+        return
+    from sqlalchemy import inspect, text
+    from app.db import engine
+
+    async with engine.begin() as conn:
+        columns = await conn.run_sync(lambda sync_conn: {
+            column["name"] for column in inspect(sync_conn).get_columns("events")
+        })
+        # PostgreSQL допускает одновременные обновления при нескольких cold start.
+        guard = "IF NOT EXISTS " if conn.dialect.name == "postgresql" else ""
+        if "slug" not in columns:
+            await conn.execute(text(f"ALTER TABLE events ADD COLUMN {guard}slug VARCHAR(64)"))
+        if "poster_path" not in columns:
+            await conn.execute(text(f"ALTER TABLE events ADD COLUMN {guard}poster_path TEXT"))
+    _event_schema_ready = True
 
 
 async def _ensure_holiday_events() -> None:
@@ -386,6 +412,7 @@ async def app(scope, receive, send):
             bot, dp = _get_bot_and_dispatcher()
             await _ensure_playlist_schema()
             await _ensure_bot_commands(bot)
+            await _ensure_event_schema()
             await _ensure_holiday_events()
             update = Update.model_validate(data, context={"bot": bot})
             await dp.feed_update(bot, update)

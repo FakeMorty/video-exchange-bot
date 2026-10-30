@@ -605,12 +605,15 @@ async def build_welcome_blocks(session, user, lang: str) -> tuple[list[str], str
     event_poster = None
     try:
         from app.holidays import build_event_welcome_block, resolve_event_poster
-        events = await get_active_events(session)
-        if events:
-            event = max(events, key=lambda e: e.discount_percent)
-            blocks.append(build_event_welcome_block(event))
-            # Постер берётся на языке пользователя (английские копии — в en/).
-            event_poster = resolve_event_poster(event, lang=lang)
+        # Ошибка SQL в PostgreSQL иначе оставит всю транзакцию в состоянии
+        # aborted и последующее чтение настроек сорвёт отправку приветствия.
+        async with session.begin_nested():
+            events = await get_active_events(session)
+            if events:
+                event = max(events, key=lambda e: e.discount_percent)
+                blocks.append(build_event_welcome_block(event))
+                # Постер берётся на языке пользователя (английские копии — в en/).
+                event_poster = resolve_event_poster(event, lang=lang)
     except Exception:
         logger.exception("welcome: не удалось применить активное событие (некритично)")
 
