@@ -11,7 +11,7 @@ from app.i18n import t
 # поэтому будущим агентам достаточно:
 # 1) обновить CURRENT_VERSION при релизе,
 # 2) добавить записи в CHANGELOG.md.
-CURRENT_VERSION = "v3.52.0-welcome-holidays"
+CURRENT_VERSION = "v3.53.0-events-schema-fix"
 CURRENT_STATUS = "Актуальная боевая сборка"
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"

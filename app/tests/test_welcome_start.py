@@ -255,3 +255,21 @@ def test_welcome_banner_path_independent_of_working_directory(tmp_path, monkeypa
     from pathlib import Path
     monkeypatch.chdir(tmp_path)
     assert Path(welcome_banner_path('ru')).is_file()
+
+
+async def test_welcome_event_query_failure_does_not_break_transaction(db_session, monkeypatch):
+    from sqlalchemy import text
+    from app import user_handlers
+    user = _make_user()
+    db_session.add(user)
+    await db_session.commit()
+
+    async def broken_query(session):
+        await session.execute(text('SELECT missing_column FROM events'))
+
+    monkeypatch.setattr(user_handlers, 'get_active_events', broken_query)
+    target = SimpleNamespace(answer_photo=AsyncMock(), answer=AsyncMock())
+    await send_welcome_banner(target, db_session, user)
+    assert target.answer_photo.await_count == 1
+    assert 'Viperr' in target.answer_photo.await_args.kwargs['caption']
+    assert (await db_session.execute(text('SELECT 1'))).scalar_one() == 1
