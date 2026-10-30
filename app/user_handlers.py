@@ -611,7 +611,7 @@ async def build_welcome_blocks(session, user, lang: str) -> tuple[list[str], str
             events = await get_active_events(session)
             if events:
                 event = max(events, key=lambda e: e.discount_percent)
-                blocks.append(build_event_welcome_block(event))
+                blocks.append(build_event_welcome_block(event, lang=lang))
                 # Постер берётся на языке пользователя (английские копии — в en/).
                 event_poster = resolve_event_poster(event, lang=lang)
     except Exception:

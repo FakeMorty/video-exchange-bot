@@ -329,3 +329,31 @@ def test_parse_start_date_variants():
         parse_start_date("когда-нибудь", now)
     with pytest.raises(ValueError):
         parse_start_date("99.99", now)
+
+
+def test_every_holiday_has_distinct_localized_greeting_and_moscow_end_date():
+    from app.holidays import HOLIDAY_GREETINGS
+    from app.i18n import SUPPORTED_LANGUAGES
+
+    assert set(HOLIDAY_GREETINGS) == {spec.slug for spec in HOLIDAYS}
+    for lang in SUPPORTED_LANGUAGES:
+        phrases = []
+        for spec in HOLIDAYS:
+            start, end = holiday_window(spec, 2026)
+            ev = _make_event(name=spec.name, slug=spec.slug,
+                             discount_percent=spec.discount_percent,
+                             start_date=start, end_date=end)
+            greeting = HOLIDAY_GREETINGS[spec.slug][lang]
+            text = build_event_welcome_block(ev, lang=lang)
+            assert text.startswith(greeting)
+            assert f'{spec.discount_percent}%' in text
+            assert (end + timedelta(hours=3)).strftime('%d.%m') in text
+            phrases.append(greeting)
+        assert len(set(phrases)) == len(HOLIDAYS)
+
+
+def test_manual_event_keeps_generic_welcome_and_escapes_name():
+    event = _make_event(name='Скидка <50>', slug=None)
+    text = build_event_welcome_block(event, lang='ru')
+    assert text.startswith('🎉')
+    assert '&lt;50&gt;' in text

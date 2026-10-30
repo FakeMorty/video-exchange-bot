@@ -273,3 +273,20 @@ async def test_welcome_event_query_failure_does_not_break_transaction(db_session
     assert target.answer_photo.await_count == 1
     assert 'Viperr' in target.answer_photo.await_args.kwargs['caption']
     assert (await db_session.execute(text('SELECT 1'))).scalar_one() == 1
+
+
+async def test_halloween_welcome_is_one_photo_message_for_existing_user(db_session, monkeypatch):
+    from app import services, user_handlers
+    from app.services import ensure_holiday_events
+    now = datetime(2026, 10, 30, 12)
+    monkeypatch.setattr(services, 'utc_now', lambda: now)
+    monkeypatch.setattr(user_handlers, 'utc_now', lambda: now)
+    await ensure_holiday_events(db_session, now=now)
+    user = _make_user(created_at=now - timedelta(days=2))
+    db_session.add(user)
+    await db_session.commit()
+    target = SimpleNamespace(answer_photo=AsyncMock(), answer=AsyncMock())
+    await send_welcome_banner(target, db_session, user)
+    target.answer_photo.assert_awaited_once()
+    target.answer.assert_not_awaited()
+    assert 'Добро пожаловать на Хэллоуин' in target.answer_photo.await_args.kwargs['caption']
