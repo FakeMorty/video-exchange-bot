@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from html import escape
 
 from app.i18n import DEFAULT_LANGUAGE, current_language, normalize_language, t
 
@@ -178,6 +179,89 @@ WELCOME_BLOCK_TEMPLATE = (
 )
 
 
+# Короткое тематическое приветствие дополняет общий блок события. Переводы
+# хранятся рядом с каталогом, чтобы для каждого праздника были все языки.
+HOLIDAY_GREETINGS = {
+    "christmas": {
+        "ru": "🎄 С Рождеством! Пусть в этот уютный праздник будет больше тепла и радости.",
+        "en": "🎄 Merry Christmas! Wishing you warmth and joy this festive season.",
+        "es": "🎄 ¡Feliz Navidad! Que estas fiestas te llenen de alegría y calidez.",
+        "pt": "🎄 Feliz Natal! Que esta época traga aconchego e alegria.",
+    },
+    "new_year": {
+        "ru": "🎆 С Новым годом! Пусть он принесёт яркие открытия и приятные сюрпризы.",
+        "en": "🎆 Happy New Year! Here's to exciting discoveries and pleasant surprises.",
+        "es": "🎆 ¡Feliz Año Nuevo! Que llegue lleno de descubrimientos y sorpresas.",
+        "pt": "🎆 Feliz Ano Novo! Que ele traga descobertas e boas surpresas.",
+    },
+    "valentine": {
+        "ru": "💝 С Днём всех влюблённых! Пусть в жизни будет больше нежности и любви.",
+        "en": "💝 Happy Valentine's Day! Wishing you plenty of love and tenderness.",
+        "es": "💝 ¡Feliz San Valentín! Que no te falten el cariño y el amor.",
+        "pt": "💝 Feliz Dia dos Namorados! Que não faltem carinho e amor.",
+    },
+    "feb_23": {
+        "ru": "⭐ С Днём защитника Отечества! Желаем сил, спокойствия и надёжных друзей рядом.",
+        "en": "⭐ Happy Defender of the Fatherland Day! Wishing you strength and good friends.",
+        "es": "⭐ ¡Feliz Día del Defensor de la Patria! Te deseamos fuerza y buenos amigos.",
+        "pt": "⭐ Feliz Dia do Defensor da Pátria! Desejamos força e bons amigos.",
+    },
+    "mar_8": {
+        "ru": "🌷 С 8 Марта! Пусть весна принесёт вдохновение, заботу и поводы улыбаться.",
+        "en": "🌷 Happy International Women's Day! Wishing you inspiration and joy this spring.",
+        "es": "🌷 ¡Feliz Día Internacional de la Mujer! Que la primavera te traiga alegría.",
+        "pt": "🌷 Feliz Dia Internacional da Mulher! Que a primavera traga alegria.",
+    },
+    "apr_1": {
+        "ru": "😂 С Первым апреля! Пусть сегодня будет больше улыбок и добрых шуток.",
+        "en": "😂 Happy April Fools' Day! Wishing you smiles and good-natured jokes.",
+        "es": "😂 ¡Feliz día de las bromas! Que no falten las sonrisas y el buen humor.",
+        "pt": "😂 Feliz Dia da Mentira! Que não faltem sorrisos e boas brincadeiras.",
+    },
+    "cosmonautics": {
+        "ru": "🚀 С Днём космонавтики! Пусть мечты взлетают выше звёзд.",
+        "en": "🚀 Happy Cosmonautics Day! May your dreams soar beyond the stars.",
+        "es": "🚀 ¡Feliz Día de la Cosmonáutica! Que tus sueños vuelen hasta las estrellas.",
+        "pt": "🚀 Feliz Dia da Cosmonáutica! Que seus sonhos voem até as estrelas.",
+    },
+    "may_1": {
+        "ru": "🌸 С Праздником Весны и Труда! Желаем солнечных дней и хорошего отдыха.",
+        "en": "🌸 Happy Spring and Labour Day! Wishing you sunny days and a good rest.",
+        "es": "🌸 ¡Feliz Día de la Primavera y del Trabajo! Disfruta del descanso y del sol.",
+        "pt": "🌸 Feliz Dia da Primavera e do Trabalho! Desejamos sol e descanso.",
+    },
+    "may_9": {
+        "ru": "🎖 С Днём Победы! Помним подвиг и желаем мира и добра.",
+        "en": "🎖 On Victory Day, we remember those who served and wish everyone peace.",
+        "es": "🎖 En el Día de la Victoria recordamos a quienes sirvieron y deseamos paz.",
+        "pt": "🎖 No Dia da Vitória, lembramos quem serviu e desejamos paz a todos.",
+    },
+    "jun_1": {
+        "ru": "☀️ С началом лета! Пусть впереди будет много солнечных и радостных дней.",
+        "en": "☀️ Happy start of summer! Here's to many sunny, joyful days ahead.",
+        "es": "☀️ ¡Feliz comienzo de verano! Que te esperen muchos días soleados.",
+        "pt": "☀️ Feliz começo de verão! Que venham muitos dias de sol e alegria.",
+    },
+    "sep_1": {
+        "ru": "📚 С Днём знаний! Пусть новый сезон принесёт интересные открытия.",
+        "en": "📚 Happy Knowledge Day! Wishing you exciting discoveries this season.",
+        "es": "📚 ¡Feliz Día del Conocimiento! Que esta temporada traiga nuevos descubrimientos.",
+        "pt": "📚 Feliz Dia do Conhecimento! Que esta temporada traga novas descobertas.",
+    },
+    "halloween": {
+        "ru": "🎃 Добро пожаловать на Хэллоуин! Пусть эта неделя будет жутко весёлой.",
+        "en": "🎃 Welcome to Halloween! Have a spooktacular week.",
+        "es": "🎃 ¡Bienvenido a Halloween! Que tengas una semana terroríficamente divertida.",
+        "pt": "🎃 Boas-vindas ao Halloween! Que sua semana seja assustadoramente divertida.",
+    },
+    "nov_4": {
+        "ru": "🎆 С Днём народного единства! Желаем тепла, согласия и хороших встреч.",
+        "en": "🎆 Happy Unity Day! Wishing you warmth, harmony and good company.",
+        "es": "🎆 ¡Feliz Día de la Unidad! Te deseamos armonía y buena compañía.",
+        "pt": "🎆 Feliz Dia da Unidade! Desejamos harmonia e boa companhia.",
+    },
+}
+
 def _msk_to_utc_naive(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime:
     """00:00 (или 23:59) MSK указанной даты -> naive-UTC (формат хранения в БД)."""
     dt = datetime(year, month, day, hour, minute, tzinfo=MSK)
@@ -267,16 +351,20 @@ def resolve_event_poster(event, lang: str | None = None) -> str | None:
     return resolve_poster(getattr(event, "poster_path", None), lang=lang)
 
 
-def build_event_welcome_block(event) -> str:
-    """Праздничный блок для приветствия: название, скидка и дата окончания."""
-    name = t(getattr(event, "name", "") or "")
-    end_text = event.end_date.strftime("%d.%m")
-    return t(
-        WELCOME_BLOCK_TEMPLATE,
+def build_event_welcome_block(event, lang: str | None = None) -> str:
+    """Тематическое приветствие и данные действующего события."""
+    code = normalize_language(lang or current_language())
+    name = escape(t(code, getattr(event, "name", "") or ""))
+    # Даты в БД — UTC, а окно события объявлено по московскому времени.
+    end_text = (event.end_date + timedelta(hours=3)).strftime("%d.%m")
+    details = t(
+        code, WELCOME_BLOCK_TEMPLATE,
         name=name,
         discount=event.discount_percent,
         end=end_text,
     )
+    greeting = HOLIDAY_GREETINGS.get(getattr(event, "slug", None), {}).get(code)
+    return f"{greeting}\n\n{details}" if greeting else details
 
 
 def parse_start_date(text: str, now: datetime) -> datetime | None:
