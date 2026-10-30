@@ -3,7 +3,8 @@
   "regions": ["fra1"],
   "functions": {
     "api/index.py": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "{app/banner*.jpg,постеры/**,banners/**}"
     }
   },
   "rewrites": [

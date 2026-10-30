@@ -53,12 +53,13 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
+from datetime import datetime, timezone
 
 _bot = None
 _dp = None
 _playlist_schema_ready = False
 _bot_commands_ready = False
-_holiday_events_ready = False
+_holiday_events_synced_date = None
 
 
 async def _ensure_playlist_schema() -> None:
@@ -104,16 +105,17 @@ async def _ensure_playlist_schema() -> None:
 
 
 async def _ensure_holiday_events() -> None:
-    """Create upcoming holiday events once per serverless instance.
+    """Sync upcoming holiday events daily per serverless instance.
 
     Vercel does not run ``app.main.on_startup`` or the background workers,
     so the holiday-event catalog (app/holidays.py) is synced lazily on the
-    first webhook call of a warm instance. The routine is idempotent
+    first webhook call each UTC day. The routine is idempotent
     (dedupe markers in bot_settings + slug/start_date check), cheap, and
     failures are non-fatal: the flag stays unset and the next call retries.
     """
-    global _holiday_events_ready
-    if _holiday_events_ready:
+    global _holiday_events_synced_date
+    today = datetime.now(timezone.utc).date()
+    if _holiday_events_synced_date == today:
         return
     try:
         from app.db import async_session
@@ -121,7 +123,7 @@ async def _ensure_holiday_events() -> None:
 
         async with async_session() as session:
             await ensure_holiday_events(session)
-        _holiday_events_ready = True
+        _holiday_events_synced_date = today
     except Exception as exc:
         print(f"vercel holiday events error: {exc!r}", flush=True)
 
