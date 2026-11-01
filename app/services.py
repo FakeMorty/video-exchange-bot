@@ -1098,6 +1098,20 @@ async def reject_video(
         return None
     v.status = "rejected"
     full_reason = reason.strip()
+    if reason == "removed_from_feed_by_admin":
+        # Removing already-approved content from the public feed is a punitive
+        # moderation action, unlike rejecting a pending upload. Keep this in
+        # the same transaction as the status change so retries cannot charge
+        # twice for an already-removed item.
+        await change_balance_atomic(
+            session,
+            v.uploader_user_id,
+            Decimal("-40"),
+            "admin_content_removal_penalty",
+            source_id=v.id,
+            details=f"video_id={v.id}; removed_from_feed_by_admin",
+            allow_negative=True,
+        )
     if admin_comment:
         full_reason = t('{full_reason}. Комментарий модератора: {arg1}', full_reason=full_reason, arg1=admin_comment.strip())
     v.rejection_reason = full_reason

@@ -3320,10 +3320,31 @@ async def test_report_decision_notifications():
 
         await report_remove_video(cb2)
 
-        cb2.bot.send_message.assert_called_once_with(
+        cb2.bot.send_message.assert_any_call(
             777002,
-            f"📢 Админ рассмотрел вашу жалобу на видео #{v2_id} и принятое решение: Удалить видео"
+            f"📢 Жалоба подтверждена: за видео #{v2_id} начислено 20 монет."
         )
+        cb2.bot.send_message.assert_any_call(
+            777003,
+            f"📢 Твоё видео #{v2_id} удалено по подтверждённой жалобе. С баланса списано 40 монет."
+        )
+
+        # Replaying the callback must not duplicate the reward or penalty.
+        cb3 = AsyncMock()
+        cb3.from_user.id = 999999
+        cb3.data = f"report_remove_video:{r2_id}:{v2_id}"
+        cb3.bot = AsyncMock()
+        await report_remove_video(cb3)
+        cb3.bot.send_message.assert_not_called()
+
+    async with Session() as session:
+        assert (await session.get(User, reporter2.id)).balance == Decimal("20.00")
+        assert (await session.get(User, uploader.id)).balance == Decimal("-40.00")
+        logs = (await session.execute(select(BalanceLog))).scalars().all()
+        assert {(log.source, log.amount) for log in logs} == {
+            ("report_video_reward", Decimal("20.00")),
+            ("report_video_penalty", Decimal("-40.00")),
+        }
 
     await engine.dispose()
 
