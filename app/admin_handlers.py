@@ -1840,7 +1840,15 @@ async def _apply_admin_balance_change(bot, admin_telegram_id: int, user_id: int,
             parse_mode="HTML",
         )
     except Exception:
-        pass
+        # The balance change is already committed. Keep the admin operation
+        # successful, but record delivery failures so support can distinguish
+        # a failed notification from a failed credit.
+        logger.exception(
+            "Could not notify user after admin balance change: telegram_id=%s user_id=%s amount=%s",
+            telegram_id,
+            user.id,
+            amount,
+        )
     return user
 
 
