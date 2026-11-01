@@ -39,7 +39,7 @@ from app.services import (
     get_offer_moderation_counts, get_offers_for_admin, get_offer_by_id,
     moderate_offer, set_offer_active, get_offer_expires_at, offer_budget_remaining, to_decimal,
     normalize_telegram_url,
-    adjust_balance_by_admin, AdminBalanceError,
+    adjust_balance_by_admin, AdminBalanceError, change_balance_atomic,
 )
 from app.keyboards import (
     admin_main_keyboard, moderation_keyboard,
@@ -3967,7 +3967,7 @@ async def report_dismiss(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("report_remove_video:"))
 async def report_remove_video(callback: CallbackQuery):
-    """Удалить видео по жалобе и закрыть жалобу."""
+    """Удалить одобренное видео по жалобе: наградить автора выбранной жалобы и оштрафовать автора."""
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
@@ -3977,43 +3977,68 @@ async def report_remove_video(callback: CallbackQuery):
         return
     report_id = int(parts[1])
     video_id = int(parts[2])
+    awarded_telegram_id = None
+    uploader_telegram_id = None
     async with async_session() as session:
         admin = await get_user(session, callback.from_user.id)
-        # Удаляем видео (помечаем как rejected)
-        v = (await session.execute(
-            select(Video).where(Video.id == video_id)
+        report = (await session.execute(
+            select(VideoReport).where(VideoReport.id == report_id).with_for_update()
         )).scalar_one_or_none()
-        if v:
-            v.status = "rejected"
-            v.rejection_reason = "removed_by_report"
-        # Закрываем ВСЕ pending-жалобы на это видео
+        video = (await session.execute(
+            select(Video).where(Video.id == video_id).with_for_update()
+        )).scalar_one_or_none()
+        if (not report or report.video_id != video_id or report.status != "pending"
+                or not video or video.status != "approved"):
+            await callback.answer(t('Видео или жалоба уже обработаны.'), show_alert=True)
+            return
+
+        # Only the report selected by the moderator receives the bounty. Other
+        # pending reports are closed with the decision but are not rewarded.
+        reporter = await get_user_by_id(session, report.reporter_user_id)
+        uploader = await get_user_by_id(session, video.uploader_user_id)
+        if not reporter or not uploader or reporter.id == uploader.id:
+            await callback.answer(t('Не удалось определить автора видео или жалобы.'), show_alert=True)
+            return
+
+        video.status = "rejected"
+        video.rejection_reason = "removed_by_report"
+        report.status = "reviewed"
+        report.reviewed_by = admin.id if admin else 0
+        await change_balance_atomic(
+            session, uploader.id, Decimal("-40"), "report_video_penalty",
+            source_id=video.id, admin_id=admin.id if admin else None,
+            details=f"video_id={video.id}; report_id={report.id}", allow_negative=True,
+        )
+        await change_balance_atomic(
+            session, reporter.id, Decimal("20"), "report_video_reward",
+            source_id=video.id, admin_id=admin.id if admin else None,
+            details=f"video_id={video.id}; report_id={report.id}",
+        )
+
         pending_reports = (await session.execute(
             select(VideoReport).where(
                 VideoReport.video_id == video_id,
                 VideoReport.status == "pending",
             )
         )).scalars().all()
-        
-        reporter_ids = set()
-        for r in pending_reports:
-            r.status = "reviewed"
-            r.reviewed_by = admin.id if admin else 0
-            reporter_ids.add(r.reporter_user_id)
-            
-        await session.commit()
-        
-        for r_user_id in reporter_ids:
-            reporter = await get_user_by_id(session, r_user_id)
-            if reporter:
-                try:
-                    await callback.bot.send_message(
-                        reporter.telegram_id,
-                        t('📢 Админ рассмотрел вашу жалобу на видео #{video_id} и принятое решение: Удалить видео', video_id=video_id),
-                    )
-                except Exception:
-                    pass
+        for other_report in pending_reports:
+            other_report.status = "reviewed"
+            other_report.reviewed_by = admin.id if admin else 0
 
-    await callback.answer(t('Видео #{video_id} удалено, жалобы закрыты 🗑', video_id=video_id), show_alert=True)
+        awarded_telegram_id = reporter.telegram_id
+        uploader_telegram_id = uploader.telegram_id
+        await session.commit()
+
+    for recipient_id, message in (
+        (awarded_telegram_id, t('📢 Жалоба подтверждена: за видео #{video_id} начислено 20 монет.', video_id=video_id)),
+        (uploader_telegram_id, t('📢 Твоё видео #{video_id} удалено по подтверждённой жалобе. С баланса списано 40 монет.', video_id=video_id)),
+    ):
+        try:
+            await callback.bot.send_message(recipient_id, message)
+        except Exception:
+            logger.exception("Could not notify user about report decision: telegram_id=%s video_id=%s", recipient_id, video_id)
+
+    await callback.answer(t('Видео удалено. Автор жалобы получил 20, автор видео — штраф 40 монет.', video_id=video_id), show_alert=True)
 
 
 # ====================================================
