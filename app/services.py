@@ -4598,6 +4598,9 @@ async def approve_all_pending(session: AsyncSession, admin_id: int, limit: int =
     from sqlalchemy import update
 
     count = 0
+    # Кэш наград: calculate_upload_reward делает несколько запросов в БД,
+    # а у одного загрузчика в пачке может быть много файлов — считаем 1 раз.
+    reward_cache: dict = {}
     for v in pending:
         # Условный UPDATE: если видео параллельно одобрили/отклонили вручную,
         # строка уже не pending — пропускаем, чтобы не наградить дважды.
@@ -4619,11 +4622,14 @@ async def approve_all_pending(session: AsyncSession, admin_id: int, limit: int =
                 ).limit(1)
             )).scalar_one_or_none()
             if not already_rewarded:
-                reward = await calculate_upload_reward(session, uploader.id, v.content_type)
+                cache_key = (uploader.id, v.content_type)
+                if cache_key not in reward_cache:
+                    reward_cache[cache_key] = await calculate_upload_reward(session, uploader.id, v.content_type)
+                reward = reward_cache[cache_key]
                 await change_balance_atomic(session, uploader.id, reward, "upload_approved", source_id=v.id)
         count += 1
+    await log_user_action(session, admin_id, "approve_all", f"count={count}", auto_commit=False)
     await session.commit()
-    await log_user_action(session, admin_id, "approve_all", f"count={count}")
     return count
 
 

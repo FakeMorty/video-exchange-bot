@@ -1431,6 +1431,7 @@ EN_SOURCE: dict[str, str] = {
     '🎉 <b>События</b>\n\n': '🎉 <b>Events</b>\n\n',
     '🎉 <b>Спасибо за подношение / поддержку!</b>\n\nПолучен платёж через DonationAlerts на сумму: <b>{amount_rub} руб.</b>\nВам зачислено: <b>{reward_desc}</b>\n\nПриятного пользования ботом! 💙': '🎉 <b>Thank you for the donation / support!</b>\n\nPayment received via DonationAlerts in the amount of: <b>{amount_rub} RUB</b>\nCredited to you: <b>{reward_desc}</b>\n\nEnjoy using the bot! 💙',
     '🎉 <b>Фоновое одобрение успешно завершено!</b>\n\nВсего одобрено файлов: <b>{total_approved}</b>.\nНаграды начислены всем загрузчикам.': '🎉 <b>Background approval completed successfully!</b>\n\nTotal files approved: <b>{total_approved}</b>.\nRewards credited to all uploaders.',
+    '⏳ <b>Одобрение идёт...</b>\n\nОбработано файлов: <b>{done}</b>': '⏳ <b>Approval in progress...</b>\n\nFiles processed so far: <b>{done}</b>',
     '🎉 Поздравляем! Ты достиг уровня <b>{new_level}</b>!': '🎉 Congratulations! You reached level <b>{new_level}</b>!',
     '🎉 События': '🎉 Events',
     '🎉 Шаг 1: Введи название:': '🎉 Step 1: Enter a name:',
