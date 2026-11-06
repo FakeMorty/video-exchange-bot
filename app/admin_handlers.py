@@ -18,7 +18,7 @@ from aiogram.types import (
 from sqlalchemy import select, func, text
 
 
-from app.config import ENABLE_AUTO_MODERATION
+from app.config import ENABLE_AUTO_MODERATION, IS_SERVERLESS
 from app.db import async_session
 from app.models import (
     Base,
@@ -3741,6 +3741,19 @@ async def sale_stop_force(callback: CallbackQuery):
 # ============================
 # ОДОБРИТЬ ВСЁ (APPROVE ALL)
 # ============================
+# Сильные ссылки на фоновые задачи: event loop хранит лишь слабые ссылки,
+# поэтому задача без внешней ссылки может быть удалена сборщиком мусора
+# до завершения (документация asyncio.create_task).
+_background_tasks: set = set()
+
+
+def _spawn_background_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 @router.callback_query(F.data == "admin_approve_all")
 async def admin_approve_all(callback: CallbackQuery):
     """Показать подтверждение одобрения всех pending-видео."""
@@ -3768,13 +3781,15 @@ async def admin_approve_all(callback: CallbackQuery):
     await callback.answer()
 
 
-async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id: int, bot):
+async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id: int, bot, progress_every: int = 100):
     import asyncio
     from app.db import async_session
-    
+
     total_approved = 0
     BATCH_SIZE = 50
-    
+    last_progress_sent = 0
+
+    log_info(logger, f"approve_all: фоновое одобрение запущено (admin_user_id={admin_user_id})")
     while True:
         try:
             async with async_session() as session:
@@ -3782,8 +3797,20 @@ async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id:
                 total_approved += count
                 if count < BATCH_SIZE:
                     break
+            log_info(logger, f"approve_all: одобрено {total_approved} файлов (пачка {count})")
+            if total_approved - last_progress_sent >= progress_every:
+                last_progress_sent = total_approved
+                try:
+                    await bot.send_message(
+                        admin_chat_id,
+                        t('⏳ <b>Одобрение идёт...</b>\n\nОбработано файлов: <b>{done}</b>', done=total_approved),
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
             await asyncio.sleep(0.5)
         except Exception as e:
+            log_warning(logger, f"approve_all: ошибка на {total_approved} файле: {e!r}")
             try:
                 await bot.send_message(
                     admin_chat_id,
@@ -3793,7 +3820,8 @@ async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id:
             except Exception:
                 pass
             return
-            
+
+    log_info(logger, f"approve_all: завершено, всего одобрено {total_approved}")
     try:
         await bot.send_message(
             admin_chat_id,
@@ -3828,14 +3856,27 @@ async def admin_approve_all_confirm(callback: CallbackQuery, bot):
         ])
     )
     await callback.answer(t('Фоновое одобрение запущено!'))
-    
-    asyncio.create_task(
-        approve_all_pending_background_task(
+
+    if IS_SERVERLESS:
+        # Serverless (Vercel webhook): инстанс замораживается сразу после
+        # ответа на HTTP-запрос, поэтому create_task здесь не доживёт до конца —
+        # выполняем синхронно прямо в обработчике. Прогресс виден по
+        # промежуточным сообщениям «⏳ Одобрение идёт...».
+        await approve_all_pending_background_task(
             admin_chat_id=callback.message.chat.id,
             admin_user_id=admin_id,
-            bot=bot
+            bot=bot,
         )
-    )
+    else:
+        # Постоянный хост (polling, Render/Docker/VPS): фоновая задача,
+        # ссылка на неё хранится в _background_tasks, чтобы GC не удалил.
+        _spawn_background_task(
+            approve_all_pending_background_task(
+                admin_chat_id=callback.message.chat.id,
+                admin_user_id=admin_id,
+                bot=bot
+            )
+        )
 
 
 # ============================

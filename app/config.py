@@ -55,6 +55,14 @@ for _x in ADMINS_RAW.split(","):
 
 PORT = _get_int("PORT", 10000)
 
+# Serverless-режим (webhook на Vercel, api/index.py): инстанс замораживается
+# сразу после ответа на HTTP-запрос, поэтому фоновые asyncio-задачи
+# (asyncio.create_task внутри обработчика) там не доживают до конца.
+# Vercel автоматически выставляет VERCEL=1; SERVERLESS=1 — ручной флаг для
+# других serverless-платформ. В этом режиме долгие операции выполняются
+# синхронно прямо в обработчике, а не через create_task.
+IS_SERVERLESS = _get_bool("VERCEL", False) or _get_bool("SERVERLESS", False)
+
 # ============================
 # ЭКОНОМИКА (СБАЛАНСИРОВАННАЯ x10)
 # ============================
