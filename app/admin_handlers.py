@@ -3781,21 +3781,27 @@ async def admin_approve_all(callback: CallbackQuery):
     await callback.answer()
 
 
-async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id: int, bot, progress_every: int = 100):
+async def approve_all_pending_background_task(
+    admin_chat_id: int,
+    admin_user_id: int,
+    bot,
+    progress_every: int = 100,
+    batch_size: int = 50,
+    pause: float = 0.5,
+):
     import asyncio
     from app.db import async_session
 
     total_approved = 0
-    BATCH_SIZE = 50
     last_progress_sent = 0
 
-    log_info(logger, f"approve_all: фоновое одобрение запущено (admin_user_id={admin_user_id})")
+    log_info(logger, f"approve_all: фоновое одобрение запущено (admin_user_id={admin_user_id}, batch_size={batch_size})")
     while True:
         try:
             async with async_session() as session:
-                count = await approve_all_pending(session, admin_user_id, limit=BATCH_SIZE)
+                count = await approve_all_pending(session, admin_user_id, limit=batch_size)
                 total_approved += count
-                if count < BATCH_SIZE:
+                if count < batch_size:
                     break
             log_info(logger, f"approve_all: одобрено {total_approved} файлов (пачка {count})")
             if total_approved - last_progress_sent >= progress_every:
@@ -3808,7 +3814,8 @@ async def approve_all_pending_background_task(admin_chat_id: int, admin_user_id:
                     )
                 except Exception:
                     pass
-            await asyncio.sleep(0.5)
+            if pause > 0:
+                await asyncio.sleep(pause)
         except Exception as e:
             log_warning(logger, f"approve_all: ошибка на {total_approved} файле: {e!r}")
             try:
