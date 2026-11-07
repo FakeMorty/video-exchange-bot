@@ -28,7 +28,7 @@ from app.models import (
     AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
-    get_user, get_user_by_id, get_user_by_username,
+    get_user, get_or_create_user, get_user_by_id, get_user_by_username,
     get_user_dossier, count_pending_videos, count_approved_videos, count_rejected_videos,
     get_next_pending_video, get_video_by_id, get_rejected_video, restore_rejected_video,
     approve_video, reject_video,
@@ -46,7 +46,7 @@ from app.keyboards import (
     rejection_reason_keyboard, admin_after_action_keyboard,
     admin_db_keyboard, poll_answer_keyboard,
 )
-from app.logger import get_logger
+from app.logger import get_logger, log_info, log_warning
 from app.reports import build_all_users_report_pdf, build_bot_report_pdf, build_user_report_pdf
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
@@ -3846,8 +3846,18 @@ async def admin_approve_all_confirm(callback: CallbackQuery, bot):
         return
     
     async with async_session() as session:
-        admin = await get_user(session, callback.from_user.id)
-        admin_id = admin.id if admin else 0
+        # /admin доступен супер-админу из ENV даже до /start. Раньше в таком
+        # случае сюда попадал admin_id=0, а журнал approve_all с FK на users.id
+        # ронял всю пачку. Регистрируем администратора до запуска транзакций,
+        # чтобы и аудит действия, и начисление наград завершились успешно.
+        admin, _ = await get_or_create_user(
+            session,
+            telegram_id=callback.from_user.id,
+            username=callback.from_user.username,
+            first_name=callback.from_user.first_name,
+            last_name=callback.from_user.last_name,
+        )
+        admin_id = admin.id
         total_pending = await count_pending_videos(session)
         
     if total_pending == 0:
