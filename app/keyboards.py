@@ -98,21 +98,26 @@ def language_keyboard(current_lang: str | None = None) -> InlineKeyboardMarkup:
 def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
     """Главная клавиатура админ-панели.
 
-    Кнопки сгруппированы по разделам и идут парами в ряд — порядок совпадает
-    с легендой в сообщении панели (см. `admin_panel_text()` в admin_handlers):
-    🛡 контент и модерация -> 👥 аудитория и коммуникации ->
-    💰 монетизация -> 📈 система. Callback-коды не менялись.
+    Кнопки сгруппированы по разделам — порядок совпадает с легендой в сообщении
+    панели (см. `admin_panel_text()` в admin_handlers): 🛡 контент и модерация ->
+    👥 аудитория и коммуникации -> 💰 монетизация -> 📈 система. Опасное массовое
+    одобрение доступно только супер-админу и обычным админам не показывается.
     """
+    moderation_actions = [
+        InlineKeyboardButton(text=t('⚡ Авто-модерация'), callback_data="admin_auto_moderation"),
+    ]
+    if is_super:
+        moderation_actions.insert(0, InlineKeyboardButton(
+            text=t('✅ Одобрить всё'), callback_data="admin_approve_all",
+        ))
+
     buttons = [
         # 🛡 Контент и модерация
         [
             InlineKeyboardButton(text=t('📊 Очередь модерации'), callback_data="admin_queue_info"),
             InlineKeyboardButton(text=t('🚨 Жалобы'), callback_data="admin_reports"),
         ],
-        [
-            InlineKeyboardButton(text=t('✅ Одобрить всё'), callback_data="admin_approve_all"),
-            InlineKeyboardButton(text=t('⚡ Авто-модерация'), callback_data="admin_auto_moderation"),
-        ],
+        moderation_actions,
         [
             InlineKeyboardButton(text=t('🤝 Доверенные авторы'), callback_data="admin_trusted_uploaders"),
             InlineKeyboardButton(text=t('👥 Пользователи'), callback_data="admin_manage_users"),

@@ -4991,7 +4991,7 @@ def test_admin_panel_keeps_all_sections_and_is_grouped():
     from app.keyboards import admin_main_keyboard
 
     expected_callbacks = {
-        "admin_queue_info", "admin_approve_all", "admin_extended_stats",
+        "admin_queue_info", "admin_extended_stats",
         "admin_da_menu", "admin_manage_users", "admin_auto_moderation",
         "admin_trusted_uploaders", "admin_offers_menu",
         "admin_direct_message_all", "admin_broadcast", "admin_polls",
@@ -5001,14 +5001,17 @@ def test_admin_panel_keeps_all_sections_and_is_grouped():
     kb = admin_main_keyboard(is_super=False)
     callbacks = {b.callback_data for row in kb.inline_keyboard for b in row}
     assert callbacks == expected_callbacks
-    for row in kb.inline_keyboard:
-        assert len(row) == 2
+    assert "admin_approve_all" not in callbacks
+    assert all(len(row) <= 2 for row in kb.inline_keyboard)
 
     super_kb = admin_main_keyboard(is_super=True)
     super_callbacks = {
         b.callback_data for row in super_kb.inline_keyboard for b in row
     }
-    assert super_callbacks == expected_callbacks | {"admin_db_menu", "admin_manage_admins"}
+    assert super_callbacks == expected_callbacks | {
+        "admin_approve_all", "admin_db_menu", "admin_manage_admins",
+    }
+    assert all(len(row) == 2 for row in super_kb.inline_keyboard)
 
 
 def test_admin_panel_text_has_section_legend():
