@@ -3055,7 +3055,7 @@ async def admin_payments_menu(callback: CallbackQuery, state: FSMContext | None 
         vip_price_rub = await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB
 
     text = (
-        t('💳 <b>Платежи (перевод на карту)</b>\n\n🔗 <b>Ссылка для оплаты:</b> <code>{CARD_PAYMENT_URL}</code>\n🤖 <b>Автоматизация:</b> отключена — сверка вручную\n\n📊 <b>Текущие настройки:</b>\n• 1 RUB ➔ <b>{arg3} монет</b>\n• VIP-подписка ➔ <b>{arg4} RUB / 30 дней</b>\n\nЦены пакетов в рублях пересчитываются от курса 1 RUB = N монет (точечные цены пакетов — в настройках «🛍 Магазин (цены)»).\n\nПользователь переводит точную сумму по ссылке и обязательно указывает в комментарии свой юзернейм в Telegram (или Telegram ID). После проверки перевода начислите монеты/VIP через конвертер ниже — начисление произойдёт только после вашего подтверждения.', CARD_PAYMENT_URL=CARD_PAYMENT_URL, arg3=int(rub_rate), arg4=int(vip_price_rub))
+        t('💳 <b>Платежи (перевод на карту)</b>\n\n🔗 <b>Ссылка для оплаты:</b> <code>{CARD_PAYMENT_URL}</code>\n🤖 <b>Автоматизация:</b> отключена — сверка вручную\n\n📊 <b>Текущие настройки:</b>\n• 1 RUB ➔ <b>{arg3} монет</b>\n• VIP-подписка ➔ <b>{arg4} RUB / 30 дней</b>\n\nЦены пакетов в рублях пересчитываются от курса 1 RUB = N монет (точечные цены пакетов — в настройках «🛍 Магазин (цены)»).\n\nПользователь переводит точную сумму по ссылке и обязательно указывает в комментарии свой юзернейм в Telegram с символом @ (например, @Who5037) или Telegram ID. После проверки перевода начислите монеты/VIP через конвертер ниже — начисление произойдёт только после вашего подтверждения.', CARD_PAYMENT_URL=CARD_PAYMENT_URL, arg3=int(rub_rate), arg4=int(vip_price_rub))
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3117,7 +3117,7 @@ async def admin_card_manual_start(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(CardManualState.waiting_user)
     await callback.message.answer(
-        t('💳 <b>Начисление за перевод на карту</b>\n\n<b>Шаг 1 из 3:</b> Введите Telegram ID или юзернейм пользователя (например, <code>123456789</code> или <code>@username</code>):'),
+        t('💳 <b>Начисление за перевод на карту</b>\n\n<b>Шаг 1 из 3:</b> Введите Telegram ID или юзернейм пользователя вместе с @ (например, <code>123456789</code> или <code>@Who5037</code>):'),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_payments_menu")
@@ -3131,7 +3131,7 @@ async def admin_card_manual_user(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     raw = (message.text or "").strip()
     if not raw:
-        await message.answer(t('❌ Введите Telegram ID или юзернейм. Попробуйте еще раз:'))
+        await message.answer(t('❌ Введите Telegram ID или юзернейм с @ (например, @Who5037). Попробуйте еще раз:'))
         return
 
     async with async_session() as session:
