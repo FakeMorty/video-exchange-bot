@@ -108,6 +108,18 @@ CARD_PAYMENT_URL = _get_str(
 RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 10.0)  # 1 RUB = 10 монет
 VIP_PRICE_RUB = _get_float("VIP_PRICE_RUB", 150.0)        # 150 RUB = 30 дней VIP
 
+# ── PDF-отчёты (админка) ──
+# Отчёт по всем пользователям режется на батчи: один файл = один батч.
+# Так выгрузка не упирается в лимит Telegram (50 МБ на документ), в таймаут
+# serverless-функции (300 c) и в память контейнера даже на базе в тысячи
+# пользователей. Один PDF собирается быстро, а вся выгрузка идёт частями.
+REPORT_BATCH_USERS = max(25, _get_int("REPORT_BATCH_USERS", 250))
+REPORT_MAX_BATCHES = max(1, _get_int("REPORT_MAX_BATCHES", 8))
+REPORT_COLLECT_CONCURRENCY = max(1, min(8, _get_int("REPORT_COLLECT_CONCURRENCY", 4)))
+REPORT_TIMEOUT_SECONDS = max(60, _get_int("REPORT_TIMEOUT_SECONDS", 240))
+REPORT_MAX_FILE_MB = max(5, _get_int("REPORT_MAX_FILE_MB", 45))
+REPORT_MAX_TEXT_CHARS = max(100, _get_int("REPORT_MAX_TEXT_CHARS", 200))
+
 # Viewer-friendly пакеты Stars (заградительные цены ~в 9 раз дороже)
 # Цены на те же пакеты монет увеличены в 3 раза относительно базового прайса.
 STARTER_PACK_STARS = _get_int("STARTER_PACK_STARS", 81)

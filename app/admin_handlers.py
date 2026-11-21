@@ -2,6 +2,7 @@ from app.i18n import t
 from app.models import utc_now
 import os
 import asyncio
+import contextlib
 import json
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -18,7 +19,11 @@ from aiogram.types import (
 from sqlalchemy import select, func, text
 
 
-from app.config import ENABLE_AUTO_MODERATION, IS_SERVERLESS
+from app.config import (
+    ENABLE_AUTO_MODERATION,
+    IS_SERVERLESS,
+    REPORT_TIMEOUT_SECONDS,
+)
 from app.db import async_session
 from app.models import (
     Base,
@@ -46,7 +51,12 @@ from app.keyboards import (
     admin_db_keyboard, poll_answer_keyboard,
 )
 from app.logger import get_logger, log_info, log_warning
-from app.reports import build_all_users_report_pdf, build_bot_report_pdf, build_user_report_pdf
+from app.reports import (
+    ReportLimitError,
+    build_all_users_reports_pdf,
+    build_bot_report_pdf,
+    build_user_report_pdf,
+)
 from app.utils.admin import check_admin, is_super_admin, _safe_edit
 
 logger = get_logger(__name__)
@@ -1703,7 +1713,7 @@ async def admin_user_export_pdf(callback: CallbackQuery):
                 except Exception:
                     pass
 
-    asyncio.create_task(_runner())
+    await _run_report_job(_runner)
 
 
 @router.callback_query(F.data.startswith("admin_user_edit_nick_start:"))
@@ -2280,7 +2290,7 @@ async def admin_export_bot_pdf(callback: CallbackQuery):
                 except Exception:
                     pass
 
-    asyncio.create_task(_runner())
+    await _run_report_job(_runner)
 
 
 @router.callback_query(F.data == "admin_export_all_users_pdf")
@@ -2289,32 +2299,77 @@ async def admin_export_all_users_pdf(callback: CallbackQuery):
         await callback.answer(t('Только супер-админ.'), show_alert=True)
         return
     await callback.answer()
-    await callback.message.answer(t('⏳ Готовлю единый PDF-отчёт по всем пользователям бота. Это может занять время...'))
+    status_msg = await callback.message.answer(
+        t('⏳ Готовлю PDF по всем пользователям: собираю данные. Большая база выгружается частями — каждая часть придёт отдельным файлом.')
+    )
 
     async def _runner() -> None:
-        pdf_path = None
+        paths: list = []
+        last_edit = 0.0
         try:
-            pdf_path, filename = await build_all_users_report_pdf()
-            await callback.bot.send_document(
-                callback.from_user.id,
-                FSInputFile(str(pdf_path), filename=filename),
-                caption=t('👥 PDF-отчёт по всем пользователям готов.'),
-            )
+            async def _progress(done: int, total: int, part: int, parts: int) -> None:
+                nonlocal last_edit
+                loop_now = asyncio.get_running_loop().time()
+                if loop_now - last_edit < 4 and done < total:
+                    return
+                last_edit = loop_now
+                with contextlib.suppress(Exception):
+                    await status_msg.edit_text(
+                        t('⏳ Собираю данные: {done} из {total} пользователей (готово частей: {part} из {parts})',
+                          done=done, total=total, part=part, parts=parts)
+                    )
+
+            batches = await build_all_users_reports_pdf(progress_cb=_progress)
+            sent = 0
+            total_users = 0
+            total_skipped = 0
+            for batch in batches:
+                if batch.get("path"):
+                    paths.append(batch["path"])
+                caption = t('👥 PDF по всем пользователям — часть {part}/{parts}: пользователи {a}–{b}',
+                            part=batch["part"], parts=batch["parts"],
+                            a=batch["users_from"], b=batch["users_to"])
+                if batch.get("skipped"):
+                    caption += t('\n⚠️ Пропущено карточек: {n}', n=batch["skipped"])
+                    total_skipped += batch["skipped"]
+                if batch.get("path"):
+                    await callback.bot.send_document(
+                        callback.from_user.id,
+                        FSInputFile(str(batch["path"]), filename=batch["filename"]),
+                        caption=caption,
+                    )
+                    sent += 1
+                    total_users += batch["users_count"]
+
+            text = t('✅ Готово: файлов {files}, пользователей в выгрузке {total}.', files=sent, total=total_users)
+            if total_skipped:
+                text += t('\n⚠️ Пропущено карточек: {n}', n=total_skipped)
+            with contextlib.suppress(Exception):
+                await status_msg.edit_text(text)
+        except ReportLimitError as e:
+            with contextlib.suppress(Exception):
+                await status_msg.edit_text(t('⚠️ {msg}', msg=escape(str(e))), parse_mode="HTML")
+        except asyncio.TimeoutError:
+            with contextlib.suppress(Exception):
+                await status_msg.edit_text(
+                    t('⏰ Сборка отчёта не уложилась в {limit} секунд. База слишком большая для одного запуска: уменьшите REPORT_BATCH_USERS или повторите позже.',
+                      limit=REPORT_TIMEOUT_SECONDS)
+                )
         except Exception as e:
             logger.exception("Failed to build all users PDF report")
-            await callback.bot.send_message(
-                callback.from_user.id,
-                t('❌ Не удалось собрать PDF по всем пользователям. Ошибка: {arg0}', arg0=escape(str(e))),
-                parse_mode="HTML",
-            )
+            with contextlib.suppress(Exception):
+                await status_msg.edit_text(
+                    t('❌ Не удалось собрать PDF по всем пользователям. Ошибка: {arg0}', arg0=escape(str(e))),
+                    parse_mode="HTML",
+                )
         finally:
-            if pdf_path:
+            for path in paths:
                 try:
-                    os.remove(pdf_path)
+                    os.remove(path)
                 except Exception:
                     pass
 
-    asyncio.create_task(_runner())
+    await _run_report_job(_runner)
 
 
 @router.callback_query(F.data == "admin_offers_menu")
@@ -3855,6 +3910,22 @@ async def sale_stop_force(callback: CallbackQuery):
 # поэтому задача без внешней ссылки может быть удалена сборщиком мусора
 # до завершения (документация asyncio.create_task).
 _background_tasks: set = set()
+
+
+async def _run_report_job(coro_factory) -> None:
+    """Выполняет сборку PDF так, чтобы она дожила до конца на любом хосте.
+
+    На Vercel (IS_SERVERLESS) инстанс замораживается сразу после ответа на
+    HTTP-запрос, поэтому ``asyncio.create_task`` умирает вместе с запросом —
+    админ получал «⏳ Готовлю отчёт…» и ничего больше. Там ждём результат
+    прямо в обработчике. На Render/Docker/VPS (polling) — обычная фоновая
+    задача, чтобы не держать апдейт.
+    """
+    if IS_SERVERLESS:
+        await coro_factory()
+        return
+
+    _spawn_background_task(coro_factory())
 
 
 def _spawn_background_task(coro) -> asyncio.Task:

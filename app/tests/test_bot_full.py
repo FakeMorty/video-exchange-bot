@@ -3699,6 +3699,122 @@ async def test_copy_username_always_includes_at_sign():
 
 
 # ══════════════════════════════════════════════════════════════
+#  PDF-отчёты: устойчивость к объёму и «грязным» данным
+# ══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_all_users_report_survives_dirty_text_and_batches(monkeypatch):
+    """Грязный текст в БД и батчи: ни одна карточка не роняет весь PDF."""
+    import app.reports as reports
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    monkeypatch.setattr(reports, "async_session", Session)
+    monkeypatch.setattr(reports, "REPORT_BATCH_USERS", 2)
+
+    async with Session() as session:
+        session.add_all([
+            # «Грязный» legacy-ник: & < > и управляющий символ
+            User(telegram_id=5550001, balance=Decimal("10"), nickname_set=False,
+                 display_name="Tom & Jerry <3\x00"),
+            User(telegram_id=5550002, balance=Decimal("20"), nickname_set=True, display_name="CleanUser"),
+            User(telegram_id=5550003, balance=Decimal("30"), nickname_set=True, display_name="Третий"),
+            User(telegram_id=5550004, balance=Decimal("40"), nickname_set=True, display_name="Fourth"),
+            User(telegram_id=5550005, balance=Decimal("50"), nickname_set=True, display_name="Fifth"),
+        ])
+        await session.commit()
+
+    batches = await reports.build_all_users_reports_pdf()
+    try:
+        # 5 пользователей при батче 2 -> 3 части, каждая — отдельный файл
+        assert len(batches) == 3
+        assert [b["users_count"] for b in batches] == [2, 2, 1]
+        assert batches[0]["users_from"] == 1 and batches[-1]["users_to"] == 5
+        assert batches[0]["parts"] == 3
+        for batch in batches:
+            assert batch["path"].exists()
+            assert batch["path"].stat().st_size > 0
+    finally:
+        for batch in batches:
+            batch["path"].unlink(missing_ok=True)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_all_users_report_respects_user_limit(monkeypatch):
+    """Превышение лимита батчей — понятная ошибка, а не обрыв на середине."""
+    import app.reports as reports
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    monkeypatch.setattr(reports, "async_session", Session)
+
+    async with Session() as session:
+        session.add_all([
+            User(telegram_id=5560001 + i, balance=Decimal("1"), nickname_set=True, display_name=f"Lim{i}")
+            for i in range(4)
+        ])
+        await session.commit()
+
+    with pytest.raises(reports.ReportLimitError):
+        await reports.build_all_users_reports_pdf(batch_size=1, max_batches=2)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_all_users_report_isolates_broken_card(monkeypatch):
+    """Падение отрисовки одной карточки не ломает весь документ."""
+    import app.reports as reports
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    monkeypatch.setattr(reports, "async_session", Session)
+
+    async with Session() as session:
+        session.add_all([
+            User(telegram_id=5570001, balance=Decimal("1"), nickname_set=True, display_name="CardOne"),
+            User(telegram_id=5570002, balance=Decimal("1"), nickname_set=True, display_name="CardTwo"),
+        ])
+        await session.commit()
+
+    real_builder = reports._build_user_card_story
+
+    def _flaky(user_data, idx, font_name, styles):
+        if idx == 2:
+            raise RuntimeError("битые данные")
+        return real_builder(user_data, idx, font_name, styles)
+
+    monkeypatch.setattr(reports, "_build_user_card_story", _flaky)
+    batches = await reports.build_all_users_reports_pdf()
+    try:
+        assert len(batches) == 1
+        assert batches[0]["path"].stat().st_size > 0
+    finally:
+        for batch in batches:
+            batch["path"].unlink(missing_ok=True)
+    await engine.dispose()
+
+
+def test_report_text_sanitizer_keeps_markup_and_escapes_dirty_data():
+    import app.reports as reports
+
+    # Управляющие символы не доходят до reportlab (иначе paraparser падает)
+    assert reports._sanitize("a\x00b\x08c") == "a b c"
+    assert reports._sanitize("line1\nline2") == "line1\nline2"
+    # Пользовательский текст экранируется, служебная разметка — нет
+    assert reports._xml("Tom & Jerry <3") == "Tom &amp; Jerry &lt;3"
+    # Уже экранированный ник не экранируется повторно
+    assert reports._paragraph_text("A &amp; B") == "A &amp; B"
+    assert reports._paragraph_text("A & B") == "A &amp; B"
+
+
+# ══════════════════════════════════════════════════════════════
 #  административные опросы с наградой
 # ══════════════════════════════════════════════════════════════
 @pytest.mark.asyncio
