@@ -22,8 +22,17 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import and_, func, select
 
-from app.config import ADMINS
+from app.config import (
+    ADMINS,
+    REPORT_BATCH_USERS,
+    REPORT_COLLECT_CONCURRENCY,
+    REPORT_MAX_BATCHES,
+    REPORT_MAX_FILE_MB,
+    REPORT_MAX_TEXT_CHARS,
+    REPORT_TIMEOUT_SECONDS,
+)
 from app.db import async_session
+from app.logger import get_logger
 from app.models import (
     BalanceLog,
     Comment,
@@ -44,6 +53,8 @@ from app.models import (
     utc_now,
 )
 from app.services import get_styled_display_name
+
+logger = get_logger(__name__)
 
 PERIODS: list[tuple[str, int | None]] = [
     ("7 дней", 7),
@@ -206,6 +217,82 @@ async def _count_query(session, stmt) -> int:
 
 
 
+_XML_UNSAFE = {chr(code) for code in range(0, 32) if chr(code) not in "\n\t"}
+
+
+def _sanitize(value) -> str:
+    """Чистит текст перед вставкой в reportlab Paragraph.
+
+    Paragraph разбирает строку как XML: управляющие символы (\x00-\x1f),
+    суррогаты и битые последовательности из старых записей в БД роняют
+    построение всего PDF с ``paraparser`` ошибкой. Здесь такие символы
+    заменяются, а не выбрасываются, чтобы текст не склеивался.
+    """
+    text = "" if value is None else str(value)
+    if not text:
+        return text
+    cleaned = []
+    for ch in text:
+        code = ord(ch)
+        if ch in _XML_UNSAFE or code in (0xFFFE, 0xFFFF) or 0xD800 <= code <= 0xDFFF:
+            cleaned.append(" ")
+        else:
+            cleaned.append(ch)
+    return "".join(cleaned)
+
+
+def _xml(value) -> str:
+    """Текст для Paragraph: санитайзер + экранирование HTML/XML-сущностей.
+
+    Для пользовательских данных (ники, first_name, названия) — обязательный
+    слой защиты: «<3 Аня» или «Tom & Jerry» иначе ломают весь документ.
+    """
+    from xml.sax.saxutils import escape as _escape
+
+    return _escape(_sanitize(value), {"\n": "\n", "\t": "\t"})
+
+
+def _is_escaped_already(value) -> bool:
+    text = "" if value is None else str(value)
+    return any(marker in text for marker in ("&amp;", "&lt;", "&gt;", "&#"))
+
+
+def _paragraph_text(value) -> str:
+    """Текст для Paragraph с учётом уже экранированных ников.
+
+    ``get_styled_display_name`` возвращает ник, экранированный для Telegram
+    (``&amp;`` вместо ``&``). Повторно экранировать его нельзя — иначе в PDF
+    появится «&amp;amp;». Поэтому уже экранированный текст только чистим.
+    """
+    text = _sanitize(value)
+    if _is_escaped_already(text):
+        return _clamp_text(text)
+    return _clamp_text(_xml(text))
+
+
+def _clamp_text(text: str) -> str:
+    """Обрезает слишком длинные строки и разрывает НЕрывные «слова»,
+    иначе один пользователь с 50-тысячесимвольным ником или полем ломает
+    вёрстку всей страницы (reportlab не может вписать одно «слово» в
+    ячейку таблицы — LayoutError на ganzen документе)."""
+    if len(text) > REPORT_MAX_TEXT_CHARS:
+        dropped = len(text) - REPORT_MAX_TEXT_CHARS
+        text = text[:REPORT_MAX_TEXT_CHARS].rstrip() + f" … ({dropped} символов сокращено)"
+    out: list[str] = []
+    run = 0
+    for ch in text:
+        if ch.isspace():
+            out.append(ch)
+            run = 0
+        else:
+            if run >= 48:
+                out.append("\n")
+                run = 0
+            out.append(ch)
+            run += 1
+    return "".join(out)
+
+
 def _register_fonts() -> str:
     try:
         font_path = font_manager.findfont("DejaVu Sans")
@@ -282,12 +369,12 @@ def _kpi_cards(cards: list[dict], font_name: str, styles, *, columns: int = 3):
                 continue
             accent = colors.HexColor(card.get("accent", "#2563EB"))
             soft = colors.HexColor(card.get("bg", "#F8FAFC"))
-            label = Paragraph(card.get("label", "—"), styles["KPILabel"])
-            value = Paragraph(f"<b>{card.get('value', '—')}</b>", styles["KPIValue"])
+            label = Paragraph(_sanitize(card.get("label", "—")), styles["KPILabel"])
+            value = Paragraph(f"<b>{_sanitize(card.get('value', '—'))}</b>", styles["KPIValue"])
             foot_text = card.get("foot")
             body = [[label], [value]]
             if foot_text:
-                body.append([Paragraph(str(foot_text), styles["KPIFoot"])])
+                body.append([Paragraph(_sanitize(foot_text), styles["KPIFoot"])])
             card_table = Table(body, colWidths=[5.55 * cm])
             card_table.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, -1), soft),
@@ -313,9 +400,9 @@ def _kpi_cards(cards: list[dict], font_name: str, styles, *, columns: int = 3):
 
 
 def _hero_block(title: str, subtitle: str, meta_lines: list[str], font_name: str, styles, *, bg: str = "#0F172A"):
-    title_p = Paragraph(title, styles["BannerTitle"])
-    subtitle_p = Paragraph(subtitle, styles["BannerBody"])
-    meta = Paragraph("<br/>".join(meta_lines), styles["BannerBody"])
+    title_p = Paragraph(_sanitize(title), styles["BannerTitle"])
+    subtitle_p = Paragraph(_sanitize(subtitle), styles["BannerBody"])
+    meta = Paragraph("<br/>".join(_sanitize(line) for line in meta_lines), styles["BannerBody"])
     table = Table([[title_p], [subtitle_p], [meta]], colWidths=[18 * cm], hAlign="LEFT")
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
@@ -412,11 +499,11 @@ def _chart_heatmap(title: str, matrix: list[list[float]], x_labels: list[str], y
 
 
 def _bullet(text: str, styles):
-    return Paragraph(f"• {text}", styles["BodyCustom"])
+    return Paragraph(f"• {_sanitize(text)}", styles["BodyCustom"])
 
 
 def _chart_hint(text: str, styles):
-    return Paragraph(t('<b>Как читать:</b> {text}', text=text), styles["SmallCustom"])
+    return Paragraph(t('<b>Как читать:</b> {text}', text=_sanitize(text)), styles["SmallCustom"])
 
 
 def _safe_div(numerator, denominator) -> float:
@@ -1657,6 +1744,75 @@ def _all_users_overview_table(data: dict):
     return rows
 
 
+def _build_user_card_story(user_data: dict, idx: int, font_name: str, styles) -> list:
+    """Flowables одной карточки пользователя в общем отчёте.
+
+    Вынесено отдельной функцией, чтобы ошибка в данных одного пользователя
+    не роняла весь документ: вызывающий код ловит исключение и вставляет
+    страницу-заглушку вместо карточки.
+    """
+    story = []
+    user = user_data["user"]
+    content = user_data["content"]
+    lottery = user_data["lottery"]
+    referrals = user_data["referrals"]
+    ai = user_data["ai"]
+    comparison = user_data.get("comparison", {})
+    economy_30 = next((row for row in user_data["economy_rows"] if row["period"] == "30 дней"), None)
+    economy_all = next((row for row in user_data["economy_rows"] if row["period"] == "Всё время"), None)
+
+    user_meta = [
+        t('Пользователь #{idx}', idx=idx),
+        f"Telegram ID: {user.telegram_id}",
+        t('Собранный профиль: {arg0}', arg0=_paragraph_text(user_data['display_name'])),
+    ]
+    story.append(_hero_block(_paragraph_text(user_data['display_name']), t('Карточка пользователя внутри общей выгрузки'), user_meta, font_name, styles, bg="#111827"))
+    story.append(Spacer(1, 0.18 * cm))
+    story.append(_kpi_cards([
+        {"label": t('Баланс'), "value": _fmt_dec(user.balance), "foot": t('монет на счёте'), "accent": "#2563EB", "bg": "#EFF6FF"},
+        {"label": t('Уровень / XP'), "value": f"{user.level} / {user.xp}", "foot": user_data['profile']['activity_segment'], "accent": "#8B5CF6", "bg": "#F5F3FF"},
+        {"label": t('Потрачено Stars'), "value": _fmt_dec(user_data['payments']['stars_total']), "foot": t('оплат: {arg0}', arg0=user_data['payments']['count']), "accent": "#F59E0B", "bg": "#FFFBEB"},
+        {"label": t('Контент'), "value": str(content['videos'] + content['photos']), "foot": t('одобрено: {arg0}', arg0=_fmt_pct(content['approval_rate_pct'])), "accent": "#10B981", "bg": "#ECFDF5"},
+        {"label": t('Секслото'), "value": str(lottery['tickets_total']), "foot": f"ROI: {_fmt_pct(lottery['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
+        {"label": t('Рефералы'), "value": str(referrals['total']), "foot": t('активных: {arg0}', arg0=referrals['active']), "accent": "#14B8A6", "bg": "#F0FDFA"},
+    ], font_name, styles, columns=3))
+    story.append(Spacer(1, 0.18 * cm))
+    story.append(_section_banner(t('2.{idx}. Профиль и сводка', idx=idx), font_name, bg="#1E293B"))
+    story.append(Spacer(1, 0.1 * cm))
+    story.append(_table(_user_summary_table(user_data), font_name, col_widths=[5 * cm, 10.5 * cm]))
+    story.append(Spacer(1, 0.15 * cm))
+
+    details_table = [
+        [t('Блок'), t('Метрика'), t('Значение')],
+        [t('Платежи'), t('Успешных оплат'), str(user_data["payments"]["count"])],
+        [t('Платежи'), t('Потрачено Stars'), _fmt_dec(user_data["payments"]["stars_total"])],
+        [t('Экономика'), t('Чистый итог за 30 дней'), _fmt_dec(economy_30["net"] if economy_30 else 0)],
+        [t('Экономика'), t('Чистый итог за всё время'), _fmt_dec(economy_all["net"] if economy_all else 0)],
+        [t('Контент'), t('Загружено'), str(content["videos"] + content["photos"])],
+        [t('Контент'), t('Одобрение'), _fmt_pct(content["approval_rate_pct"])],
+        [t('Контент'), t('Просмотры'), str(content["own_views"])],
+        [t('Секслото'), t('Билетов'), str(lottery["tickets_total"])],
+        [t('Секслото'), t('Частота выигрыша'), _fmt_pct(lottery["win_rate_pct"])],
+        [t('Рефералы'), t('Приглашено'), str(referrals["total"])],
+        [t('Рефералы'), t('Активных'), str(referrals["active"])],
+        [t('ИИ'), t('Чатов'), str(ai["chat_count"])],
+        [t('ИИ'), t('Сообщений пользователя'), str(ai["user_messages"])],
+    ]
+    story.append(_table(details_table, font_name, col_widths=[3.2 * cm, 6 * cm, 6.3 * cm]))
+    story.append(Spacer(1, 0.15 * cm))
+    story.append(_section_banner(t('Ключевые выводы'), font_name, bg="#334155"))
+    story.append(Spacer(1, 0.1 * cm))
+    story.append(_bullet(t('Профиль поведения: <b>{arg0}</b>', arg0=user_data['insights']['dominant']), styles))
+    story.append(_bullet(user_data['insights']['balance_comment'], styles))
+    story.append(_bullet(user_data['insights']['content_comment'], styles))
+    story.append(_bullet(user_data['insights']['lottery_comment'], styles))
+    story.append(_bullet(user_data['insights']['purchase_comment'], styles))
+    if comparison:
+        story.append(_bullet(t('Сильнее всего выделяется по метрике: <b>{arg0}</b>', arg0=comparison.get('strongest', '—')), styles))
+        story.append(_bullet(t('Слабее всего выглядит метрика: <b>{arg0}</b>', arg0=comparison.get('weakest', '—')), styles))
+    return story
+
+
 def _render_all_users_report_sync(data: dict, output_path: Path):
     font_name = _register_fonts()
     styles = _build_styles(font_name)
@@ -1667,6 +1823,11 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
         t('Пользователей в выгрузке: {arg0}', arg0=data['users_count']),
         t('Формат: единый dashboard-документ по всем пользователям'),
     ]
+    if int(data.get("parts") or 1) > 1:
+        hero_meta.append(t('Часть {part} из {parts}: пользователи {a}–{b}',
+                           part=data.get("part"), parts=data.get("parts"),
+                           a=data.get("users_from"), b=data.get("users_to")))
+        hero_meta.append(t('База выгружается частями, чтобы ни один файл не упёрся в лимит Telegram и таймаут. Остальные части придут отдельными PDF.'))
     story.append(_hero_block(t('Отчёт по всем пользователям'), t('Сводный mini-dashboard: одна выгрузка, внутри — карточки всех пользователей базы'), hero_meta, font_name, styles, bg="#0B1220"))
     story.append(Spacer(1, 0.22 * cm))
     story.append(_kpi_cards([
@@ -1692,85 +1853,44 @@ def _render_all_users_report_sync(data: dict, output_path: Path):
 
     for idx, user_data in enumerate(data["users"], start=1):
         story.append(PageBreak())
-        user = user_data["user"]
-        content = user_data["content"]
-        lottery = user_data["lottery"]
-        referrals = user_data["referrals"]
-        ai = user_data["ai"]
-        comparison = user_data.get("comparison", {})
-        economy_30 = next((row for row in user_data["economy_rows"] if row["period"] == "30 дней"), None)
-        economy_all = next((row for row in user_data["economy_rows"] if row["period"] == "Всё время"), None)
-
-        user_meta = [
-            t('Пользователь #{idx}', idx=idx),
-            f"Telegram ID: {user.telegram_id}",
-            t('Собранный профиль: {arg0}', arg0=user_data['display_name']),
-        ]
-        story.append(_hero_block(f"{user_data['display_name']}", t('Карточка пользователя внутри общей выгрузки'), user_meta, font_name, styles, bg="#111827"))
-        story.append(Spacer(1, 0.18 * cm))
-        story.append(_kpi_cards([
-            {"label": t('Баланс'), "value": _fmt_dec(user.balance), "foot": t('монет на счёте'), "accent": "#2563EB", "bg": "#EFF6FF"},
-            {"label": t('Уровень / XP'), "value": f"{user.level} / {user.xp}", "foot": user_data['profile']['activity_segment'], "accent": "#8B5CF6", "bg": "#F5F3FF"},
-            {"label": t('Потрачено Stars'), "value": _fmt_dec(user_data['payments']['stars_total']), "foot": t('оплат: {arg0}', arg0=user_data['payments']['count']), "accent": "#F59E0B", "bg": "#FFFBEB"},
-            {"label": t('Контент'), "value": str(content['videos'] + content['photos']), "foot": t('одобрено: {arg0}', arg0=_fmt_pct(content['approval_rate_pct'])), "accent": "#10B981", "bg": "#ECFDF5"},
-            {"label": t('Секслото'), "value": str(lottery['tickets_total']), "foot": f"ROI: {_fmt_pct(lottery['roi_pct'])}", "accent": "#EC4899", "bg": "#FDF2F8"},
-            {"label": t('Рефералы'), "value": str(referrals['total']), "foot": t('активных: {arg0}', arg0=referrals['active']), "accent": "#14B8A6", "bg": "#F0FDFA"},
-        ], font_name, styles, columns=3))
-        story.append(Spacer(1, 0.18 * cm))
-        story.append(_section_banner(t('2.{idx}. Профиль и сводка', idx=idx), font_name, bg="#1E293B"))
-        story.append(Spacer(1, 0.1 * cm))
-        story.append(_table(_user_summary_table(user_data), font_name, col_widths=[5 * cm, 10.5 * cm]))
-        story.append(Spacer(1, 0.15 * cm))
-
-        details_table = [
-            [t('Блок'), t('Метрика'), t('Значение')],
-            [t('Платежи'), t('Успешных оплат'), str(user_data["payments"]["count"])],
-            [t('Платежи'), t('Потрачено Stars'), _fmt_dec(user_data["payments"]["stars_total"])],
-            [t('Экономика'), t('Чистый итог за 30 дней'), _fmt_dec(economy_30["net"] if economy_30 else 0)],
-            [t('Экономика'), t('Чистый итог за всё время'), _fmt_dec(economy_all["net"] if economy_all else 0)],
-            [t('Контент'), t('Загружено'), str(content["videos"] + content["photos"])],
-            [t('Контент'), t('Одобрение'), _fmt_pct(content["approval_rate_pct"])],
-            [t('Контент'), t('Просмотры'), str(content["own_views"])],
-            [t('Секслото'), t('Билетов'), str(lottery["tickets_total"])],
-            [t('Секслото'), t('Частота выигрыша'), _fmt_pct(lottery["win_rate_pct"])],
-            [t('Рефералы'), t('Приглашено'), str(referrals["total"])],
-            [t('Рефералы'), t('Активных'), str(referrals["active"])],
-            [t('ИИ'), t('Чатов'), str(ai["chat_count"])],
-            [t('ИИ'), t('Сообщений пользователя'), str(ai["user_messages"])],
-        ]
-        story.append(_table(details_table, font_name, col_widths=[3.2 * cm, 6 * cm, 6.3 * cm]))
-        story.append(Spacer(1, 0.15 * cm))
-        story.append(_section_banner(t('Ключевые выводы'), font_name, bg="#334155"))
-        story.append(Spacer(1, 0.1 * cm))
-        story.append(_bullet(t('Профиль поведения: <b>{arg0}</b>', arg0=user_data['insights']['dominant']), styles))
-        story.append(_bullet(user_data['insights']['balance_comment'], styles))
-        story.append(_bullet(user_data['insights']['content_comment'], styles))
-        story.append(_bullet(user_data['insights']['lottery_comment'], styles))
-        story.append(_bullet(user_data['insights']['purchase_comment'], styles))
-        if comparison:
-            story.append(_bullet(t('Сильнее всего выделяется по метрике: <b>{arg0}</b>', arg0=comparison.get('strongest', '—')), styles))
-            story.append(_bullet(t('Слабее всего выглядит метрика: <b>{arg0}</b>', arg0=comparison.get('weakest', '—')), styles))
+        try:
+            story.extend(_build_user_card_story(user_data, idx, font_name, styles))
+        except Exception as exc:  # одна битая карточка не должна ронять весь PDF
+            logger.exception("Failed to render user card #%s in all-users report", idx)
+            story.append(_hero_block(
+                t('Карточка пользователя #{idx}', idx=idx),
+                t('Эту карточку собрать не удалось — данные пользователя пропущены, остальной отчёт в порядке.'),
+                [_sanitize(f'{type(exc).__name__}: {exc}')[:300]],
+                font_name, styles, bg="#7F1D1D",
+            ))
 
     doc = SimpleDocTemplate(str(output_path), pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.2 * cm, bottomMargin=1.4 * cm)
     footer = lambda canvas, doc: _report_footer(canvas, doc, title=t('Отчёт по всем пользователям'), generated_at=data["generated_at"], font_name=font_name)
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
 
-async def build_all_users_report_pdf() -> tuple[Path, str]:
-    async with async_session() as session:
-        users = (await session.execute(select(User).order_by(User.created_at.asc(), User.id.asc()))).scalars().all()
-        telegram_ids = [user.telegram_id for user in users]
+class ReportLimitError(RuntimeError):
+    """Выгрузка не влезает в настроенные лимиты (батчи / таймаут / размер)."""
 
-    reports = []
-    for telegram_id in telegram_ids:
-        try:
-            reports.append(await collect_user_report_data(telegram_id))
-        except Exception:
-            continue
+    def __init__(self, message: str, *, users_total: int = 0, limit: int = 0):
+        super().__init__(message)
+        self.users_total = users_total
+        self.limit = limit
 
-    data = {
-        "generated_at": utc_now().strftime('%d.%m.%Y %H:%M UTC'),
-        "users": reports,
+
+class ReportTimeoutError(ReportLimitError):
+    """Сборка не уложилась в REPORT_TIMEOUT_SECONDS до начала следующего батча."""
+
+
+def _reports_dir() -> Path:
+    path = Path(tempfile.gettempdir()) / "video_exchange_reports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _summarize_users(reports: list[dict]) -> dict:
+    """Агрегаты для шапки общего отчёта по списку собранных карточек."""
+    return {
         "users_count": len(reports),
         "super_admin_count": sum(1 for report in reports if report.get("role", {}).get("is_super_admin")),
         "admin_count": sum(1 for report in reports if report.get("role", {}).get("is_admin")),
@@ -1781,12 +1901,166 @@ async def build_all_users_report_pdf() -> tuple[Path, str]:
         "ai_users_count": sum(1 for report in reports if report.get("ai", {}).get("chat_count", 0) > 0),
     }
 
-    reports_dir = Path(tempfile.gettempdir()) / "video_exchange_reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"all_users_report_{utc_now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    output_path = reports_dir / filename
-    await asyncio.to_thread(_render_all_users_report_sync, data, output_path)
-    return output_path, filename
+
+async def _collect_users_report_data(telegram_ids: list[int]) -> tuple[list[dict], int]:
+    """Собирает карточки пользователей с ограниченной параллельностью.
+
+    Параллельность держим небольшой (REPORT_COLLECT_CONCURRENCY, по умолчанию
+    4): пул соединений бота — 2+3, больше одновременных сессий просто ждало бы
+    в очереди. Упавшая карточка пропускается, остальные собираются.
+    """
+    semaphore = asyncio.Semaphore(REPORT_COLLECT_CONCURRENCY)
+    failed = 0
+
+    async def _one(telegram_id: int) -> dict | None:
+        nonlocal failed
+        async with semaphore:
+            try:
+                return await collect_user_report_data(telegram_id)
+            except Exception:
+                failed += 1
+                logger.exception("Failed to collect report data for user %s", telegram_id)
+                return None
+
+    results = await asyncio.gather(*(_one(tid) for tid in telegram_ids))
+    return [report for report in results if report], failed
+
+
+async def build_all_users_reports_pdf(
+    *,
+    batch_size: int | None = None,
+    max_batches: int | None = None,
+    progress_cb=None,
+) -> list[dict]:
+    """PDF по всем пользователям, порезанный на батчи.
+
+    Один батч — один файл. Это главный предохранитель стабильности: на базе
+    в тысячи пользователей единый PDF упирается в лимит Telegram (50 МБ),
+    таймаут serverless-функции (300 c) и память контейнера. Здесь каждый файл
+    ограничен REPORT_BATCH_USERS пользователями, а количество файлов —
+    REPORT_MAX_BATCHES.
+
+    Возвращает список описаний: path, filename, part, parts, users_count,
+    users_from, users_to, skipped.
+    """
+    batch_size = max(1, int(batch_size or REPORT_BATCH_USERS))
+    max_batches = max(1, int(max_batches or REPORT_MAX_BATCHES))
+
+    async with async_session() as session:
+        telegram_ids = (await session.execute(
+            select(User.telegram_id).order_by(User.created_at.asc(), User.id.asc())
+        )).scalars().all()
+
+    total_users = len(telegram_ids)
+    if not total_users:
+        raise ValueError(t('В базе пока нет пользователей для отчёта'))
+
+    max_users = batch_size * max_batches
+    if total_users > max_users:
+        raise ReportLimitError(
+            t('Пользователей слишком много для одной выгрузки: {total} при лимите {limit}. Увеличьте REPORT_BATCH_USERS / REPORT_MAX_BATCHES или выгружайте базу частями.',
+              total=total_users, limit=max_users),
+            users_total=total_users,
+            limit=max_users,
+        )
+
+    chunks = [telegram_ids[i:i + batch_size] for i in range(0, total_users, batch_size)]
+    parts = len(chunks)
+    results: list[dict] = []
+    done = 0
+    started_at = asyncio.get_running_loop().time()
+
+    for index, chunk in enumerate(chunks, start=1):
+        # Мягкий дедлайн: serverless-функция живёт 300 c, поэтому не начинаем
+        # батч, на который заведомо не хватит времени. Лучше честно сказать
+        # «не успел», чем быть убитым посреди записи файла.
+        if asyncio.get_running_loop().time() - started_at > REPORT_TIMEOUT_SECONDS:
+            raise ReportTimeoutError(
+                t('Сборка отчёта не уложилась в {limit} секунд (собрано частей: {done} из {parts}). Уменьшите REPORT_BATCH_USERS и повторите.',
+                  limit=REPORT_TIMEOUT_SECONDS, done=len(results), parts=parts),
+                users_total=total_users,
+                limit=batch_size,
+            )
+        reports, failed = await _collect_users_report_data(chunk)
+        done += len(chunk)
+        if progress_cb is not None:
+            try:
+                result = progress_cb(done, total_users, index, parts)
+                if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                    await result
+            except Exception:
+                logger.exception("Report progress callback failed")
+
+        if not reports:
+            continue
+
+        users_from = sum(len(c) for c in chunks[:index - 1]) + 1
+        users_to = sum(len(c) for c in chunks[:index])
+        data = {
+            "generated_at": utc_now().strftime('%d.%m.%Y %H:%M UTC'),
+            "users": reports,
+            "part": index,
+            "parts": parts,
+            "users_from": users_from,
+            "users_to": users_to,
+            "skipped": failed,
+            **_summarize_users(reports),
+        }
+
+        filename = f"all_users_report_{utc_now().strftime('%Y%m%d_%H%M%S')}_p{index}.pdf"
+        output_path = _reports_dir() / filename
+        try:
+            await asyncio.to_thread(_render_all_users_report_sync, data, output_path)
+        except Exception:
+            # Одна неудавшаяся часть не должна ронять всю выгрузку: отдаём
+            # то, что собралось, а эту часть помечаем как пропущенную.
+            logger.exception("Failed to render all-users report part %d/%d", index, parts)
+            output_path.unlink(missing_ok=True)
+            results.append({
+                "path": None,
+                "filename": filename,
+                "part": index,
+                "parts": parts,
+                "users_count": 0,
+                "users_from": users_from,
+                "users_to": users_to,
+                "skipped": len(reports),
+                "size_mb": 0.0,
+            })
+            continue
+
+        size_mb = output_path.stat().st_size / (1024 * 1024)
+        if size_mb > REPORT_MAX_FILE_MB:
+            output_path.unlink(missing_ok=True)
+            raise ReportLimitError(
+                t('Файл получился слишком большим ({size} МБ при лимите {limit} МБ). Уменьшите REPORT_BATCH_USERS и повторите.',
+                  size=f"{size_mb:.1f}", limit=REPORT_MAX_FILE_MB),
+                users_total=total_users,
+                limit=batch_size,
+            )
+
+        results.append({
+            "path": output_path,
+            "filename": filename,
+            "part": index,
+            "parts": parts,
+            "users_count": len(reports),
+            "users_from": users_from,
+            "users_to": users_to,
+            "skipped": failed,
+            "size_mb": size_mb,
+        })
+
+    if not results:
+        raise ValueError(t('Не удалось собрать ни одной карточки пользователя'))
+
+    return results
+
+
+async def build_all_users_report_pdf() -> tuple[Path, str]:
+    """Совместимость: один файл (первый батч) — для тестов и мелких баз."""
+    batches = await build_all_users_reports_pdf(batch_size=10_000, max_batches=1)
+    return batches[0]["path"], batches[0]["filename"]
 
 
 async def build_user_report_pdf(telegram_user_id: int) -> tuple[Path, str]:
