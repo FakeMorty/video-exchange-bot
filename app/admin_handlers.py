@@ -24,7 +24,6 @@ from app.models import (
     Base,
     User, Video, TrustedUploader, Event, ActiveSale,
     VideoReport, Offer,
-    DonationAlertException,
     AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
@@ -101,6 +100,8 @@ async def cmd_start_admin(message: Message, command: CommandObject, state: FSMCo
 class AdminUserState(StatesGroup):
     waiting_user_id = State()
     waiting_coins_amount = State()
+    waiting_card_rub = State()
+    waiting_card_confirm = State()
     waiting_message_text = State()
     waiting_dossier_id = State()
     waiting_new_nickname = State()
@@ -170,10 +171,15 @@ class PromoRotationState(StatesGroup):
     waiting_edit_text = State()
 
 
-class DAManualState(StatesGroup):
-    """Ручное зачисление платежа DonationAlerts."""
+class CardManualState(StatesGroup):
+    """Начисление за перевод на карту через конвертер (RUB -> монеты)."""
     waiting_user = State()
     waiting_amount = State()
+    waiting_confirm = State()
+
+
+# Совместимость со старым именем (DonationAlerts удалён).
+DAManualState = CardManualState
 
 
 class AdminPollCreationState(StatesGroup):
@@ -1787,16 +1793,68 @@ async def cb_admin_user_give_coins_start(callback: CallbackQuery, state: FSMCont
             InlineKeyboardButton(text="-100 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:-100"),
             InlineKeyboardButton(text="-500 🪙", callback_data=f"admin_user_give_coins_exec:{user_id}:-500"),
         ],
+        [InlineKeyboardButton(text=t('💳 По переводу на карту (₽ → монеты)'), callback_data=f"admin_user_card_start:{user_id}")],
         [InlineKeyboardButton(text=t('❌ Отмена'), callback_data=f"admin_select_user:{user_id}")]
     ])
-    
+
     await _safe_edit(
         callback,
-        t('💰 <b>Начисление или списание монет</b>\n\nИспользуй быстрые кнопки ниже для начисления/списания монет в один клик,\nлибо отправь число сообщением (например, <code>150</code> или <code>-50</code>).'),
+        t('💰 <b>Начисление или списание монет</b>\n\nИспользуй быстрые кнопки ниже для начисления/списания монет в один клик,\nлибо отправь число сообщением (например, <code>150</code> или <code>-50</code>).\n\nДля перевода на карту нажми «💳 По переводу на карту»: введи сумму в рублях, конвертер покажет монеты и дождётся вашего подтверждения.'),
         parse_mode="HTML",
         reply_markup=kb
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_user_card_start:"))
+async def cb_admin_user_card_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id): return
+    user_id = int(callback.data.split(":", 1)[1])
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(AdminUserState.waiting_card_rub)
+    await callback.message.answer(
+        t('💳 <b>Конвертер перевода на карту</b>\n\nВведите сумму перевода в рублях (например, <code>100</code>). Конвертер покажет, сколько монет это даст, и дождётся вашего подтверждения — без него монеты не зачислятся.'),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t('❌ Отмена'), callback_data=f"admin_select_user:{user_id}")
+        ]])
+    )
+    await callback.answer()
+
+
+@router.message(AdminUserState.waiting_card_rub)
+async def process_admin_user_card_rub(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id): return
+    val = (message.text or "").strip().replace(",", ".")
+    try:
+        amount_rub = Decimal(val)
+    except Exception:
+        await message.answer(t('❌ Некорректная сумма. Отправь сумму в рублях, например <code>100</code>.'), parse_mode="HTML")
+        return
+    if not amount_rub.is_finite() or amount_rub <= 0:
+        await message.answer(t('❌ Сумма перевода должна быть положительным числом.'))
+        return
+
+    data = await state.get_data()
+    user_id = data.get("target_user_id")
+    if not user_id:
+        await state.clear()
+        await message.answer(t('❌ Сессия устарела. Открой пользователя в админке заново.'))
+        return
+
+    async with async_session() as session:
+        user = await get_user_by_id(session, user_id)
+        if not user:
+            await state.clear()
+            await message.answer(t('❌ Пользователь не найден.'))
+            return
+        telegram_id = user.telegram_id
+        balance = user.balance
+
+    await _show_card_converter_confirm(
+        message, state, telegram_id=telegram_id, amount_rub=amount_rub,
+        user_id=user_id, balance=balance, back_callback=f"admin_select_user:{user_id}",
+    )
 
 
 def _can_manage_target(admin_telegram_id: int, target: User | None) -> bool:
@@ -2649,11 +2707,11 @@ async def settings_shop(callback: CallbackQuery):
         return
     async with async_session() as session:
         from app.services import (
-            get_setting, get_shop_star_packages, get_shop_rub_packages,
+            get_setting, get_shop_star_packages, get_shop_card_packages,
             get_shop_effective_star_rate, get_promocode_star_rate_effective,
         )
         star_packs = await get_shop_star_packages(session)
-        rub_packs = await get_shop_rub_packages(session)
+        rub_packs = await get_shop_card_packages(session)
         rub_rate = await get_setting(session, "rub_to_coins_rate", "")
         vip_rub = await get_setting(session, "vip_price_rub", "")
         eff_rate = await get_shop_effective_star_rate(session)
@@ -2669,7 +2727,7 @@ async def settings_shop(callback: CallbackQuery):
         mark = "" if p["stars"] == int(STARS_PACKAGES.get(k, {}).get("stars", p["stars"])) else " ✏️"
         text += f"• {t(p['title'])}: {p['stars']} Stars{mark}\n"
     text += (
-        t('\n💳 <b>Рубли (DonationAlerts):</b>\n• Курс: 1 ₽ = {arg0} монет (цены пакетов пересчитываются от курса)\n', arg0=v(rub_rate, RUB_TO_COINS_RATE))
+        t('\n💳 <b>Рубли (перевод на карту):</b>\n• Курс: 1 ₽ = {arg0} монет (цены пакетов пересчитываются от курса)\n', arg0=v(rub_rate, RUB_TO_COINS_RATE))
     )
     for k, p in rub_packs.items():
         if p.get("reward_type") == "vip":
@@ -2981,41 +3039,29 @@ async def settings_admin_free(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- DONATIONALERTS ----------
-@router.callback_query(F.data == "admin_da_menu")
-async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None):
+# ---------- ПЛАТЕЖИ: ПЕРЕВОД НА КАРТУ ----------
+@router.callback_query(F.data.in_({"admin_payments_menu", "admin_da_menu"}))
+async def admin_payments_menu(callback: CallbackQuery, state: FSMContext | None = None):
     if state:
         await state.clear()
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
 
-    from app.config import (
-        DONATION_ALERTS_URL, RUB_TO_COINS_RATE, VIP_PRICE_RUB,
-        DONATION_ALERTS_ACCESS_TOKEN, DONATION_ALERTS_CLIENT_ID,
-        DONATION_ALERTS_REFRESH_TOKEN,
-    )
+    from app.config import CARD_PAYMENT_URL, RUB_TO_COINS_RATE, VIP_PRICE_RUB
     from app.services import get_runtime_value
     async with async_session() as session:
-        pending_exceptions = (await session.execute(
-            select(func.count(DonationAlertException.id)).where(DonationAlertException.status == "pending")
-        )).scalar() or 0
         rub_rate = await get_runtime_value(session, "rub_to_coins_rate") or RUB_TO_COINS_RATE
         vip_price_rub = await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB
 
-    oauth_ready = bool(DONATION_ALERTS_ACCESS_TOKEN or (
-        DONATION_ALERTS_CLIENT_ID and DONATION_ALERTS_REFRESH_TOKEN
-    ))
-    automation_status = t('🟢 OAuth-синхронизация включена') if oauth_ready else t('🟡 Нужны OAuth-реквизиты')
     text = (
-        t('💳 <b>Платежи (DonationAlerts)</b>\n\n🔗 <b>Ссылка для оплаты:</b> <code>{DONATION_ALERTS_URL}</code>\n🤖 <b>Автоматизация:</b> {automation_status}\n⚠️ <b>Очередь сверки:</b> {pending_exceptions}\n\n📊 <b>Текущие настройки:</b>\n• 1 RUB ➔ <b>{arg3} монет</b>\n• VIP-подписка ➔ <b>{arg4} RUB / 30 дней</b>\n\nЦены пакетов в рублях пересчитываются от курса 1 RUB = N монет (точечные цены пакетов — в настройках «🛍 Магазин (цены)»).\n\nАвтоматически зачисляются только платежи с действующим одноразовым кодом заказа и точной суммой. Всё остальное попадает в очередь сверки.', DONATION_ALERTS_URL=DONATION_ALERTS_URL, automation_status=automation_status, pending_exceptions=pending_exceptions, arg3=int(rub_rate), arg4=int(vip_price_rub))
+        t('💳 <b>Платежи (перевод на карту)</b>\n\n🔗 <b>Ссылка для оплаты:</b> <code>{CARD_PAYMENT_URL}</code>\n🤖 <b>Автоматизация:</b> отключена — сверка вручную\n\n📊 <b>Текущие настройки:</b>\n• 1 RUB ➔ <b>{arg3} монет</b>\n• VIP-подписка ➔ <b>{arg4} RUB / 30 дней</b>\n\nЦены пакетов в рублях пересчитываются от курса 1 RUB = N монет (точечные цены пакетов — в настройках «🛍 Магазин (цены)»).\n\nПользователь переводит точную сумму по ссылке и обязательно указывает в комментарии свой юзернейм в Telegram (или Telegram ID). После проверки перевода начислите монеты/VIP через конвертер ниже — начисление произойдёт только после вашего подтверждения.', CARD_PAYMENT_URL=CARD_PAYMENT_URL, arg3=int(rub_rate), arg4=int(vip_price_rub))
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t('⚠️ Очередь сверки ({pending_exceptions})', pending_exceptions=pending_exceptions), callback_data="admin_da_exceptions")],
         [InlineKeyboardButton(text=t('✏️ Курс 1 RUB = {arg0} монет', arg0=int(rub_rate)), callback_data="settings_edit:rub_to_coins_rate")],
         [InlineKeyboardButton(text=t('✏️ Цена VIP ({arg0} RUB)', arg0=int(vip_price_rub)), callback_data="settings_edit:vip_price_rub")],
-        [InlineKeyboardButton(text=t('➕ Начислить донат вручную'), callback_data="admin_da_manual_start")],
+        [InlineKeyboardButton(text=t('➕ Начислить за перевод на карту'), callback_data="admin_card_manual_start")],
         [InlineKeyboardButton(text=t('◀️ Назад в панель'), callback_data="admin_center")],
     ])
 
@@ -3023,103 +3069,167 @@ async def admin_da_menu(callback: CallbackQuery, state: FSMContext | None = None
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_da_manual_start")
-async def admin_da_manual_start(callback: CallbackQuery, state: FSMContext):
+# Совместимость со старым именем (DonationAlerts удалён).
+admin_da_menu = admin_payments_menu
+
+
+def _fmt_coins_admin(value) -> str:
+    try:
+        d = Decimal(str(value))
+    except Exception:
+        return str(value)
+    if d == d.to_integral_value():
+        return f"{int(d):,}".replace(",", " ")
+    return f"{d:,.2f}".replace(",", " ")
+
+
+async def _show_card_converter_confirm(message, state: FSMContext, *, telegram_id: int, amount_rub, user_id: int, balance, back_callback: str):
+    """Показывает результат конвертера и ждёт подтверждения админа."""
+    from app.services import get_rub_to_coins_rate, rub_to_coins
+    async with async_session() as session:
+        rate = await get_rub_to_coins_rate(session)
+    coins = rub_to_coins(amount_rub, rate)
+    await state.update_data(
+        card_telegram_id=telegram_id,
+        card_amount_rub=str(amount_rub),
+        card_coins=str(coins),
+        card_rate=str(rate),
+        card_user_id=user_id,
+        card_back_callback=back_callback,
+    )
+    await state.set_state(CardManualState.waiting_confirm)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t('✅ Подтвердить: начислить {coins} монет', coins=_fmt_coins_admin(coins)), callback_data="admin_card_confirm_coins")],
+        [InlineKeyboardButton(text=t('👑 Выдать VIP на 30 дней'), callback_data="admin_card_confirm_vip")],
+        [InlineKeyboardButton(text=t('❌ Отмена'), callback_data=back_callback)],
+    ])
+    await message.answer(
+        t('🧮 <b>Конвертер перевода на карту</b>\n\n👤 Пользователь: ID <code>{telegram_id}</code>\n💰 Перевод: <b>{amount_rub} ₽</b>\n📈 Курс: 1 ₽ = {rate} монет\n🪙 К начислению: <b>{coins} монет</b>\n💼 Баланс сейчас: <b>{balance}</b> монет\n💼 После начисления: <b>{new_balance}</b> монет\n\nПроверьте перевод в банке и нажмите подтверждение — без него монеты не зачислятся.', telegram_id=telegram_id, amount_rub=amount_rub, rate=rate, coins=_fmt_coins_admin(coins), balance=_fmt_coins_admin(balance), new_balance=_fmt_coins_admin(Decimal(str(balance)) + coins)),
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "admin_card_manual_start")
+async def admin_card_manual_start(callback: CallbackQuery, state: FSMContext):
     if not await check_admin(callback.from_user.id):
         await callback.answer()
         return
-    await state.set_state(DAManualState.waiting_user)
+    await state.set_state(CardManualState.waiting_user)
     await callback.message.answer(
-        t('💳 <b>Ручное зачисление платежа DonationAlerts</b>\n\n<b>Шаг 1 из 2:</b> Введите Telegram ID пользователя (например, <code>123456789</code>):'),
+        t('💳 <b>Начисление за перевод на карту</b>\n\n<b>Шаг 1 из 3:</b> Введите Telegram ID или юзернейм пользователя (например, <code>123456789</code> или <code>@username</code>):'),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_da_menu")
+            InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_payments_menu")
         ]])
     )
     await callback.answer()
 
 
-@router.message(DAManualState.waiting_user)
-async def admin_da_manual_user(message: Message, state: FSMContext):
+@router.message(CardManualState.waiting_user)
+async def admin_card_manual_user(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
     raw = (message.text or "").strip()
-    if not raw.isdigit():
-        await message.answer(t('❌ Telegram ID должен состоять только из цифр. Попробуйте еще раз:'))
+    if not raw:
+        await message.answer(t('❌ Введите Telegram ID или юзернейм. Попробуйте еще раз:'))
         return
 
-    tid = int(raw)
     async with async_session() as session:
-        user = await get_user(session, tid)
+        user = None
+        if raw.lstrip("@").isdigit():
+            user = await get_user(session, int(raw.lstrip("@")))
+        else:
+            user = await get_user_by_username(session, raw.lstrip("@"))
         if not user:
-            await message.answer(t('❌ Пользователь с Telegram ID <code>{tid}</code> не найден в базе данных. Проверьте ID:', tid=tid))
+            await message.answer(t('❌ Пользователь <code>{raw}</code> не найден в базе данных. Проверьте ID или юзернейм:', raw=escape(raw)))
             return
+        tid = user.telegram_id
+        user_id = user.id
+        balance = user.balance
         disp_name = escape(get_display_name(user))
 
-    await state.update_data(da_manual_user_id=tid)
-    await state.set_state(DAManualState.waiting_amount)
+    await state.update_data(card_telegram_id=tid, card_user_id=user_id)
+    await state.set_state(CardManualState.waiting_amount)
     await message.answer(
-        t('👤 Пользователь найден: <b>{arg0}</b> (ID: <code>{tid}</code>)\n\n<b>Шаг 2 из 2:</b> Введите сумму доната в рублях (например, <code>100</code> или <code>150</code> для VIP, или напишите <code>vip</code>):', arg0=escape(disp_name), tid=tid),
+        t('👤 Пользователь найден: <b>{arg0}</b> (ID: <code>{tid}</code>)\n\n<b>Шаг 2 из 3:</b> Введите сумму перевода в рублях (например, <code>100</code>). Конвертер сразу покажет, сколько монет это даст:', arg0=disp_name, tid=tid),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_da_menu")
+            InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_payments_menu")
         ]])
     )
 
 
-@router.message(DAManualState.waiting_amount)
-async def admin_da_manual_amount(message: Message, state: FSMContext):
+@router.message(CardManualState.waiting_amount)
+async def admin_card_manual_amount(message: Message, state: FSMContext):
     if not await check_admin(message.from_user.id): return
-    raw = (message.text or "").strip().lower()
+    raw = (message.text or "").strip().replace(",", ".")
     data = await state.get_data()
-    tid = int(data.get("da_manual_user_id") or 0)
+    tid = int(data.get("card_telegram_id") or 0)
+    user_id = int(data.get("card_user_id") or 0)
 
-    if not tid:
+    if not tid or not user_id:
         await state.clear()
         await message.answer(t('❌ Сессия сброшена.'))
         return
 
-    if raw == "vip":
-        from app.services import get_runtime_value
-        from app.config import VIP_PRICE_RUB
-        async with async_session() as _s:
-            amount_rub = float(await get_runtime_value(_s, "vip_price_rub") or VIP_PRICE_RUB)
-        reward_type = "vip"
-        comment = f"manual_vip_by_admin_{message.from_user.id}"
-    else:
-        try:
-            amount_rub = float(raw)
-            reward_type = "coins"
-            comment = f"manual_by_admin_{message.from_user.id}"
-        except ValueError:
-            await message.answer(t('❌ Введите числовое значение суммы в рублях (или `vip`):'))
-            return
-
-    import uuid
-    manual_da_id = f"manual_{uuid.uuid4().hex[:8]}"
+    try:
+        amount_rub = Decimal(raw)
+    except Exception:
+        await message.answer(t('❌ Введите числовое значение суммы в рублях (например <code>100</code>):'), parse_mode="HTML")
+        return
+    if not amount_rub.is_finite() or amount_rub <= 0:
+        await message.answer(t('❌ Сумма должна быть положительным числом.'))
+        return
 
     async with async_session() as session:
-        from app.services import process_donationalerts_donation
-        ok, res_msg = await process_donationalerts_donation(
-            session=session,
-            donation_id=manual_da_id,
-            amount_rub=amount_rub,
+        user = await get_user_by_id(session, user_id)
+        balance = user.balance if user else Decimal("0")
+    await _show_card_converter_confirm(
+        message, state, telegram_id=tid, amount_rub=amount_rub,
+        user_id=user_id, balance=balance, back_callback="admin_payments_menu",
+    )
+
+
+@router.callback_query(F.data.in_({"admin_card_confirm_coins", "admin_card_confirm_vip"}))
+async def admin_card_confirm(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    data = await state.get_data()
+    tid = int(data.get("card_telegram_id") or 0)
+    amount_raw = data.get("card_amount_rub")
+    back_callback = data.get("card_back_callback") or "admin_payments_menu"
+    if not tid or not amount_raw:
+        await callback.answer(t('❌ Сессия устарела. Начните начисление заново.'), show_alert=True)
+        await state.clear()
+        return
+
+    reward_type = "vip" if callback.data == "admin_card_confirm_vip" else "coins"
+    # Сбрасываем состояние до начисления: повторный тап по кнопке не начислит дважды.
+    await state.clear()
+
+    from app.services import credit_card_payment
+    async with async_session() as session:
+        ok, res_msg = await credit_card_payment(
+            session,
             telegram_user_id=tid,
-            comment=comment,
-            bot=message.bot,
+            amount_rub=Decimal(str(amount_raw)),
             reward_type=reward_type,
+            admin_telegram_id=callback.from_user.id,
+            bot=callback.bot,
         )
 
-    await state.clear()
     if ok:
-        await message.answer(
-            t('✅ <b>Донат успешно проведен!</b>\n\nПользователь: ID <code>{tid}</code>\nСумма: <b>{amount_rub} руб.</b>\nРезультат: <b>{res_msg}</b>', tid=tid, amount_rub=amount_rub, res_msg=res_msg),
+        await callback.message.answer(
+            t('✅ <b>Перевод успешно начислен!</b>\n\nПользователь: ID <code>{tid}</code>\nСумма перевода: <b>{amount_rub} руб.</b>\nРезультат: <b>{res_msg}</b>', tid=tid, amount_rub=amount_raw, res_msg=res_msg),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=t('💳 В меню DonationAlerts'), callback_data="admin_da_menu")
+                InlineKeyboardButton(text=t('◀️ Назад'), callback_data=back_callback)
             ]])
         )
     else:
-        await message.answer(t('❌ Ошибка проведения доната: {res_msg}', res_msg=res_msg))
+        await callback.message.answer(t('❌ Ошибка начисления: {res_msg}', res_msg=res_msg))
+    await callback.answer()
 
 
 # ---------- ПОКАЗАТЬ ВСЕ НАСТРОЙКИ ----------
@@ -4422,76 +4532,6 @@ async def finalize_admin_offer(callback_or_message, state: FSMContext):
 
 
 # Remove the process_offer_penalty_unsubscribe function completely
-
-
-# ---------- DONATIONALERTS: ОЧЕРЕДЬ ИСКЛЮЧЕНИЙ ----------
-@router.callback_query(F.data == "admin_da_exceptions")
-async def admin_da_exceptions(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-
-    async with async_session() as session:
-        exception = (await session.execute(
-            select(DonationAlertException)
-            .where(DonationAlertException.status == "pending")
-            .order_by(DonationAlertException.created_at.asc())
-            .limit(1)
-        )).scalar_one_or_none()
-        pending_count = (await session.execute(
-            select(func.count(DonationAlertException.id))
-            .where(DonationAlertException.status == "pending")
-        )).scalar() or 0
-
-    if not exception:
-        await _safe_edit(
-            callback,
-            t('✅ <b>Очередь сверки DonationAlerts пуста.</b>\n\nВсе новые платежи либо автоматически сопоставлены с заказом, либо ещё не поступили.'),
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="◀️ DonationAlerts", callback_data="admin_da_menu")
-            ]]),
-        )
-        await callback.answer()
-        return
-
-    suggested = t('Пользователь БД: <code>{suggested_user_id}</code>\n', suggested_user_id=exception.suggested_user_id) if exception.suggested_user_id else t('Пользователь: не определён\n')
-    text = (
-        t('⚠️ <b>Сверка DonationAlerts ({pending_count})</b>\n\nДонат: <code>{donation_id}</code>\nСумма: <b>{amount} {arg3}</b>\nПричина: <code>{arg4}</code>\n{suggested}Отправитель: <code>{arg6}</code>\nСообщение: <code>{arg7}</code>\n\nПроверьте платёж в DonationAlerts. Ручное начисление используйте только после сверки; оно не происходит по этой карточке автоматически.', pending_count=pending_count, donation_id=exception.donation_id, amount=exception.amount, arg3=escape(exception.currency), arg4=escape(exception.reason), suggested=suggested, arg6=escape(exception.donor_name or '—'), arg7=escape((exception.message or '—')[:500]))
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t('➕ Ручное зачисление после сверки'), callback_data="admin_da_manual_start")],
-        [InlineKeyboardButton(text=t('✅ Закрыть без начисления'), callback_data=f"admin_da_exception_close:{exception.id}")],
-        [InlineKeyboardButton(text=t('🔄 Следующее / обновить'), callback_data="admin_da_exceptions")],
-        [InlineKeyboardButton(text="◀️ DonationAlerts", callback_data="admin_da_menu")],
-    ])
-    await _safe_edit(callback, text, parse_mode="HTML", reply_markup=keyboard)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("admin_da_exception_close:"))
-async def admin_da_exception_close(callback: CallbackQuery):
-    if not await check_admin(callback.from_user.id):
-        await callback.answer()
-        return
-    try:
-        exception_id = int(callback.data.rsplit(":", 1)[1])
-    except (TypeError, ValueError):
-        await callback.answer(t('Некорректная запись.'), show_alert=True)
-        return
-
-    async with async_session() as session:
-        exception = await session.get(DonationAlertException, exception_id)
-        if not exception or exception.status != "pending":
-            await callback.answer(t('Запись уже закрыта или не найдена.'), show_alert=True)
-            return
-        exception.status = "closed"
-        exception.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        exception.resolved_by_telegram_id = callback.from_user.id
-        await session.commit()
-
-    await callback.answer(t('Запись закрыта без начисления.'))
-    await admin_da_exceptions(callback)
 
 
 # ====================================================

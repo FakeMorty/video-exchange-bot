@@ -133,7 +133,7 @@ def admin_main_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         ],
         # 💰 Монетизация
         [
-            InlineKeyboardButton(text=t('💳 Платежи'), callback_data="admin_da_menu"),
+            InlineKeyboardButton(text=t('💳 Платежи'), callback_data="admin_payments_menu"),
             InlineKeyboardButton(text=t('🛍 Акции и скидки'), callback_data="admin_sales"),
         ],
         [
@@ -401,37 +401,47 @@ def captcha_keyboard(target_emoji: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[buttons[:3], buttons[3:]])
 
 
-def buy_coins_keyboard(packs: dict = None, user_id: int | None = None) -> InlineKeyboardMarkup:
-    from app.config import DONATION_ALERTS_URL
+def buy_coins_keyboard(packs: dict = None, user_id: int | None = None, username: str | None = None) -> InlineKeyboardMarkup:
+    from app.config import CARD_PAYMENT_URL
     buttons = [
-        [InlineKeyboardButton(text=t('💳 Перейти к оплате (DonationAlerts)'), url=DONATION_ALERTS_URL)],
+        [InlineKeyboardButton(text=t('💳 Перейти к оплате (перевод на карту)'), url=CARD_PAYMENT_URL)],
     ]
-    if user_id:
-        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой ID: {user_id}', user_id=user_id), callback_data=f"copy_id:{user_id}")])
-    buttons.append([InlineKeyboardButton(text=t('🔄 Проверить зачисление'), callback_data="da_check_payment")])
+    if username:
+        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:{username}")])
+    elif user_id:
+        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой ID: {user_id}', user_id=user_id), callback_data=f"copy_username:{user_id}")])
     buttons.append([InlineKeyboardButton(text=t('🌐 Другие способы / Telegram Stars (дороже)'), callback_data="show_stars_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def donationalerts_order_keyboard(order_code: str) -> InlineKeyboardMarkup:
-    """Клавиатура после создания одноразового заказа DonationAlerts."""
-    from app.config import DONATION_ALERTS_URL
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t('💳 Перейти к оплате (DonationAlerts)'), url=DONATION_ALERTS_URL)],
-        [InlineKeyboardButton(text=t('📋 Скопировать код: {order_code}', order_code=order_code), callback_data=f"da_copy_order:{order_code}")],
-        [InlineKeyboardButton(text=t('🔄 Проверить зачисление'), callback_data="da_check_payment")],
-        [InlineKeyboardButton(text=t('🛍 Выбрать другой пакет'), callback_data="btn_buy_callback")],
-    ])
-
-
-def vip_buy_keyboard(price: int = 450, user_id: int | None = None) -> InlineKeyboardMarkup:
-    from app.config import DONATION_ALERTS_URL
-    buttons = [
-        [InlineKeyboardButton(text=t('💳 Купить VIP за 150 руб. (DonationAlerts)'), url=DONATION_ALERTS_URL)],
+def card_payment_keyboard(package_key: str, username: str | None = None, user_id: int | None = None) -> InlineKeyboardMarkup:
+    """Клавиатура экрана перевода на карту: ссылка + копирование юзернейма."""
+    from app.config import CARD_PAYMENT_URL
+    rows = [
+        [InlineKeyboardButton(text=t('💳 Перейти к оплате (перевод на карту)'), url=CARD_PAYMENT_URL)],
     ]
-    if user_id:
-        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать: {user_id} vip', user_id=user_id), callback_data=f"copy_id:{user_id}_vip")])
-    buttons.append([InlineKeyboardButton(text=t('🔄 Проверить зачисление'), callback_data="da_check_payment")])
+    if username:
+        rows.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:{username}")])
+    elif user_id:
+        rows.append([InlineKeyboardButton(text=t('📋 Скопировать мой ID: {user_id}', user_id=user_id), callback_data=f"copy_username:{user_id}")])
+    rows.append([InlineKeyboardButton(text=t('✅ Я перевёл — отправить заявку админу'), callback_data=f"card_paid:{package_key}")])
+    rows.append([InlineKeyboardButton(text=t('🛍 Выбрать другой пакет'), callback_data="btn_buy_callback")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# Совместимость со старым именем (DonationAlerts удалён).
+donationalerts_order_keyboard = card_payment_keyboard
+
+
+def vip_buy_keyboard(price: int = 450, user_id: int | None = None, username: str | None = None) -> InlineKeyboardMarkup:
+    from app.config import CARD_PAYMENT_URL
+    buttons = [
+        [InlineKeyboardButton(text=t('💳 Оплатить VIP переводом на карту'), url=CARD_PAYMENT_URL)],
+    ]
+    if username:
+        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:{username}")])
+    elif user_id:
+        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой ID: {user_id}', user_id=user_id), callback_data=f"copy_username:{user_id}")])
     buttons.append([InlineKeyboardButton(text=t('🌐 Резерв: Оформить за {price} Stars', price=price), callback_data="buy_vip_stars")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

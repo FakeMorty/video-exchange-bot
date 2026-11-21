@@ -64,7 +64,7 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
   Render/Docker-инстанс c polling и Vercel-вебхук — апдейты уйдут только
   одному, второй получит `TelegramConflictError`.
 - **Фоновые воркеры на Vercel не работают**: лотерея, retention-рассылки,
-  опрос DonationAlerts, аудит подписок, чистка видеокэша. Они живут в
+  аудит подписок, чистка видеокэша. Они живут в
   `app.main.main()` и требуют постоянного процесса.
 - **Mini App страницы** (`/arcade`, `/cases`, `/lottery/live`, `/videofeed`)
   на Vercel не отдаются — это маршруты aiohttp-приложения из polling-режима.

@@ -62,7 +62,7 @@ from app.db import async_session
 from app.models import (
     User, Video, VideoView, Comment, ContentReaction,
     Offer, Payment, Promocode,
-    LootboxOpen, LotteryTicket, UserActionLog, DonationAlertOrder,
+    LootboxOpen, LotteryTicket, UserActionLog,
     AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
@@ -100,20 +100,20 @@ from app.services import (
     can_show_offer_to_user, mark_offer_shown,
     get_random_active_offer, open_lootbox_for_stars,
     get_current_prices, get_active_events,
-    get_shop_rub_packages, get_shop_star_packages, get_promocode_star_rate_effective,
+    get_shop_card_packages, get_shop_star_packages, get_promocode_star_rate_effective,
     should_show_ad_after_video, increment_video_watched, reset_ad_counter,
     create_video_report, schedule_mod_notification, REPORT_REASONS,
     BLOCK_AUTHOR_REASONS, block_user, get_blocked_author_entries,
     count_blocked_authors, unblock_user, unblock_all_authors,
     is_starter_pack_eligible, count_views_today, maybe_send_zalip_upsell,
     check_daily_video_upload_possible,
-    create_donationalerts_order, submit_admin_poll_response,
+    submit_admin_poll_response,
 )
 from app.selfcheck import run_selfcheck, format_selfcheck_report
 from app.keyboards import (
     main_menu,
     video_rating_keyboard, photo_actions_keyboard,
-    watch_choice_keyboard, donationalerts_order_keyboard,
+    watch_choice_keyboard, card_payment_keyboard,
     offers_list_keyboard, games_menu_keyboard,
     tops_menu_keyboard,
     reaction_menu_keyboard,
@@ -1158,10 +1158,10 @@ async def show_vip(message: Message, state: FSMContext):
                 from app.config import VIP_PRICE_RUB
                 vip_price_rub = int(float(await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB))
                 await message.answer(
-                    t('👑 <b>VIP статус через DonationAlerts</b>\n\n💰 Стоимость на 30 дней: <b>{vip_price_rub} руб.</b>{sale_badge}{admin_free_badge}\n\nПривилегии:\n• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n• 🎬 Просмотр фото без дневного лимита\n• ⭐️ Скидка {vip_discount_percent}% на просмотр\n• 👑 Эксклюзивная плашка VIP в профиле\n• 🎵 Создание личных плейлистов — они сохраняются при окончании VIP и открываются после продления\n\nНажмите кнопку ниже: бот создаст одноразовый код, который нужно вставить в поле «Сообщение» DonationAlerts вместе с точной суммой.', vip_price_rub=vip_price_rub, sale_badge=sale_badge, admin_free_badge=admin_free_badge, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
+                    t('👑 <b>VIP статус переводом на карту</b>\n\n💰 Стоимость на 30 дней: <b>{vip_price_rub} руб.</b>{sale_badge}{admin_free_badge}\n\nПривилегии:\n• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n• 🎬 Просмотр фото без дневного лимита\n• ⭐️ Скидка {vip_discount_percent}% на просмотр\n• 👑 Эксклюзивная плашка VIP в профиле\n• 🎵 Создание личных плейлистов — они сохраняются при окончании VIP и открываются после продления\n\nОплата — переводом на карту по кнопке ниже. В комментарии к переводу обязательно укажите свой юзернейм в Telegram — без него админ не сможет найти ваш аккаунт.', vip_price_rub=vip_price_rub, sale_badge=sale_badge, admin_free_badge=admin_free_badge, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text=t('👑 Получить код VIP за {vip_price_rub} ₽', vip_price_rub=vip_price_rub), callback_data="da_order:vip_150")],
+                        [InlineKeyboardButton(text=t('👑 Оплатить VIP за {vip_price_rub} ₽ переводом на карту', vip_price_rub=vip_price_rub), callback_data="card_pack:vip_150")],
                         [InlineKeyboardButton(text=t('⭐️ Резерв: VIP за {vip_price} Stars', vip_price=vip_price), callback_data="buy_vip")],
                     ])
                 )
@@ -2164,18 +2164,14 @@ async def cb_store_vip(callback: CallbackQuery):
     await callback.answer()
 
 
-async def _show_legacy_donationalerts(message: Message, state: FSMContext):
-    """Показывает выбор пакета (цены — актуальные, из настроек бота).
-
-    Проверка пользователя и создание защищённого одноразового заказа происходят
-    после выбора пакета.
-    """
+async def _show_card_packages(message: Message, state: FSMContext):
+    """Показывает выбор пакета для перевода на карту (цены — из настроек бота)."""
     await state.clear()
     try:
         async with async_session() as session:
-            rub_packages = await get_shop_rub_packages(session)
+            rub_packages = await get_shop_card_packages(session)
     except Exception:
-        logger.exception("Error while building DonationAlerts packages")
+        logger.exception("Error while building card payment packages")
         await message.answer(t('⚠️ Не удалось загрузить пакеты. Попробуйте ещё раз через несколько секунд.'))
         return
     if not rub_packages:
@@ -2183,10 +2179,10 @@ async def _show_legacy_donationalerts(message: Message, state: FSMContext):
         return
 
     text = (
-        t('💳 <b>Пополнение через DonationAlerts</b>\n\nВыберите фиксированный пакет. После выбора бот создаст одноразовый код заказа: вставьте <b>только этот код</b> в поле «Сообщение» на странице оплаты. Так платёж автоматически и безопасно привяжется к вашему аккаунту.\n\n⚠️ Код действует ограниченное время, а сумма должна совпадать с выбранным пакетом.')
+        t('💳 <b>Пополнение переводом на карту</b>\n\nВыберите пакет и переведите точную сумму по ссылке. В комментарии к переводу обязательно укажите свой юзернейм в Telegram (или Telegram ID) — по нему админ найдёт ваш аккаунт и начислит монеты после проверки перевода.')
     )
     rows = [
-        [InlineKeyboardButton(text=t("{amount} ₽ — {title}", amount=p_data['amount'], title=t(p_data['title'])), callback_data=f"da_order:{p_id}")]
+        [InlineKeyboardButton(text=t("{amount} ₽ — {title}", amount=p_data['amount'], title=t(p_data['title'])), callback_data=f"card_pack:{p_id}")]
         for p_id, p_data in rub_packages.items()
     ]
     rows.append([InlineKeyboardButton(text=t('🌐 Telegram Stars (резерв)'), callback_data="show_stars_menu")])
@@ -2194,11 +2190,23 @@ async def _show_legacy_donationalerts(message: Message, state: FSMContext):
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
-@router.callback_query(F.data.startswith("da_order:"))
-async def cb_create_donationalerts_order(callback: CallbackQuery):
+# Совместимость со старым именем (DonationAlerts удалён).
+_show_legacy_donationalerts = _show_card_packages
+
+
+def _card_username_hint(user) -> str:
+    """Подсказка с юзернеймом/ID пользователя для комментария к переводу."""
+    username = (getattr(user, "username", None) or "").lstrip("@")
+    if username:
+        return t('Ваш юзернейм в Telegram: <code>@{username}</code>', username=username)
+    return t('У вас пока нет юзернейма в Telegram. Укажите в комментарии свой Telegram ID: <code>{telegram_id}</code> — или задайте юзернейм в настройках Telegram, чтобы админ быстрее нашёл вас.', telegram_id=user.telegram_id)
+
+
+@router.callback_query(F.data.startswith("card_pack:"))
+async def cb_card_pack(callback: CallbackQuery):
     package_key = callback.data.split(":", 1)[1]
     async with async_session() as session:
-        package = (await get_shop_rub_packages(session)).get(package_key)
+        package = (await get_shop_card_packages(session)).get(package_key)
         if not package:
             await callback.answer(t('Пакет не найден.'), show_alert=True)
             return
@@ -2206,31 +2214,62 @@ async def cb_create_donationalerts_order(callback: CallbackQuery):
         if not user:
             await callback.answer()
             return
-        order = await create_donationalerts_order(
-            session,
-            user_id=user.id,
-            amount_rub=package["amount"],
-            reward_type=package.get("reward_type", "coins"),
-            coins_amount=package["coins"],
-        )
+        username = (getattr(user, "username", None) or "").lstrip("@") or None
+        hint = _card_username_hint(user)
 
-    expires_at = order.expires_at.strftime("%H:%M")
     await callback.message.answer(
-        t('✅ <b>Заказ создан: {arg0}</b>\n\nСумма: <b>{arg1} ₽</b>\nКод заказа: <code>{order_code}</code>\n\n1️⃣ Нажмите «Перейти к оплате».\n2️⃣ Укажите точную сумму заказа.\n3️⃣ Вставьте код в поле «Сообщение» DonationAlerts.\n\nКод действует до <b>{expires_at}</b>. После подтверждённой оплаты награда зачислится автоматически.', arg0=t(package['title']), arg1=int(package['amount']), order_code=order.order_code, expires_at=expires_at),
+        t('💳 <b>Оплата переводом на карту: {arg0}</b>\n\nСумма к переводу: <b>{arg1} ₽</b>\n\n1️⃣ Нажмите «Перейти к оплате» и переведите ровно <b>{arg1} ₽</b>.\n2️⃣ В комментарии к переводу обязательно укажите свой юзернейм в Telegram (или Telegram ID).\n\n{hint}\n\nПосле перевода нажмите «Я перевёл» — заявка уйдёт админу, а монеты/VIP зачислятся после проверки перевода.', arg0=t(package['title']), arg1=int(package['amount']), hint=hint),
         parse_mode="HTML",
-        reply_markup=donationalerts_order_keyboard(order.order_code),
+        reply_markup=card_payment_keyboard(package_key, username=username, user_id=user.telegram_id),
     )
-    await callback.answer(t('Код заказа создан!'))
+    await callback.answer(t('Инструкция по оплате отправлена!'))
 
 
-@router.callback_query(F.data.startswith("da_copy_order:"))
-async def cb_copy_donationalerts_order(callback: CallbackQuery):
-    code = callback.data.split(":", 1)[1]
+@router.callback_query(F.data.startswith("card_paid:"))
+async def cb_card_paid(callback: CallbackQuery):
+    """Пользователь нажал «Я перевёл»: уведомляем админов о заявке на сверку."""
+    package_key = callback.data.split(":", 1)[1]
+    async with async_session() as session:
+        package = (await get_shop_card_packages(session)).get(package_key)
+        if not package:
+            await callback.answer(t('Пакет не найден.'), show_alert=True)
+            return
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer()
+            return
+        username = (getattr(user, "username", None) or "").lstrip("@")
+        disp_name = escape(get_display_name(user))
+
+    admin_text = (
+        t('💳 <b>Заявка на перевод на карту!</b>\n\n👤 Пользователь: {disp_name} (ID: <code>{telegram_id}</code>)\n🆔 Юзернейм: <code>{username}</code>\n📦 Пакет: <b>{arg3}</b>\n💰 Сумма: <b>{arg4} ₽</b>\n\nПроверьте перевод в банке (комментарий должен содержать юзернейм или Telegram ID), затем начислите монеты/VIP через конвертер в админке: «💳 Платежи» → «➕ Начислить за перевод».', disp_name=disp_name, telegram_id=user.telegram_id, username=f"@{username}" if username else "—", arg3=t(package['title']), arg4=int(package['amount']))
+    )
+    for admin_id in ADMINS:
+        try:
+            await callback.bot.send_message(admin_id, admin_text, parse_mode="HTML")
+        except Exception:
+            pass
+
     await callback.message.answer(
-        t('📋 <b>Ваш код заказа DonationAlerts:</b>\n\n<code>{code}</code>\n\nСкопируйте его и вставьте в поле «Сообщение» на странице оплаты.', code=code),
+        t('✅ <b>Заявка отправлена!</b>\n\nАдмин проверит ваш перевод и начислит награду. Обычно это занимает несколько минут.\n\nЕсли перевод ещё не поступил — дождитесь его и нажмите «Я перевёл» ещё раз.',),
         parse_mode="HTML",
     )
-    await callback.answer(t('Код отправлен отдельным сообщением.'))
+    await callback.answer(t('Заявка отправлена админу!'))
+
+
+# Совместимость со старыми кнопками DonationAlerts в уже отправленных чатах:
+# они ведут на новый флоу перевода на карту вместо мёртвого обработчика.
+@router.callback_query(F.data.startswith("da_order:"))
+async def cb_legacy_da_order(callback: CallbackQuery):
+    package_key = callback.data.split(":", 1)[1]
+    callback.data = f"card_pack:{package_key}"
+    await cb_card_pack(callback)
+
+
+@router.callback_query(F.data.in_({"da_check_payment", "da_copy_order"}))
+async def cb_legacy_da_check(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await _show_card_packages(callback.message, state)
 
 
 @router.callback_query(F.data.startswith("buy:"))
@@ -2307,59 +2346,21 @@ async def cb_buy_pack(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("copy_id:"))
-async def cb_copy_id(callback: CallbackQuery):
+@router.callback_query(F.data.startswith("copy_username:"))
+async def cb_copy_username(callback: CallbackQuery):
     val = callback.data.split(":", 1)[1]
     await callback.message.answer(
-        t('📋 <b>Ваш код для поля «Ваше сообщение» в DonationAlerts:</b>\n\n<code>{val}</code>\n\n<i>Нажмите на текст выше, чтобы скопировать его в один клик!</i>', val=val),
+        t('📋 <b>Укажите это в комментарии к переводу:</b>\n\n<code>{val}</code>\n\n<i>Нажмите на текст выше, чтобы скопировать его в один клик!</i>', val=val),
         parse_mode="HTML"
     )
-    await callback.answer(t('ID скопирован в сообщение!'), show_alert=False)
+    await callback.answer(t('Скопировано в сообщение!'), show_alert=False)
 
 
-@router.callback_query(F.data == "da_check_payment")
-async def cb_da_check_payment(callback: CallbackQuery):
-    async with async_session() as session:
-        user = await get_user(session, callback.from_user.id)
-        if not user:
-            await callback.answer()
-            return
-
-        order = (await session.execute(
-            select(DonationAlertOrder)
-            .where(DonationAlertOrder.user_id == user.id)
-            .order_by(DonationAlertOrder.created_at.desc())
-            .limit(1)
-        )).scalar_one_or_none()
-        if order:
-            if order.status == "completed":
-                await callback.answer(t('✅ Заказ оплачен и награда уже зачислена!'), show_alert=True)
-                return
-            if order.status == "pending" and order.expires_at >= utc_now():
-                await callback.answer(
-                    t('⏳ Заказ {order_code} ждёт подтверждения DonationAlerts. Проверьте точную сумму и код в поле «Сообщение».', order_code=order.order_code),
-                    show_alert=True,
-                )
-                return
-            if order.status == "pending":
-                order.status = "expired"
-                await session.commit()
-            await callback.answer(t('⌛ Срок последнего заказа истёк. Создайте новый пакет в магазине.'), show_alert=True)
-            return
-
-        payment = (await session.execute(
-            select(Payment)
-            .where(Payment.user_id == user.id, Payment.payload.startswith("donationalerts_"))
-            .order_by(Payment.created_at.desc())
-            .limit(1)
-        )).scalar_one_or_none()
-        if payment:
-            await callback.answer(
-                t('✅ Последний платёж от {arg0} успешно зачислен!', arg0=payment.created_at.strftime('%d.%m %H:%M')),
-                show_alert=True,
-            )
-        else:
-            await callback.answer(t('ℹ️ У вас пока нет созданного заказа DonationAlerts.'), show_alert=True)
+# Старая кнопка «Скопировать ID» из DonationAlerts-клавиатур.
+@router.callback_query(F.data.startswith("copy_id:"))
+async def cb_legacy_copy_id(callback: CallbackQuery):
+    callback.data = "copy_username:" + callback.data.split(":", 1)[1]
+    await cb_copy_username(callback)
 
 
 @router.callback_query(F.data == "show_stars_menu")
@@ -2385,7 +2386,7 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
         return
 
     buttons = [
-        [InlineKeyboardButton(text=t('🔥 Купить в 9 раз дешевле через DonationAlerts'), callback_data="btn_buy_callback")]
+        [InlineKeyboardButton(text=t('🔥 Купить в 9 раз дешевле переводом на карту'), callback_data="btn_buy_callback")]
     ]
     for p_id, p_data in packs.items():
         # Используем название пакета, чтобы старт-пак не выглядел как второй
@@ -2395,7 +2396,7 @@ async def cb_show_stars_menu(callback: CallbackQuery, state: FSMContext):
     buttons.append([InlineKeyboardButton(text=t('👈 Назад к выгодной оплате'), callback_data="btn_buy_callback")])
 
     text = (
-        t('⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, цена при оплате через Stars <b>в 9 раз выше</b>, чем через DonationAlerts.\n\n💡 <i>Рекомендуем оплачивать через DonationAlerts — это в 9 раз дешевле, без комиссий и зачисляется моментально с любой карты или СБП!</i>\n\nВыберите пакет Stars:')
+        t('⭐️ <b>Пополнение через Telegram Stars (Резервный раздел)</b>\n\n⚠️ <b>ВНИМАНИЕ:</b> Из-за комиссий App Store / Google Play и Telegram, цена при оплате через Stars <b>в 9 раз выше</b>, чем переводом на карту.\n\n💡 <i>Рекомендуем оплачивать переводом на карту — это в 9 раз дешевле, без комиссий!</i>\n\nВыберите пакет Stars:')
     )
     await callback.message.answer(
         text,
@@ -2418,7 +2419,7 @@ async def cb_btn_buy_callback(callback: CallbackQuery, state: FSMContext):
     # Снимаем индикатор загрузки Telegram сразу: показ пакетов может занять
     # время из-за обращения к БД, но пользователь не должен видеть зависшую кнопку.
     await callback.answer()
-    await _show_legacy_donationalerts(callback.message, state)
+    await _show_card_packages(callback.message, state)
 
 
 @router.callback_query(F.data == "buy_vip_stars")
