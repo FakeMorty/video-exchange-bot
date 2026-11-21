@@ -1158,7 +1158,7 @@ async def show_vip(message: Message, state: FSMContext):
                 from app.config import VIP_PRICE_RUB
                 vip_price_rub = int(float(await get_runtime_value(session, "vip_price_rub") or VIP_PRICE_RUB))
                 await message.answer(
-                    t('👑 <b>VIP статус переводом на карту</b>\n\n💰 Стоимость на 30 дней: <b>{vip_price_rub} руб.</b>{sale_badge}{admin_free_badge}\n\nПривилегии:\n• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n• 🎬 Просмотр фото без дневного лимита\n• ⭐️ Скидка {vip_discount_percent}% на просмотр\n• 👑 Эксклюзивная плашка VIP в профиле\n• 🎵 Создание личных плейлистов — они сохраняются при окончании VIP и открываются после продления\n\nОплата — переводом на карту по кнопке ниже. В комментарии к переводу обязательно укажите свой юзернейм в Telegram — без него админ не сможет найти ваш аккаунт.', vip_price_rub=vip_price_rub, sale_badge=sale_badge, admin_free_badge=admin_free_badge, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
+                    t('👑 <b>VIP статус переводом на карту</b>\n\n💰 Стоимость на 30 дней: <b>{vip_price_rub} руб.</b>{sale_badge}{admin_free_badge}\n\nПривилегии:\n• 🚀 Множитель монет x{VIP_BONUS_MULTIPLIER}\n• 🎬 Просмотр фото без дневного лимита\n• ⭐️ Скидка {vip_discount_percent}% на просмотр\n• 👑 Эксклюзивная плашка VIP в профиле\n• 🎵 Создание личных плейлистов — они сохраняются при окончании VIP и открываются после продления\n\nОплата — переводом на карту по кнопке ниже. В комментарии к переводу обязательно укажите свой юзернейм в Telegram с символом @ (например, @Who5037) — без него админ не сможет найти ваш аккаунт.', vip_price_rub=vip_price_rub, sale_badge=sale_badge, admin_free_badge=admin_free_badge, VIP_BONUS_MULTIPLIER=VIP_BONUS_MULTIPLIER, vip_discount_percent=vip_discount_percent),
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text=t('👑 Оплатить VIP за {vip_price_rub} ₽ переводом на карту', vip_price_rub=vip_price_rub), callback_data="card_pack:vip_150")],
@@ -2179,7 +2179,7 @@ async def _show_card_packages(message: Message, state: FSMContext):
         return
 
     text = (
-        t('💳 <b>Пополнение переводом на карту</b>\n\nВыберите пакет и переведите точную сумму по ссылке. В комментарии к переводу обязательно укажите свой юзернейм в Telegram (или Telegram ID) — по нему админ найдёт ваш аккаунт и начислит монеты после проверки перевода.')
+        t('💳 <b>Пополнение переводом на карту</b>\n\nВыберите пакет и переведите точную сумму по ссылке. В комментарии к переводу обязательно укажите свой юзернейм в Telegram с символом @ (например, @Who5037) или Telegram ID — по нему админ найдёт ваш аккаунт и начислит монеты после проверки перевода.')
     )
     rows = [
         [InlineKeyboardButton(text=t("{amount} ₽ — {title}", amount=p_data['amount'], title=t(p_data['title'])), callback_data=f"card_pack:{p_id}")]
@@ -2198,7 +2198,7 @@ def _card_username_hint(user) -> str:
     """Подсказка с юзернеймом/ID пользователя для комментария к переводу."""
     username = (getattr(user, "username", None) or "").lstrip("@")
     if username:
-        return t('Ваш юзернейм в Telegram: <code>@{username}</code>', username=username)
+        return t('Ваш юзернейм в Telegram: <code>@{username}</code> — указывайте его вместе с @', username=username)
     return t('У вас пока нет юзернейма в Telegram. Укажите в комментарии свой Telegram ID: <code>{telegram_id}</code> — или задайте юзернейм в настройках Telegram, чтобы админ быстрее нашёл вас.', telegram_id=user.telegram_id)
 
 
@@ -2218,7 +2218,7 @@ async def cb_card_pack(callback: CallbackQuery):
         hint = _card_username_hint(user)
 
     await callback.message.answer(
-        t('💳 <b>Оплата переводом на карту: {arg0}</b>\n\nСумма к переводу: <b>{arg1} ₽</b>\n\n1️⃣ Нажмите «Перейти к оплате» и переведите ровно <b>{arg1} ₽</b>.\n2️⃣ В комментарии к переводу обязательно укажите свой юзернейм в Telegram (или Telegram ID).\n\n{hint}\n\nПосле перевода нажмите «Я перевёл» — заявка уйдёт админу, а монеты/VIP зачислятся после проверки перевода.', arg0=t(package['title']), arg1=int(package['amount']), hint=hint),
+        t('💳 <b>Оплата переводом на карту: {arg0}</b>\n\nСумма к переводу: <b>{arg1} ₽</b>\n\n1️⃣ Нажмите «Перейти к оплате» и переведите ровно <b>{arg1} ₽</b>.\n2️⃣ В комментарии к переводу обязательно укажите свой юзернейм в Telegram вместе с @ (например, @Who5037) или Telegram ID.\n\n{hint}\n\nПосле перевода нажмите «Я перевёл» — заявка уйдёт админу, а монеты/VIP зачислятся после проверки перевода.', arg0=t(package['title']), arg1=int(package['amount']), hint=hint),
         parse_mode="HTML",
         reply_markup=card_payment_keyboard(package_key, username=username, user_id=user.telegram_id),
     )
@@ -2348,9 +2348,13 @@ async def cb_buy_pack(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("copy_username:"))
 async def cb_copy_username(callback: CallbackQuery):
-    val = callback.data.split(":", 1)[1]
+    val = callback.data.split(":", 1)[1].strip()
+    # Юзернейм всегда копируем с @ (в т.ч. для старых кнопок без собаки),
+    # числовой Telegram ID оставляем как есть.
+    if val and not val.isdigit() and not val.startswith("@"):
+        val = "@" + val
     await callback.message.answer(
-        t('📋 <b>Укажите это в комментарии к переводу:</b>\n\n<code>{val}</code>\n\n<i>Нажмите на текст выше, чтобы скопировать его в один клик!</i>', val=val),
+        t('📋 <b>Укажите это в комментарии к переводу (юзернейм — обязательно с @):</b>\n\n<code>{val}</code>\n\n<i>Нажмите на текст выше, чтобы скопировать его в один клик!</i>', val=val),
         parse_mode="HTML"
     )
     await callback.answer(t('Скопировано в сообщение!'), show_alert=False)

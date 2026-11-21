@@ -3660,6 +3660,44 @@ async def test_card_converter_and_packages():
 
     await engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_copy_username_always_includes_at_sign():
+    """Юзернейм для комментария к переводу копируется и принимается только с @."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.keyboards import buy_coins_keyboard, card_payment_keyboard
+    from app.user_handlers import cb_copy_username
+
+    # 1. Кнопка копирования в клавиатуре несёт @ прямо в callback_data.
+    kb = card_payment_keyboard("coins_100", username="Who5037", user_id=555)
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "copy_username:@Who5037" in callbacks
+
+    kb_buy = buy_coins_keyboard(username="Who5037")
+    buy_callbacks = [b.callback_data for row in kb_buy.inline_keyboard for b in row]
+    assert "copy_username:@Who5037" in buy_callbacks
+
+    # 2. Старая кнопка без @ (уже отправленное сообщение) всё равно даёт @.
+    callback = MagicMock()
+    callback.data = "copy_username:Who5037"
+    callback.message.answer = AsyncMock()
+    callback.answer = AsyncMock()
+    await cb_copy_username(callback)
+    text = callback.message.answer.await_args.args[0]
+    assert "<code>@Who5037</code>" in text
+
+    # 3. Числовой Telegram ID не превращается в @ID.
+    callback_id = MagicMock()
+    callback_id.data = "copy_username:123456789"
+    callback_id.message.answer = AsyncMock()
+    callback_id.answer = AsyncMock()
+    await cb_copy_username(callback_id)
+    text_id = callback_id.message.answer.await_args.args[0]
+    assert "<code>123456789</code>" in text_id
+    assert "@123456789" not in text_id
+
+
 # ══════════════════════════════════════════════════════════════
 #  административные опросы с наградой
 # ══════════════════════════════════════════════════════════════

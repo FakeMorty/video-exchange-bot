@@ -407,7 +407,7 @@ def buy_coins_keyboard(packs: dict = None, user_id: int | None = None, username:
         [InlineKeyboardButton(text=t('💳 Перейти к оплате (перевод на карту)'), url=CARD_PAYMENT_URL)],
     ]
     if username:
-        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:{username}")])
+        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:@{username}")])
     elif user_id:
         buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой ID: {user_id}', user_id=user_id), callback_data=f"copy_username:{user_id}")])
     buttons.append([InlineKeyboardButton(text=t('🌐 Другие способы / Telegram Stars (дороже)'), callback_data="show_stars_menu")])
@@ -421,7 +421,7 @@ def card_payment_keyboard(package_key: str, username: str | None = None, user_id
         [InlineKeyboardButton(text=t('💳 Перейти к оплате (перевод на карту)'), url=CARD_PAYMENT_URL)],
     ]
     if username:
-        rows.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:{username}")])
+        rows.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:@{username}")])
     elif user_id:
         rows.append([InlineKeyboardButton(text=t('📋 Скопировать мой ID: {user_id}', user_id=user_id), callback_data=f"copy_username:{user_id}")])
     rows.append([InlineKeyboardButton(text=t('✅ Я перевёл — отправить заявку админу'), callback_data=f"card_paid:{package_key}")])
@@ -439,7 +439,7 @@ def vip_buy_keyboard(price: int = 450, user_id: int | None = None, username: str
         [InlineKeyboardButton(text=t('💳 Оплатить VIP переводом на карту'), url=CARD_PAYMENT_URL)],
     ]
     if username:
-        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:{username}")])
+        buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой юзернейм: @{username}', username=username), callback_data=f"copy_username:@{username}")])
     elif user_id:
         buttons.append([InlineKeyboardButton(text=t('📋 Скопировать мой ID: {user_id}', user_id=user_id), callback_data=f"copy_username:{user_id}")])
     buttons.append([InlineKeyboardButton(text=t('🌐 Резерв: Оформить за {price} Stars', price=price), callback_data="buy_vip_stars")])
