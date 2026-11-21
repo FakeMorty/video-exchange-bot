@@ -1926,23 +1926,116 @@ async def _collect_users_report_data(telegram_ids: list[int]) -> tuple[list[dict
     return [report for report in results if report], failed
 
 
+async def _build_all_users_single_file(*, progress_cb=None) -> list[dict]:
+    """Один PDF со всеми пользователями.
+
+    Собирает данные всей базы (с ограниченной параллельностью), рендерит
+    один документ и отдаёт его как единственный элемент списка — чтобы
+    код вызывающего обработчика остался единым для обоих режимов.
+
+    Предохранители те же, что у батчей: изоляция карточек (одна битая
+    карточка не роняет документ), санитайзер текста, мягкий дедлайн перед
+    рендером и лимит размера итогового файла. Если файл не влезает в
+    REPORT_MAX_FILE_MB — отказываем и предлагаем батчный экспорт.
+    """
+    async with async_session() as session:
+        telegram_ids = (await session.execute(
+            select(User.telegram_id).order_by(User.created_at.asc(), User.id.asc())
+        )).scalars().all()
+
+    total_users = len(telegram_ids)
+    if not total_users:
+        raise ValueError(t('В базе пока нет пользователей для отчёта'))
+
+    if progress_cb is not None:
+        try:
+            result = progress_cb(total_users, total_users, 1, 1)
+            if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                await result
+        except Exception:
+            logger.exception("Report progress callback failed")
+
+    started_at = asyncio.get_running_loop().time()
+    reports, failed = await _collect_users_report_data(telegram_ids)
+
+    # Мягкий дедлайн перед рендером: не тратим оставшееся время на сборку,
+    # если на рендер уже не хватит.
+    if asyncio.get_running_loop().time() - started_at > REPORT_TIMEOUT_SECONDS:
+        raise ReportTimeoutError(
+            t('Сборка отчёта не уложилась в {limit} секунд. База слишком большая для одного файла: используйте батчный экспорт.',
+              limit=REPORT_TIMEOUT_SECONDS),
+            users_total=total_users,
+            limit=0,
+        )
+
+    if not reports:
+        raise ValueError(t('Не удалось собрать ни одной карточки пользователя'))
+
+    data = {
+        "generated_at": utc_now().strftime('%d.%m.%Y %H:%M UTC'),
+        "users": reports,
+        "part": 1,
+        "parts": 1,
+        "users_from": 1,
+        "users_to": total_users,
+        "skipped": failed,
+        **_summarize_users(reports),
+    }
+
+    filename = f"all_users_report_{utc_now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    output_path = _reports_dir() / filename
+    try:
+        await asyncio.to_thread(_render_all_users_report_sync, data, output_path)
+    except Exception:
+        logger.exception("Failed to render all-users single-file report")
+        output_path.unlink(missing_ok=True)
+        raise
+
+    size_mb = output_path.stat().st_size / (1024 * 1024)
+    if size_mb > REPORT_MAX_FILE_MB:
+        output_path.unlink(missing_ok=True)
+        raise ReportLimitError(
+            t('Один файл получился слишком большим ({size} МБ при лимите {limit} МБ). Используйте батчный экспорт — он пришлёт отчёт частями.',
+              size=f"{size_mb:.1f}", limit=REPORT_MAX_FILE_MB),
+            users_total=total_users,
+            limit=0,
+        )
+
+    return [{
+        "path": output_path,
+        "filename": filename,
+        "part": 1,
+        "parts": 1,
+        "users_count": len(reports),
+        "users_from": 1,
+        "users_to": total_users,
+        "skipped": failed,
+        "size_mb": size_mb,
+    }]
+
+
 async def build_all_users_reports_pdf(
     *,
     batch_size: int | None = None,
     max_batches: int | None = None,
     progress_cb=None,
+    single_file: bool = False,
 ) -> list[dict]:
-    """PDF по всем пользователям, порезанный на батчи.
+    """PDF по всем пользователям.
 
-    Один батч — один файл. Это главный предохранитель стабильности: на базе
-    в тысячи пользователей единый PDF упирается в лимит Telegram (50 МБ),
-    таймаут serverless-функции (300 c) и память контейнера. Здесь каждый файл
-    ограничен REPORT_BATCH_USERS пользователями, а количество файлов —
-    REPORT_MAX_BATCHES.
+    По умолчанию режется на батчи (один батч — один файл): это главный
+    предохранитель стабильности на больших базах. При ``single_file=True``
+    собирает всё в один документ — удобно для небольших и средних баз, но
+    если один файл не влезает в лимиты (размер / время), кидает
+    ReportLimitError / ReportTimeoutError, и вызывающий код может откатиться
+    на батчи.
 
     Возвращает список описаний: path, filename, part, parts, users_count,
     users_from, users_to, skipped.
     """
+    if single_file:
+        return await _build_all_users_single_file(progress_cb=progress_cb)
+
     batch_size = max(1, int(batch_size or REPORT_BATCH_USERS))
     max_batches = max(1, int(max_batches or REPORT_MAX_BATCHES))
 

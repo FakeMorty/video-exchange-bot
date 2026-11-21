@@ -2013,4 +2013,9 @@ ES_SOURCE: dict[str, str] = {
     'Эту карточку собрать не удалось — данные пользователя пропущены, остальной отчёт в порядке.': 'No se pudo crear esta tarjeta — los datos de este usuario se omitieron, el resto del informe está bien.',
     'Часть {part} из {parts}: пользователи {a}–{b}': 'Parte {part} de {parts}: usuarios {a}–{b}',
     'База выгружается частями, чтобы ни один файл не упёрся в лимит Telegram и таймаут. Остальные части придут отдельными PDF.': 'La base se exporta por partes para que ningún archivo choque con el límite de Telegram ni con el tiempo de espera. Las demás partes llegan en PDF aparte.',
+    '⏳ Один файл не получился — выгружаю базу частями ({msg}).': '⏳ No se pudo generar un solo archivo — exportando la base en partes ({msg}).',
+    '✅ Готово: один файл, пользователей в выгрузке {total}.': '✅ Listo: un archivo, {total} usuarios exportados.',
+    '👥 PDF по всем пользователям': '👥 PDF de todos los usuarios',
+    'Сборка отчёта не уложилась в {limit} секунд. База слишком большая для одного файла: используйте батчный экспорт.': 'La generación del informe no terminó en {limit} segundos. La base de datos es demasiado grande para un solo archivo: use la exportación por lotes.',
+    'Один файл получился слишком большим ({size} МБ при лимите {limit} МБ). Используйте батчный экспорт — он пришлёт отчёт частями.': 'El archivo único resultó demasiado grande ({size} MB con un límite de {limit} MB). Use la exportación por lotes: enviará el informe por partes.',
 }
