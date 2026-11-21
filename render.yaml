@@ -1,7 +1,7 @@
 # render.yaml — Render Blueprint config для video-exchange-bot.
 #
 # Зачем: бот поднимает HTTP-сервер (Mini App'ы: Кейсы, Аркада, Секслото-live,
-# видеолента + автоматическая сверка DonationAlerts) И параллельно long-polling Telegram.
+# видеолента) И параллельно long-polling Telegram.
 # Поэтому нужен именно Web Service (публичный порт), а не Background Worker.
 #
 # Этот файл пинит ветку, команды сборки/запуска и health-check, чтобы повторный
@@ -38,24 +38,8 @@ services:
         sync: false
       - key: WEBHOOK_PATH
         value: /webhook
-      - key: DONATION_ALERTS_URL
-        sync: false
-      - key: DONATION_ALERTS_CLIENT_ID
-        sync: false
-      - key: DONATION_ALERTS_CLIENT_SECRET
-        sync: false
-      - key: DONATION_ALERTS_REFRESH_TOKEN
-        sync: false
-      - key: DONATION_ALERTS_ACCESS_TOKEN
-        sync: false
-      - key: DONATION_ALERTS_OAUTH_REDIRECT_URI
-        sync: false
-      - key: DONATION_ALERTS_OAUTH_STATE
-        sync: false
-      - key: DONATION_ALERTS_SYNC_INTERVAL_SECONDS
-        value: "60"
-      - key: DONATION_ALERTS_ORDER_TTL_MINUTES
-        value: "120"
+      - key: CARD_PAYMENT_URL
+        value: "https://www.tbank-online.com/rm/r_ZAVxbmCrOP.IZpYpwbnlB/CRDOu48229"
       - key: RUB_TO_COINS_RATE
         value: "10.0"
       - key: VIP_PRICE_RUB

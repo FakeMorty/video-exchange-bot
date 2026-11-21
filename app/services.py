@@ -29,7 +29,6 @@ from app.models import (
     LotteryRound, LotteryTicket,
     LootboxOpen,
     TrustedUploader, UserPerk,
-    DonationAlertOrder, DonationAlertException,
     VideoReport, AdminPoll, AdminPollResponse,
 )
 
@@ -40,7 +39,7 @@ from app.config import (
     CONTENT_VIEWS_MILESTONE_THRESHOLD, VIDEO_VIEWS_MILESTONE_REWARD, PHOTO_VIEWS_MILESTONE_REWARD,
     CONTENT_QUALITY_MIN_AVG_RATING, CONTENT_QUALITY_MIN_RATINGS, CONTENT_QUALITY_BONUS,
     REFERRAL_REWARD_INVITER, REFERRAL_REWARD_NEW_USER, REFERRAL_MILESTONES,
-    STARS_PACKAGES, STARS_TO_COINS_RATE, DA_ORDER_PACKAGES,
+    STARS_PACKAGES, STARS_TO_COINS_RATE, CARD_ORDER_PACKAGES,
     RUB_TO_COINS_RATE, VIP_PRICE_RUB,
     NICKNAME_CHANGE_COST, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH,
     DAILY_BONUS_STREAK_BASE, DAILY_BONUS_STREAK_INCREASE,
@@ -3607,14 +3606,8 @@ async def get_shop_star_packages(session: AsyncSession) -> dict:
     return packs
 
 
-async def get_shop_rub_packages(session: AsyncSession) -> dict:
-    """Актуальные пакеты в рублях (DonationAlerts).
-
-    Цена пакета монет = ceil(coins / rub_to_coins_rate), если админ не задал
-    свою цену (shop_rub_<key>); цена VIP = vip_price_rub. Рублёвый магазин
-    всегда пересчитан из единого курса — пакет не может оказаться дешевле
-    прямого доната на ту же сумму.
-    """
+async def get_rub_to_coins_rate(session: AsyncSession) -> float:
+    """Актуальный курс «1 RUB = N монет» (настройка БД или дефолт из config)."""
     raw_rate = await get_setting(session, "rub_to_coins_rate", "")
     try:
         rate = float(raw_rate) if raw_rate else float(RUB_TO_COINS_RATE)
@@ -3622,10 +3615,27 @@ async def get_shop_rub_packages(session: AsyncSession) -> dict:
         rate = float(RUB_TO_COINS_RATE)
     if rate <= 0:
         rate = float(RUB_TO_COINS_RATE)
+    return rate
+
+
+def rub_to_coins(amount_rub: Decimal | float | int, rate: float) -> Decimal:
+    """Конвертер: сколько монет даёт перевод на карту на `amount_rub` рублей."""
+    return (Decimal(str(amount_rub)) * Decimal(str(rate))).quantize(Decimal("0.01"))
+
+
+async def get_shop_card_packages(session: AsyncSession) -> dict:
+    """Актуальные пакеты в рублях (перевод на карту).
+
+    Цена пакета монет = ceil(coins / rub_to_coins_rate), если админ не задал
+    свою цену (shop_rub_<key>); цена VIP = vip_price_rub. Рублёвый магазин
+    всегда пересчитан из единого курса — пакет не может оказаться дешевле
+    прямого перевода на ту же сумму.
+    """
+    rate = await get_rub_to_coins_rate(session)
     vip_price = _parse_price_int(await get_setting(session, "vip_price_rub", ""), int(VIP_PRICE_RUB))
 
     packs = {}
-    for k, v in DA_ORDER_PACKAGES.items():
+    for k, v in CARD_ORDER_PACKAGES.items():
         coins = int(v["coins"])
         pack = {"amount": int(v["amount"]), "coins": coins, "title": v["title"]}
         if v.get("reward_type") == "vip":
@@ -3640,6 +3650,10 @@ async def get_shop_rub_packages(session: AsyncSession) -> dict:
             pack["amount"] = max(1, math.ceil(coins / rate))
         packs[k] = pack
     return packs
+
+
+# Совместимость со старым именем (DonationAlerts удалён).
+get_shop_rub_packages = get_shop_card_packages
 
 
 async def get_shop_effective_star_rate(session: AsyncSession) -> float | None:
@@ -5046,281 +5060,70 @@ async def log_balance_change(
     session.add(log)
 
 
-def _donationalerts_amount(value: Decimal | float | int | str) -> Decimal:
+# ============================
+# ОПЛАТА ПЕРЕВОДОМ НА КАРТУ (ручная сверка админом)
+# ============================
+# DonationAlerts удалён: автоматической сверки больше нет. Пользователь
+# переводит точную сумму по ссылке CARD_PAYMENT_URL и обязательно указывает
+# в комментарии свой юзернейм в Telegram. Админ проверяет перевод в банке
+# и начисляет монеты/VIP через конвертер (RUB × rub_to_coins_rate) с
+# обязательным подтверждением — см. credit_card_payment ниже.
+
+def _card_amount(value: Decimal | float | int | str) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"))
 
 
-async def create_donationalerts_order(
+async def credit_card_payment(
     session: AsyncSession,
     *,
-    user_id: int,
-    amount_rub: Decimal | float | int,
-    reward_type: str = "coins",
-    coins_amount: Decimal | float | int = 0,
-) -> DonationAlertOrder:
-    """Создаёт короткоживущий код заказа для поля сообщения DonationAlerts."""
-    from app.config import DONATION_ALERTS_ORDER_TTL_MINUTES
-
-    expected_amount = _donationalerts_amount(amount_rub)
-    if expected_amount <= 0 or reward_type not in {"coins", "vip"}:
-        raise ValueError("Invalid DonationAlerts order parameters")
-
-    now = utc_now()
-    await session.execute(
-        update(DonationAlertOrder)
-        .where(
-            DonationAlertOrder.user_id == user_id,
-            DonationAlertOrder.status == "pending",
-            DonationAlertOrder.expires_at < now,
-        )
-        .values(status="expired")
-    )
-
-    for _ in range(5):
-        code = f"DA-{uuid.uuid4().hex[:10].upper()}"
-        existing = (await session.execute(
-            select(DonationAlertOrder.id).where(DonationAlertOrder.order_code == code)
-        )).scalar_one_or_none()
-        if not existing:
-            order = DonationAlertOrder(
-                user_id=user_id,
-                order_code=code,
-                expected_amount=expected_amount,
-                reward_type=reward_type,
-                coins_amount=_donationalerts_amount(coins_amount),
-                expires_at=now + timedelta(minutes=DONATION_ALERTS_ORDER_TTL_MINUTES),
-            )
-            session.add(order)
-            await session.commit()
-            await session.refresh(order)
-            return order
-    raise RuntimeError("Could not allocate a unique DonationAlerts order code")
-
-
-async def record_donationalerts_exception(
-    session: AsyncSession,
-    *,
-    donation_id: str | int,
-    amount_rub: Decimal | float | int,
-    currency: str = "RUB",
-    message: str = "",
-    donor_name: str = "",
-    reason: str,
-    suggested_user_id: int | None = None,
-) -> DonationAlertException:
-    """Сохраняет донат, который запрещено начислять без ручной сверки."""
-    donation_key = str(donation_id)
-    existing = (await session.execute(
-        select(DonationAlertException).where(DonationAlertException.donation_id == donation_key)
-    )).scalar_one_or_none()
-    if existing:
-        # Транзиентный флаг для вызывающего кода: REST-сверка видит один и тот
-        # же донат каждую минуту — уведомлять админов надо только о новом.
-        existing.is_new = False
-        return existing
-
-    exception = DonationAlertException(
-        donation_id=donation_key,
-        amount=_donationalerts_amount(amount_rub),
-        currency=(currency or "RUB").upper()[:8],
-        message=(message or "")[:2000],
-        donor_name=(donor_name or "")[:255],
-        reason=reason[:80],
-        suggested_user_id=suggested_user_id,
-    )
-    session.add(exception)
-    await session.commit()
-    await session.refresh(exception)
-    exception.is_new = True
-    return exception
-
-
-async def process_donationalerts_event(
-    session: AsyncSession,
-    *,
-    donation_id: str | int,
-    amount_rub: Decimal | float | int,
-    currency: str = "RUB",
-    message: str = "",
-    donor_name: str = "",
-    bot=None,
-) -> tuple[bool, str, DonationAlertException | None]:
-    """Сверяет подтверждённый донат с одноразовым кодом до начисления.
-
-    Возвращает `(completed, message, exception)`. При любой неоднозначности
-    награда не выдаётся автоматически, а создаётся запись для администратора.
-    """
-    donation_key = str(donation_id)
-    payload_key = f"donationalerts_{donation_key}"
-    already_paid = (await session.execute(
-        select(Payment.id).where(Payment.payload == payload_key)
-    )).scalar_one_or_none()
-    if already_paid:
-        return False, t('Донат уже был обработан ранее'), None
-
-    amount = _donationalerts_amount(amount_rub)
-    normalized_currency = (currency or "RUB").upper()
-    if normalized_currency != "RUB":
-        exception = await record_donationalerts_exception(
-            session, donation_id=donation_key, amount_rub=amount,
-            currency=normalized_currency, message=message, donor_name=donor_name,
-            reason="unsupported_currency",
-        )
-        return False, t('Валюта требует ручной сверки'), exception
-
-    code_match = re.search(r"\bDA-[A-Z0-9]{10}\b", (message or "").upper())
-    if not code_match:
-        exception = await record_donationalerts_exception(
-            session, donation_id=donation_key, amount_rub=amount,
-            currency=normalized_currency, message=message, donor_name=donor_name,
-            reason="order_code_missing",
-        )
-        return False, t('Код заказа не найден; донат передан на ручную сверку'), exception
-
-    order_code = code_match.group(0)
-    order = (await session.execute(
-        select(DonationAlertOrder).where(DonationAlertOrder.order_code == order_code)
-    )).scalar_one_or_none()
-    if not order:
-        exception = await record_donationalerts_exception(
-            session, donation_id=donation_key, amount_rub=amount,
-            currency=normalized_currency, message=message, donor_name=donor_name,
-            reason="order_not_found",
-        )
-        return False, t('Заказ не найден; донат передан на ручную сверку'), exception
-
-    now = utc_now()
-    if order.status != "pending" or order.expires_at < now:
-        if order.status == "pending":
-            order.status = "expired"
-            await session.commit()
-        exception = await record_donationalerts_exception(
-            session, donation_id=donation_key, amount_rub=amount,
-            currency=normalized_currency, message=message, donor_name=donor_name,
-            reason="order_expired_or_closed", suggested_user_id=order.user_id,
-        )
-        return False, t('Срок заказа истёк; донат передан на ручную сверку'), exception
-
-    if amount != _donationalerts_amount(order.expected_amount):
-        exception = await record_donationalerts_exception(
-            session, donation_id=donation_key, amount_rub=amount,
-            currency=normalized_currency, message=message, donor_name=donor_name,
-            reason="amount_mismatch", suggested_user_id=order.user_id,
-        )
-        return False, t('Сумма не совпала с заказом; донат передан на ручную сверку'), exception
-
-    order_user = await session.get(User, order.user_id)
-    if not order_user:
-        exception = await record_donationalerts_exception(
-            session, donation_id=donation_key, amount_rub=amount,
-            currency=normalized_currency, message=message, donor_name=donor_name,
-            reason="order_user_missing", suggested_user_id=order.user_id,
-        )
-        return False, t('Пользователь заказа не найден; донат передан на ручную сверку'), exception
-
-    # Что выдавать — строго из заказа, а не из текста донатера: раньше слово
-    # «vip» в сообщении превращало любой донат (даже 10 ₽) в VIP на 30 дней.
-    completed, result = await process_donationalerts_donation(
-        session,
-        donation_id=donation_key,
-        amount_rub=amount,
-        telegram_user_id=order_user.telegram_id,
-        comment=message,
-        bot=bot,
-        reward_type=order.reward_type or "coins",
-        coins_amount=order.coins_amount if order.reward_type != "vip" else None,
-    )
-    if not completed:
-        # Real-time канал и резервная REST-сверка могут увидеть один и тот же
-        # платёж почти одновременно. Уникальный Payment уже защитил баланс;
-        # просто фиксируем завершение заказа без ложной очереди исключений.
-        processed_payment = (await session.execute(
-            select(Payment.id).where(Payment.payload == payload_key)
-        )).scalar_one_or_none()
-        if processed_payment:
-            order.status = "completed"
-            order.donation_id = donation_key
-            order.matched_at = now
-            await session.commit()
-            return False, t('Донат уже был обработан ранее'), None
-
-        exception = await record_donationalerts_exception(
-            session, donation_id=donation_key, amount_rub=amount,
-            currency=normalized_currency, message=message, donor_name=donor_name,
-            reason="crediting_failed", suggested_user_id=order.user_id,
-        )
-        return False, result, exception
-
-    order.status = "completed"
-    order.donation_id = donation_key
-    order.matched_at = now
-    await session.commit()
-    return True, result, None
-
-
-async def process_donationalerts_donation(
-    session: AsyncSession,
-    donation_id: str | int,
-    amount_rub: Decimal | float | int,
     telegram_user_id: int,
-    comment: str | None = None,
-    bot = None,
-    *,
+    amount_rub: Decimal | float | int,
     reward_type: str = "coins",
     coins_amount: Decimal | float | int | None = None,
+    admin_telegram_id: int | None = None,
+    bot=None,
 ) -> tuple[bool, str]:
-    """Обработка доната от DonationAlerts.
+    """Начисляет монеты/VIP за проверенный перевод на карту.
 
-    Идемпотентен по payload = f"donationalerts_{donation_id}".
-    ``reward_type`` («coins» | «vip») задаётся вызывающим кодом (заказ или
-    явный выбор админа) — текст донатера на тип награды не влияет.
-    ``coins_amount`` — монеты по заказу; если не передано, считается по курсу.
+    Вызывается только из админки после сверки перевода и подтверждения
+    конвертера: `amount_rub` — фактически полученная сумма, монеты считаются
+    по курсу rub_to_coins_rate (если `coins_amount` не передан явно).
+    ``reward_type`` («coins» | «vip») выбирает админ, а не текст пользователя.
     Возвращает (успех, сообщение).
     """
-    amount_rub = Decimal(str(amount_rub))
+    amount_rub = _card_amount(amount_rub)
     if amount_rub <= 0:
-        return False, t('Некорректная сумма доната')
+        return False, t('Некорректная сумма перевода')
+    if (reward_type or "coins").lower() not in {"coins", "vip"}:
+        return False, t('Некорректный тип награды')
 
-    payload_key = f"donationalerts_{donation_id}"
-
-    # 1. Проверяем, не обрабатывался ли уже этот донат
-    existing_payment = (await session.execute(
-        select(Payment).where(Payment.payload == payload_key)
-    )).scalar_one_or_none()
-    if existing_payment:
-        return False, t('Донат уже был обработан ранее')
-
-    # 2. Ищем пользователя
     user = await get_user(session, telegram_user_id)
     if not user:
         return False, t('Пользователь с Telegram ID {telegram_user_id} не найден', telegram_user_id=telegram_user_id)
 
-    # 3. Определяем, что выдаём (курс — из настроек бота)
-    from app.config import ADMINS
-    rub_rate = float(await get_runtime_value(session, "rub_to_coins_rate") or RUB_TO_COINS_RATE)
-
+    rub_rate = await get_rub_to_coins_rate(session)
     is_vip = (reward_type or "coins").lower() == "vip"
 
     coins_reward = Decimal("0")
     if is_vip:
-        perk = await activate_perk(session, user.id, "vip", duration_days=30)
+        await activate_perk(session, user.id, "vip", duration_days=30)
         reward_desc = t('👑 VIP-подписка на 30 дней')
-        await log_user_action(session, user.id, "vip_purchased_da", f"amount_rub={amount_rub}, da_id={donation_id}")
+        await log_user_action(session, user.id, "vip_purchased_card", f"amount_rub={amount_rub}, admin={admin_telegram_id}")
     else:
         if coins_amount is not None and Decimal(str(coins_amount)) > 0:
-            coins_reward = Decimal(str(coins_amount))
+            coins_reward = _card_amount(coins_amount)
         else:
-            coins_reward = Decimal(str(amount_rub * Decimal(str(rub_rate))))
+            coins_reward = rub_to_coins(amount_rub, rub_rate)
         await change_balance_atomic(
-            session, user.id, coins_reward, "donationalerts_deposit",
-            details=f"rub={amount_rub}, da_id={donation_id}"
+            session, user.id, coins_reward, "card_payment_deposit",
+            details=f"rub={amount_rub}, rate={rub_rate}, admin={admin_telegram_id}"
         )
         reward_desc = t('+{coins_reward:,.0f} монет 🪙', coins_reward=coins_reward).replace(',', ' ')
-        await log_user_action(session, user.id, "coins_purchased_da", f"amount_rub={amount_rub}, coins={coins_reward}, da_id={donation_id}")
+        await log_user_action(session, user.id, "coins_purchased_card", f"amount_rub={amount_rub}, coins={coins_reward}, admin={admin_telegram_id}")
 
     payment = Payment(
         user_id=user.id,
-        payload=payload_key,
+        payload=f"card_payment_{uuid.uuid4().hex}",
         stars_amount=0,
         coins_amount=coins_reward,
         status="paid"
@@ -5330,19 +5133,19 @@ async def process_donationalerts_donation(
 
     if bot:
         try:
-            from html import escape
             msg_text = (
-                t('🎉 <b>Спасибо за подношение / поддержку!</b>\n\nПолучен платёж через DonationAlerts на сумму: <b>{amount_rub} руб.</b>\nВам зачислено: <b>{reward_desc}</b>\n\nПриятного пользования ботом! 💙', amount_rub=amount_rub, reward_desc=reward_desc)
+                t('🎉 <b>Спасибо за перевод!</b>\n\nПолучен перевод на карту на сумму: <b>{amount_rub} руб.</b>\nВам зачислено: <b>{reward_desc}</b>\n\nПриятного пользования ботом! 💙', amount_rub=amount_rub, reward_desc=reward_desc)
             )
             await bot.send_message(user.telegram_id, msg_text, parse_mode="HTML")
         except Exception as e:
-            logger.warning(f"Failed to send DA notification to user {telegram_user_id}: {e}")
+            logger.warning(f"Failed to send card payment notification to user {telegram_user_id}: {e}")
 
         try:
             from html import escape
+            from app.config import ADMINS
             disp_name = escape(get_display_name(user))
             admin_msg = (
-                t('💳 <b>Новый платёж DonationAlerts!</b>\n\n👤 Пользователь: {disp_name} (ID: <code>{telegram_id}</code>)\n💰 Сумма: <b>{amount_rub} руб.</b>\n💬 Сообщение: <i>{arg3}</i>\n🎁 Начислено: <b>{reward_desc}</b>', disp_name=disp_name, telegram_id=user.telegram_id, amount_rub=amount_rub, arg3=escape(comment or '—'), reward_desc=reward_desc)
+                t('💳 <b>Новый перевод на карту!</b>\n\n👤 Пользователь: {disp_name} (ID: <code>{telegram_id}</code>)\n💰 Сумма: <b>{amount_rub} руб.</b>\n🎁 Начислено: <b>{reward_desc}</b>', disp_name=disp_name, telegram_id=user.telegram_id, amount_rub=amount_rub, reward_desc=reward_desc)
             )
             for admin_id in ADMINS:
                 try:
@@ -5350,6 +5153,6 @@ async def process_donationalerts_donation(
                 except Exception:
                     pass
         except Exception as e:
-            logger.warning(f"Failed to notify admins of DA payment: {e}")
+            logger.warning(f"Failed to notify admins of card payment: {e}")
 
     return True, t('Успешно начислено: {reward_desc}', reward_desc=reward_desc)

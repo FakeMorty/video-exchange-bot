@@ -3396,8 +3396,8 @@ async def test_promo_otzyv_seed_and_title_management():
 
 
 @pytest.mark.asyncio
-async def test_donationalerts_integration():
-    from app.services import process_donationalerts_donation, has_active_perk
+async def test_card_payment_integration():
+    from app.services import credit_card_payment, has_active_perk
     from app.models import User, Base
     from unittest.mock import AsyncMock
 
@@ -3412,14 +3412,13 @@ async def test_donationalerts_integration():
         session.add(u1)
         await session.commit()
 
-        # 1. Process donation for coins (100 RUB = 1000 coins)
+        # 1. Начисление за перевод на карту: 100 RUB = 1000 монет по курсу 1:10
         mock_bot = AsyncMock()
-        ok, msg = await process_donationalerts_donation(
+        ok, msg = await credit_card_payment(
             session=session,
-            donation_id="da_test_100",
             amount_rub=100,
             telegram_user_id=888001,
-            comment="12345 888001 привет!",
+            admin_telegram_id=999999,
             bot=mock_bot
         )
         assert ok is True
@@ -3432,41 +3431,37 @@ async def test_donationalerts_integration():
         # Check notification sent to user
         mock_bot.send_message.assert_called()
 
-        # 2. Idempotency test (same donation_id)
-        ok2, msg2 = await process_donationalerts_donation(
-            session=session,
-            donation_id="da_test_100",
-            amount_rub=100,
-            telegram_user_id=888001,
-            comment="888001",
-            bot=mock_bot
+        # 2. Некорректная сумма и неизвестный пользователь отклоняются без начисления
+        ok_bad, _ = await credit_card_payment(
+            session=session, amount_rub=0, telegram_user_id=888001,
         )
-        assert ok2 is False
-        assert "уже был обработан" in msg2
+        assert ok_bad is False
+        ok_unknown, _ = await credit_card_payment(
+            session=session, amount_rub=100, telegram_user_id=777777,
+        )
+        assert ok_unknown is False
+        refreshed_u1 = (await session.execute(select(User).where(User.telegram_id == 888001))).scalar_one()
+        assert refreshed_u1.balance == Decimal("1100.00")
 
-        # 3. Слово «vip» в комментарии донатера НЕ выдаёт VIP (B-06): тип
-        #    награды задаёт только заказ/админ — иначе любой донат с текстом
-        #    «vip» превращался в месяц VIP.
-        ok_vip_word, msg_vip_word = await process_donationalerts_donation(
+        # 3. Тип награды задаёт только админ (reward_type), а не текст:
+        #    начисление монет по умолчанию не выдаёт VIP.
+        ok_coins, msg_coins = await credit_card_payment(
             session=session,
-            donation_id="da_test_vip_word",
             amount_rub=10,
             telegram_user_id=888001,
-            comment="888001 vip",
-            bot=mock_bot
+            bot=mock_bot,
+            reward_type="coins",
         )
-        assert ok_vip_word is True
-        assert "VIP" not in msg_vip_word
+        assert ok_coins is True
+        assert "VIP" not in msg_coins
         assert await has_active_perk(session, u1.id, "vip") is False
 
-        # 4. VIP выдаётся только при явном reward_type="vip" (заказ из бота /
-        #    выбор админа при ручной сверке).
-        ok3, msg3 = await process_donationalerts_donation(
+        # 4. VIP выдаётся только при явном reward_type="vip" (выбор админа
+        #    в конвертере после сверки перевода).
+        ok3, msg3 = await credit_card_payment(
             session=session,
-            donation_id="da_test_vip",
             amount_rub=150,
             telegram_user_id=888001,
-            comment="888001",
             bot=mock_bot,
             reward_type="vip",
         )
@@ -3475,7 +3470,6 @@ async def test_donationalerts_integration():
         assert await has_active_perk(session, u1.id, "vip") is True
 
     await engine.dispose()
-
 
 @pytest.mark.asyncio
 async def test_schedule_mod_notification_multiple_rows_and_cancel_admin():
@@ -3620,10 +3614,13 @@ def test_content_actions_show_remove_button_only_to_admins():
 
 
 @pytest.mark.asyncio
-async def test_donationalerts_order_matching_and_exception_queue():
-    from unittest.mock import AsyncMock
-    from app.models import Base, User, DonationAlertOrder, DonationAlertException
-    from app.services import create_donationalerts_order, process_donationalerts_event
+async def test_card_converter_and_packages():
+    """Конвертер RUB -> монеты и рублёвые пакеты для перевода на карту."""
+    from app.services import credit_card_payment, get_shop_card_packages, rub_to_coins
+
+    # Конвертер: 1 RUB = 10 монет по умолчанию
+    assert rub_to_coins(100, 10.0) == Decimal("1000.00")
+    assert rub_to_coins(Decimal("12.5"), 10.0) == Decimal("125.00")
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -3636,81 +3633,32 @@ async def test_donationalerts_order_matching_and_exception_queue():
         await session.commit()
         await session.refresh(user)
 
-        order = await create_donationalerts_order(
+        packs = await get_shop_card_packages(session)
+        assert packs["coins_100"]["amount"] == 100
+        assert packs["coins_100"]["coins"] == 1000
+
+        # Явное число монет из пакета (админ подтвердил перевод пакета)
+        ok, _ = await credit_card_payment(
             session,
-            user_id=user.id,
+            telegram_user_id=991001,
             amount_rub=100,
             coins_amount=1000,
         )
-        assert order.order_code.startswith("DA-")
-        assert order.status == "pending"
-
-        bot = AsyncMock()
-        completed, _, exception = await process_donationalerts_event(
-            session,
-            donation_id="order_match_1",
-            amount_rub=100,
-            currency="RUB",
-            message=f"оплата {order.order_code}",
-            donor_name="tester",
-            bot=bot,
-        )
-        assert completed is True
-        assert exception is None
-
-        stored_order = await session.get(DonationAlertOrder, order.id)
-        assert stored_order.status == "completed"
+        assert ok is True
         refreshed_user = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
         assert refreshed_user.balance == Decimal("1000.00")
 
-        mismatch_order = await create_donationalerts_order(
+        # Произвольная сумма переводится по курсу
+        ok2, _ = await credit_card_payment(
             session,
-            user_id=user.id,
-            amount_rub=50,
-            coins_amount=500,
+            telegram_user_id=991001,
+            amount_rub=25,
         )
-        completed_mismatch, _, mismatch_exception = await process_donationalerts_event(
-            session,
-            donation_id="order_mismatch_1",
-            amount_rub=51,
-            currency="RUB",
-            message=mismatch_order.order_code,
-            donor_name="tester",
-            bot=bot,
-        )
-        assert completed_mismatch is False
-        assert mismatch_exception is not None
-        assert mismatch_exception.reason == "amount_mismatch"
-
-        completed_missing, _, missing_exception = await process_donationalerts_event(
-            session,
-            donation_id="order_missing_1",
-            amount_rub=50,
-            currency="RUB",
-            message="без кода",
-            donor_name="tester",
-            bot=bot,
-        )
-        assert completed_missing is False
-        assert missing_exception is not None
-        assert missing_exception.reason == "order_code_missing"
-        queued = (await session.execute(select(DonationAlertException))).scalars().all()
-        assert len(queued) == 2
+        assert ok2 is True
+        refreshed_user = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        assert refreshed_user.balance == Decimal("1250.00")
 
     await engine.dispose()
-
-
-def test_donationalerts_event_parser_accepts_nested_centrifugo_payload():
-    from app.donationalerts_client import parse_donation_event
-
-    event = parse_donation_event({
-        "params": {"data": {"id": 77, "amount": 100, "currency": "RUB", "message": "DA-ABC"}}
-    })
-    assert event is not None
-    assert event.donation_id == "77"
-    assert event.amount == 100
-    assert event.message == "DA-ABC"
-
 
 # ══════════════════════════════════════════════════════════════
 #  административные опросы с наградой
@@ -3979,7 +3927,7 @@ async def test_promocode_star_cost_exact_no_float_overcharge():
 async def test_rub_packages_recalculated_from_rate():
     """Рублёвые пакеты пересчитываются от курса 1 RUB = N монет; точечная
     цена (shop_rub_<key>) и цена VIP (vip_price_rub) перекрывают пересчёт."""
-    from app.services import get_shop_rub_packages, set_setting
+    from app.services import get_shop_card_packages, set_setting
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     Session = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
@@ -3987,14 +3935,14 @@ async def test_rub_packages_recalculated_from_rate():
 
     async with Session() as session:
         # Дефолт: 10 монет за рубль -> 10/50/100/500 ₽ (как было в прайсе)
-        packs = await get_shop_rub_packages(session)
+        packs = await get_shop_card_packages(session)
         assert [packs[k]["amount"] for k in ("coins_10", "coins_50", "coins_100", "coins_500")] == [10, 50, 100, 500]
         assert packs["vip_150"]["amount"] == 150
         assert packs["vip_150"]["reward_type"] == "vip"
 
         # Админ изменил курс -> все цены пересчитаны, пакет не дешевле прямого доната
         await set_setting(session, "rub_to_coins_rate", "12")
-        packs = await get_shop_rub_packages(session)
+        packs = await get_shop_card_packages(session)
         assert packs["coins_10"]["amount"] == 9
         assert packs["coins_50"]["amount"] == 42
         assert packs["coins_100"]["amount"] == 84
@@ -4002,13 +3950,13 @@ async def test_rub_packages_recalculated_from_rate():
 
         # Точечная цена пакета
         await set_setting(session, "shop_rub_coins_10", "15")
-        packs = await get_shop_rub_packages(session)
+        packs = await get_shop_card_packages(session)
         assert packs["coins_10"]["amount"] == 15
         assert packs["coins_50"]["amount"] == 42, "соседние пакеты не должны меняться"
 
         # Цена VIP
         await set_setting(session, "vip_price_rub", "200")
-        packs = await get_shop_rub_packages(session)
+        packs = await get_shop_card_packages(session)
         assert packs["vip_150"]["amount"] == 200
 
     await engine.dispose()
@@ -4206,9 +4154,9 @@ async def test_offer_creator_cannot_participate_or_verify():
 
 
 @pytest.mark.asyncio
-async def test_donationalerts_vip_sets_user_vip_until_and_status_paid():
-    """DA-донат на VIP устанавливает user.vip_until и Payment.status == 'paid'."""
-    from app.services import process_donationalerts_donation, is_vip
+async def test_card_payment_vip_sets_user_vip_until_and_status_paid():
+    """Перевод на карту с VIP-наградой устанавливает user.vip_until и Payment.status == 'paid'."""
+    from app.services import credit_card_payment, is_vip
     from unittest.mock import AsyncMock
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -4222,12 +4170,10 @@ async def test_donationalerts_vip_sets_user_vip_until_and_status_paid():
         await session.commit()
 
         mock_bot = AsyncMock()
-        ok, msg = await process_donationalerts_donation(
+        ok, msg = await credit_card_payment(
             session=session,
-            donation_id="da_vip_test_status",
             amount_rub=150,
             telegram_user_id=96001,
-            comment="vip",
             bot=mock_bot,
             reward_type="vip",
         )
@@ -4237,12 +4183,11 @@ async def test_donationalerts_vip_sets_user_vip_until_and_status_paid():
         assert u.vip_until is not None
 
         pmt = (await session.execute(
-            select(Payment).where(Payment.payload == "donationalerts_da_vip_test_status")
+            select(Payment).where(Payment.user_id == u.id, Payment.payload.startswith("card_payment_"))
         )).scalar_one()
         assert pmt.status == "paid"
 
     await engine.dispose()
-
 
 @pytest.mark.asyncio
 async def test_lottery_place_bet_api_blocks_negative_bet_and_late_bet(monkeypatch):
@@ -4992,7 +4937,7 @@ def test_admin_panel_keeps_all_sections_and_is_grouped():
 
     expected_callbacks = {
         "admin_queue_info", "admin_extended_stats",
-        "admin_da_menu", "admin_manage_users", "admin_auto_moderation",
+        "admin_payments_menu", "admin_manage_users", "admin_auto_moderation",
         "admin_trusted_uploaders", "admin_offers_menu",
         "admin_direct_message_all", "admin_broadcast", "admin_polls",
         "admin_events_menu", "admin_sales", "admin_reports",

@@ -2393,103 +2393,6 @@ async def auto_broadcast_worker(bot):
             await asyncio.sleep(60)
 
 
-async def donationalerts_polling_worker(bot, stop_event: asyncio.Event):
-    """Автоматическая синхронизация DonationAlerts.
-
-    Основной источник — private real-time канал Centrifugo. REST опрос раз в
-    минуту служит защитной сеткой для пропущенных событий и перезапусков.
-    Начисление возможно только при совпадении одноразового кода заказа и суммы.
-    """
-    import aiohttp
-    from app.config import (
-        ADMINS,
-        DONATION_ALERTS_ACCESS_TOKEN,
-        DONATION_ALERTS_CLIENT_ID,
-        DONATION_ALERTS_CLIENT_SECRET,
-        DONATION_ALERTS_REFRESH_TOKEN,
-        DONATION_ALERTS_SYNC_INTERVAL_SECONDS,
-    )
-    from app.db import async_session
-    from app.donationalerts_client import DonationAlertsClient, reconnecting_realtime_events
-    from app.services import process_donationalerts_event
-
-    client = DonationAlertsClient(
-        client_id=DONATION_ALERTS_CLIENT_ID,
-        client_secret=DONATION_ALERTS_CLIENT_SECRET,
-        refresh_token=DONATION_ALERTS_REFRESH_TOKEN,
-        access_token=DONATION_ALERTS_ACCESS_TOKEN,
-    )
-    if not client.configured:
-        logger.info("DonationAlerts automation disabled: OAuth credentials are not configured.")
-        return
-
-    async def handle_event(event) -> None:
-        async with async_session() as session:
-            completed, result, exception = await process_donationalerts_event(
-                session,
-                donation_id=event.donation_id,
-                amount_rub=event.amount,
-                currency=event.currency,
-                message=event.message,
-                donor_name=event.username,
-                bot=bot,
-            )
-        if exception and getattr(exception, "is_new", True):
-            admin_text = t(
-                "⚠️ <b>DonationAlerts: нужна сверка</b>\n\n"
-                "Донат: <code>{donation_id}</code>\n"
-                "Сумма: <b>{amount} {currency}</b>\n"
-                "Причина: <code>{reason}</code>\n"
-                "Сообщение: <code>{message}</code>",
-                donation_id=exception.donation_id,
-                amount=exception.amount,
-                currency=exception.currency,
-                reason=exception.reason,
-                message=(exception.message or '—')[:180],
-            )
-            for admin_id in ADMINS:
-                try:
-                    await bot.send_message(admin_id, admin_text, parse_mode="HTML")
-                except Exception:
-                    pass
-        elif completed:
-            logger.info("DonationAlerts payment %s completed: %s", event.donation_id, result)
-
-    async def realtime_loop() -> None:
-        async for event in reconnecting_realtime_events(client, stop_event):
-            await handle_event(event)
-
-    realtime_task = asyncio.create_task(realtime_loop())
-    logger.info(
-        "DonationAlerts automation started: real-time events + REST reconciliation every %ss.",
-        DONATION_ALERTS_SYNC_INTERVAL_SECONDS,
-    )
-    try:
-        while not stop_event.is_set():
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=DONATION_ALERTS_SYNC_INTERVAL_SECONDS)
-                break
-            except asyncio.TimeoutError:
-                pass
-
-            try:
-                async with aiohttp.ClientSession() as http_session:
-                    access_token = await client.get_access_token(http_session)
-                    donations = await client.list_donations(http_session, access_token)
-                for event in donations:
-                    await handle_event(event)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("DonationAlerts REST reconciliation failed: %s", exc)
-    finally:
-        realtime_task.cancel()
-        try:
-            await realtime_task
-        except asyncio.CancelledError:
-            pass
-
-
 # =========================
 # WEB APP API HANDLERS
 # =========================
@@ -4514,102 +4417,6 @@ async def api_arcade_top(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
-async def donationalerts_webhook_handler(request: web.Request) -> web.Response:
-    """Совместимый ответ для старого URL без обработки непроверенного JSON.
-
-    Официальный API DonationAlerts подтверждает REST/OAuth и private-каналы
-    Centrifugo. Старый публичный endpoint не верифицировал источник события,
-    поэтому больше никогда не начисляет монеты или VIP.
-    """
-    logger.warning("Ignored legacy DonationAlerts webhook request from %s", request.remote)
-    return web.json_response({
-        "ok": False,
-        "error": "legacy_webhook_disabled",
-        "message": "Use DonationAlerts OAuth synchronization instead.",
-    }, status=410)
-
-
-async def donationalerts_oauth_start(request: web.Request) -> web.StreamResponse:
-    """Перенаправляет владельца в DonationAlerts для выдачи нужных API-доступов."""
-    from urllib.parse import urlencode
-    from app.config import (
-        DONATION_ALERTS_CLIENT_ID,
-        DONATION_ALERTS_OAUTH_REDIRECT_URI,
-        DONATION_ALERTS_OAUTH_STATE,
-    )
-    if not (DONATION_ALERTS_CLIENT_ID and DONATION_ALERTS_OAUTH_REDIRECT_URI and DONATION_ALERTS_OAUTH_STATE):
-        return web.Response(
-            text="DonationAlerts OAuth is not configured. Set client ID, redirect URI and state first.",
-            status=503,
-        )
-    params = urlencode({
-        "client_id": DONATION_ALERTS_CLIENT_ID,
-        "redirect_uri": DONATION_ALERTS_OAUTH_REDIRECT_URI,
-        "response_type": "code",
-        "scope": "oauth-user-show oauth-donation-index oauth-donation-subscribe",
-        "state": DONATION_ALERTS_OAUTH_STATE,
-    })
-    raise web.HTTPFound(f"https://www.donationalerts.com/oauth/authorize?{params}")
-
-
-async def donationalerts_oauth_callback(request: web.Request) -> web.Response:
-    """Обменивает OAuth code и однократно показывает владельцу refresh token.
-
-    Токен не сохраняется в базе, логах или URL. Владелец сам переносит его в
-    переменные окружения Render и закрывает страницу.
-    """
-    import hmac
-    import html
-    import aiohttp
-    from app.config import (
-        DONATION_ALERTS_CLIENT_ID,
-        DONATION_ALERTS_CLIENT_SECRET,
-        DONATION_ALERTS_OAUTH_REDIRECT_URI,
-        DONATION_ALERTS_OAUTH_STATE,
-    )
-    from app.donationalerts_client import DonationAlertsClient
-
-    error = request.query.get("error")
-    code = request.query.get("code", "")
-    state = request.query.get("state", "")
-    if error:
-        return web.Response(text=f"DonationAlerts authorization declined: {html.escape(error)}", status=400)
-    if not code:
-        return web.Response(text="DonationAlerts OAuth callback lacks an authorization code.", status=400)
-    if not DONATION_ALERTS_OAUTH_STATE or not hmac.compare_digest(state, DONATION_ALERTS_OAUTH_STATE):
-        return web.Response(text="DonationAlerts OAuth state check failed.", status=403)
-    if not (DONATION_ALERTS_CLIENT_ID and DONATION_ALERTS_CLIENT_SECRET and DONATION_ALERTS_OAUTH_REDIRECT_URI):
-        return web.Response(text="DonationAlerts OAuth client is not configured.", status=503)
-
-    try:
-        client = DonationAlertsClient(
-            client_id=DONATION_ALERTS_CLIENT_ID,
-            client_secret=DONATION_ALERTS_CLIENT_SECRET,
-        )
-        async with aiohttp.ClientSession() as http_session:
-            token_data = await client.exchange_authorization_code(
-                http_session,
-                code=code,
-                redirect_uri=DONATION_ALERTS_OAUTH_REDIRECT_URI,
-            )
-        refresh_token = html.escape(str(token_data["refresh_token"]))
-    except Exception:
-        logger.exception("DonationAlerts OAuth code exchange failed")
-        return web.Response(text="DonationAlerts token exchange failed. Check client configuration and try again.", status=502)
-
-    return web.Response(
-        text=(
-            "<html><body><h2>DonationAlerts connected</h2>"
-            "<p>Copy this refresh token into Render → Environment → "
-            "<code>DONATION_ALERTS_REFRESH_TOKEN</code>, then close this page.</p>"
-            f"<p><code style='word-break:break-all'>{refresh_token}</code></p>"
-            "<p>This token is shown once and is not stored by the bot.</p>"
-            "</body></html>"
-        ),
-        content_type="text/html",
-    )
-
-
 async def apply_bot_commands(bot: Bot) -> None:
     """Ставит нативное меню команд Telegram (кнопка «Меню» у поля ввода).
 
@@ -4752,11 +4559,6 @@ async def main():
     app.router.add_get("/", handle_health_check)
     app.router.add_get("/health", handle_health_check)
     app.router.add_get("/healthz", handle_health_check)
-    app.router.add_post("/donationalerts/webhook", donationalerts_webhook_handler)
-    app.router.add_get("/donationalerts/webhook", donationalerts_webhook_handler)
-    app.router.add_post("/api/da_webhook", donationalerts_webhook_handler)
-    app.router.add_get("/donationalerts/oauth/start", donationalerts_oauth_start)
-    app.router.add_get("/donationalerts/oauth/callback", donationalerts_oauth_callback)
     app.router.add_get("/videofeed", videofeed_page_handler)
     app.router.add_get("/api/videofeed/feed", api_videofeed_feed)
     app.router.add_get("/api/video/{id}", api_video_stream)
@@ -4799,14 +4601,12 @@ async def main():
     cache_task = None
     mod_notifications_task = None
     auto_broadcast_task = None
-    da_polling_task = None
 
     try:
         log_info(logger, "Polling started")
 
         mod_notifications_task = asyncio.create_task(_mod_notification_loop(bot))
         auto_broadcast_task = asyncio.create_task(auto_broadcast_worker(bot))
-        da_polling_task = asyncio.create_task(donationalerts_polling_worker(bot, stop_event))
 
         if ENABLE_SUBSCRIPTION_AUDIT:
             audit_task = asyncio.create_task(subscription_audit_worker(bot, stop_event))
@@ -4834,7 +4634,6 @@ async def main():
         await _cancel_task(promo_task)
         await _cancel_task(mod_notifications_task)
         await _cancel_task(auto_broadcast_task)
-        await _cancel_task(da_polling_task)
         await runner.cleanup()
         await bot.session.close()
         await engine.dispose()

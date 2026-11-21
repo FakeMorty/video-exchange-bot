@@ -314,27 +314,34 @@ def test_video_stream_signature_roundtrip():
     assert m._video_stream_authorized(DummyRequest({}), 42) is False
 
 
-# ───────────────────────── B-14: повторные алерты по DA-исключениям ─────────────────────────
+# ───────────────────────── B-14: конвертер перевода на карту ─────────────────────────
 
 @pytest.mark.asyncio
-async def test_donationalerts_exception_marks_only_first_record_as_new():
-    from app.services import record_donationalerts_exception
+async def test_card_converter_rejects_invalid_amounts():
+    """Конвертер перевода на карту отклоняет неположительные суммы без начисления."""
+    from app.services import credit_card_payment, rub_to_coins
+
+    assert rub_to_coins(10, 10.0) == Decimal("100.00")
 
     engine, Session = await _mem_engine()
     async with Session() as session:
-        first = await record_donationalerts_exception(
-            session, donation_id="dup-1", amount_rub=Decimal("10"), currency="RUB",
-            message="hi", donor_name="x", reason="order_not_found",
-        )
-        assert getattr(first, "is_new") is True
-    async with Session() as session:  # следующий цикл REST-сверки — новая сессия
-        second = await record_donationalerts_exception(
-            session, donation_id="dup-1", amount_rub=Decimal("10"), currency="RUB",
-            message="hi", donor_name="x", reason="order_not_found",
-        )
-        assert getattr(second, "is_new") is False
-    await engine.dispose()
+        from app.models import User
+        user = User(telegram_id=510099, balance=Decimal("50"), nickname_set=True, display_name="CardUser")
+        session.add(user)
+        await session.commit()
 
+        ok_zero, _ = await credit_card_payment(session, telegram_user_id=510099, amount_rub=0)
+        assert ok_zero is False
+        ok_neg, _ = await credit_card_payment(session, telegram_user_id=510099, amount_rub=-5)
+        assert ok_neg is False
+        ok_type, _ = await credit_card_payment(
+            session, telegram_user_id=510099, amount_rub=10, reward_type="unknown",
+        )
+        assert ok_type is False
+
+        refreshed = (await session.execute(select(User).where(User.telegram_id == 510099))).scalar_one()
+        assert refreshed.balance == Decimal("50.00")
+    await engine.dispose()
 
 # ───────────────────────── B-08: имя из Telegram экранируется один раз ─────────────────────────
 

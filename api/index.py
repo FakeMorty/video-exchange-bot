@@ -3,7 +3,7 @@
 Почему отдельный файл и почему webhook:
 Vercel — serverless-платформа: там нет постоянно работающего процесса,
 поэтому long-polling (`dp.start_polling` в `app/main.py`) и фоновые
-воркеры (лотерея, retention, DonationAlerts-опрос и т.д.) на Vercel
+воркеры (лотерея, retention и т.д.) на Vercel
 работать не могут в принципе. Раньше в репозитории не было ни одного
 entrypoint, который понимает Vercel, и деплой падал с ошибкой:
 

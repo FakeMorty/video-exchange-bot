@@ -97,23 +97,14 @@ REFERRAL_MILESTONES = {
 # Курс Stars → монеты (заградительный: 100 монет = 30 Stars)
 STARS_TO_COINS_RATE = _get_float("STARS_TO_COINS_RATE", 30.0)
 
-# DonationAlerts: OAuth-клиент и безопасная автоматическая сверка.
-# CLIENT_SECRET никогда не используется как Bearer token. Для полной автоматики
-# нужны CLIENT_ID + CLIENT_SECRET + REFRESH_TOKEN; ACCESS_TOKEN остаётся
-# ограниченным резервом для уже выданного OAuth access token.
-DONATION_ALERTS_URL = _get_str("DONATION_ALERTS_URL", "https://dalink.to/who5037")
-DONATION_ALERTS_CLIENT_ID = _get_str("DONATION_ALERTS_CLIENT_ID", "")
-DONATION_ALERTS_CLIENT_SECRET = _get_str("DONATION_ALERTS_CLIENT_SECRET", "")
-DONATION_ALERTS_REFRESH_TOKEN = _get_str("DONATION_ALERTS_REFRESH_TOKEN", "")
-DONATION_ALERTS_ACCESS_TOKEN = _get_str("DONATION_ALERTS_ACCESS_TOKEN", "")
-DONATION_ALERTS_OAUTH_REDIRECT_URI = _get_str(
-    "DONATION_ALERTS_OAUTH_REDIRECT_URI",
-    f"{WEBHOOK_BASE.rstrip('/')}/donationalerts/oauth/callback" if WEBHOOK_BASE else "",
+# Оплата переводом на карту (Т-Банк): ручная сверка админом.
+# Автоматической сверки платежей нет: пользователь переводит точную сумму
+# по ссылке и обязательно указывает в комментарии свой юзернейм в Telegram,
+# а админ проверяет перевод и начисляет монеты/VIP через конвертер в админке.
+CARD_PAYMENT_URL = _get_str(
+    "CARD_PAYMENT_URL",
+    "https://www.tbank-online.com/rm/r_ZAVxbmCrOP.IZpYpwbnlB/CRDOu48229",
 )
-# Случайная строка только для проверки OAuth callback; задаётся в Render.
-DONATION_ALERTS_OAUTH_STATE = _get_str("DONATION_ALERTS_OAUTH_STATE", "")
-DONATION_ALERTS_SYNC_INTERVAL_SECONDS = max(60, _get_int("DONATION_ALERTS_SYNC_INTERVAL_SECONDS", 60))
-DONATION_ALERTS_ORDER_TTL_MINUTES = max(10, _get_int("DONATION_ALERTS_ORDER_TTL_MINUTES", 120))
 RUB_TO_COINS_RATE = _get_float("RUB_TO_COINS_RATE", 10.0)  # 1 RUB = 10 монет
 VIP_PRICE_RUB = _get_float("VIP_PRICE_RUB", 150.0)        # 150 RUB = 30 дней VIP
 
@@ -146,18 +137,20 @@ MONEY_PACKAGES = {
     "money_499": {"amount": 49900, "coins": 4400,  "title": "4 400 монет"},
 }
 
-# Дефолтные пакеты магазина в рублях (DonationAlerts).
+# Дефолтные пакеты магазина в рублях (перевод на карту).
 # Сумма «amount» — базовая цена в рублях; при изменении курса rub_to_coins_rate
 # в настройках бота суммы пересчитываются автоматически:
 # amount = ceil(coins / rub_to_coins_rate), если админ не задал свою цену
 # (настройка shop_rub_<key>). VIP-пакет берёт цену из vip_price_rub.
-DA_ORDER_PACKAGES = {
+CARD_ORDER_PACKAGES = {
     "coins_10":  {"amount": 10,  "coins": 100,  "title": "100 монет"},
     "coins_50":  {"amount": 50,  "coins": 500,  "title": "500 монет"},
     "coins_100": {"amount": 100, "coins": 1000, "title": "1 000 монет"},
     "vip_150":   {"amount": 150, "coins": 0, "reward_type": "vip", "title": "VIP на 30 дней"},
     "coins_500": {"amount": 500, "coins": 5000, "title": "5 000 монет"},
 }
+# Совместимость со старым именем (DonationAlerts удалён).
+DA_ORDER_PACKAGES = CARD_ORDER_PACKAGES
 
 # Интервал показа офферов
 OFFER_BROADCAST_INTERVAL_HOURS = _get_float("OFFER_BROADCAST_INTERVAL_HOURS", 2.5)

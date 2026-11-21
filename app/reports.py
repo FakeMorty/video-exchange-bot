@@ -78,6 +78,7 @@ INCOME_SOURCE_LABELS = {
     "lottery_bet_win": "Секслото: ставки",
     "lottery_weekly_leaderboard": "Секслото: недельный рейтинг",
     "offer_budget_refund": "Офферы: возврат бюджета",
+    "card_payment_deposit": "Перевод на карту",
 }
 
 EXPENSE_SOURCE_LABELS = {
