@@ -53,6 +53,7 @@ from app.keyboards import (
 from app.logger import get_logger, log_info, log_warning
 from app.reports import (
     ReportLimitError,
+    ReportTimeoutError,
     build_all_users_reports_pdf,
     build_bot_report_pdf,
     build_user_report_pdf,
@@ -2319,16 +2320,32 @@ async def admin_export_all_users_pdf(callback: CallbackQuery):
                           done=done, total=total, part=part, parts=parts)
                     )
 
-            batches = await build_all_users_reports_pdf(progress_cb=_progress)
+            batches: list = []
+            single = False
+            try:
+                batches = await build_all_users_reports_pdf(single_file=True, progress_cb=_progress)
+                single = True
+            except (ReportLimitError, ReportTimeoutError) as exc:
+                # Один файл не получился (база слишком велика или долго собирается) —
+                # откатываемся на батчный экспорт и шлём части.
+                with contextlib.suppress(Exception):
+                    await status_msg.edit_text(
+                        t('⏳ Один файл не получился — выгружаю базу частями ({msg}).', msg=escape(str(exc))[:140])
+                    )
+                batches = await build_all_users_reports_pdf(progress_cb=_progress)
+
             sent = 0
             total_users = 0
             total_skipped = 0
             for batch in batches:
                 if batch.get("path"):
                     paths.append(batch["path"])
-                caption = t('👥 PDF по всем пользователям — часть {part}/{parts}: пользователи {a}–{b}',
-                            part=batch["part"], parts=batch["parts"],
-                            a=batch["users_from"], b=batch["users_to"])
+                if single:
+                    caption = t('👥 PDF по всем пользователям')
+                else:
+                    caption = t('👥 PDF по всем пользователям — часть {part}/{parts}: пользователи {a}–{b}',
+                                part=batch["part"], parts=batch["parts"],
+                                a=batch["users_from"], b=batch["users_to"])
                 if batch.get("skipped"):
                     caption += t('\n⚠️ Пропущено карточек: {n}', n=batch["skipped"])
                     total_skipped += batch["skipped"]
@@ -2341,7 +2358,10 @@ async def admin_export_all_users_pdf(callback: CallbackQuery):
                     sent += 1
                     total_users += batch["users_count"]
 
-            text = t('✅ Готово: файлов {files}, пользователей в выгрузке {total}.', files=sent, total=total_users)
+            if single:
+                text = t('✅ Готово: один файл, пользователей в выгрузке {total}.', total=total_users)
+            else:
+                text = t('✅ Готово: файлов {files}, пользователей в выгрузке {total}.', files=sent, total=total_users)
             if total_skipped:
                 text += t('\n⚠️ Пропущено карточек: {n}', n=total_skipped)
             with contextlib.suppress(Exception):
