@@ -9,6 +9,7 @@ from html import escape
 from decimal import Decimal
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -1436,6 +1437,60 @@ async def process_broadcast(message: Message, state: FSMContext):
     )
 
 
+async def _send_broadcast_batch(
+    bot,
+    telegram_ids: list[int],
+    text: str,
+    *,
+    max_per_second: int = 25,
+    concurrency: int = 20,
+) -> tuple[int, int]:
+    """Отправляет часть рассылки параллельно, соблюдая общий лимит Telegram.
+
+    Последовательная отправка одного сообщения за один HTTP-запрос занимала
+    минуты на большой базе. Ограничитель слотов не даёт превысить безопасные
+    25 сообщений/с, а параллелизм скрывает сетевую задержку Bot API.
+    """
+    if not telegram_ids:
+        return 0, 0
+
+    loop = asyncio.get_running_loop()
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    interval = 1.0 / max(1, max_per_second)
+    slot_lock = asyncio.Lock()
+    next_slot = loop.time()
+
+    async def send_one(telegram_id: int) -> bool:
+        nonlocal next_slot
+        async with semaphore:
+            async with slot_lock:
+                now = loop.time()
+                slot = max(now, next_slot)
+                next_slot = slot + interval
+            delay = slot - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+            try:
+                await bot.send_message(telegram_id, text, parse_mode="HTML")
+                return True
+            except TelegramRetryAfter as exc:
+                # Telegram попросил замедлиться — подождём и попробуем один раз.
+                await asyncio.sleep(float(exc.retry_after) + 0.1)
+                try:
+                    await bot.send_message(telegram_id, text, parse_mode="HTML")
+                    return True
+                except Exception:
+                    return False
+            except Exception:
+                # Пользователь мог заблокировать бота или удалить аккаунт.
+                return False
+
+    results = await asyncio.gather(*(send_one(tid) for tid in telegram_ids))
+    sent = sum(results)
+    return sent, len(results) - sent
+
+
 @router.callback_query(F.data == "admin_broadcast_confirm")
 async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot):
     if not await check_admin(callback.from_user.id):
@@ -1472,25 +1527,44 @@ async def cb_admin_broadcast_confirm(callback: CallbackQuery, state: FSMContext,
                 users = (await session.execute(select(User.telegram_id).where(User.status == "active"))).scalars().all()
 
         sent = 0
-        for tid in users:
-            try:
-                await bot.send_message(tid, outgoing_text, parse_mode="HTML")
-                sent += 1
-                if sent % 30 == 0:
-                    await asyncio.sleep(0.5)
-            except Exception:
-                pass
+        failed = 0
+        batch_size = 250
+        total = len(users)
+        for offset in range(0, total, batch_size):
+            batch = users[offset:offset + batch_size]
+            batch_sent, batch_failed = await _send_broadcast_batch(
+                bot,
+                batch,
+                outgoing_text,
+            )
+            sent += batch_sent
+            failed += batch_failed
+            processed = min(offset + len(batch), total)
+
+            # На большой базе админ видит прогресс, а не одно и то же сообщение
+            # несколько минут подряд. Обновляем не чаще одного раза на 1000 адресатов.
+            if processed % 1000 < batch_size or processed == total:
+                try:
+                    await callback.message.edit_text(
+                        t('{start_text}\n\nОтправлено: <b>{processed}/{total}</b>.', start_text=start_text, processed=processed, total=total),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
 
         try:
             await bot.send_message(
                 callback.from_user.id,
-                t('{done_text}\n\nСообщение доставлено <b>{sent}</b> активным пользователям.', done_text=done_text, sent=sent),
+                t('{done_text}\n\nСообщение доставлено <b>{sent}</b> пользователям. Ошибок доставки: <b>{failed}</b>.', done_text=done_text, sent=sent, failed=failed),
                 parse_mode="HTML"
             )
         except Exception:
             pass
 
-    asyncio.create_task(run_broadcast_task())
+    # Фоновая asyncio-задача исчезает после ответа Vercel webhook-функции.
+    # Используем общий runner: на Vercel он дожидается завершения, а на
+    # постоянном polling-хосте продолжает отправку в фоне.
+    await _run_report_job(run_broadcast_task)
 
 
 # =========================
