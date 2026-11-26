@@ -1559,6 +1559,8 @@ PT_SOURCE: dict[str, str] = {
     "✅ Подписка подтверждена. Награда уже выдана или дневной лимит исчерпан.": "✅ Inscrição confirmada. A recompensa já foi entregue ou o limite diário acabou.",
     "Пока здесь пусто. Добавляй просмотренные ролики кнопкой «➕ В плейлист».": "Por enquanto está vazio. Adicione os clipes que assistir com o botão «➕ Na playlist».",
     "⏳ <b>Сообщение от админа отправляется всем активным пользователям...</b>": "⏳ <b>A mensagem do admin está sendo enviada a todos os usuários ativos...</b>",
+    "{start_text}\n\nОтправлено: <b>{processed}/{total}</b>.": "{start_text}\n\nEnviadas: <b>{processed}/{total}</b>.",
+    "{done_text}\n\nСообщение доставлено <b>{sent}</b> пользователям. Ошибок доставки: <b>{failed}</b>.": "{done_text}\n\nEntregue a <b>{sent}</b> usuários. Falhas na entrega: <b>{failed}</b>.",
     "Жуткая неделя скидок: Хэллоуин в боте — монеты и VIP по сниженным ценам!": "Semana de descontos arrepiante: Halloween no bot — moedas e VIP com preços reduzidos!",
     "Праздничная неделя ко Дню народного единства: осенние скидки в магазине!": "Semana festiva do Dia da Unidade Nacional: descontos de outono na loja!",
     "Бот случайно выбирает одно сообщение и рассылает всем каждые 20 мин – 6 ч.": "O bot escolhe uma mensagem aleatória e a envia para todos a cada 20 min – 6 h.",

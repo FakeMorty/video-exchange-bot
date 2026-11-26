@@ -1032,6 +1032,8 @@ EN_SOURCE: dict[str, str] = {
     '⏳ <b>Опрос #{poll_id} создаётся и рассылается в фоновом режиме.</b>\n\nПосле завершения рассылки бот пришлёт количество доставленных сообщений.': '⏳ <b>Poll #{poll_id} is being created and broadcast in the background.</b>\n\nWhen the broadcast finishes, the bot will send the number of delivered messages.',
     '⏳ <b>Рассылка запущена в фоновом режиме...</b>': '⏳ <b>Broadcast started in the background...</b>',
     '⏳ <b>Сообщение от админа отправляется всем активным пользователям...</b>': '⏳ <b>The admin message is being sent to all active users...</b>',
+    '{start_text}\n\nОтправлено: <b>{processed}/{total}</b>.': '{start_text}\n\nSent: <b>{processed}/{total}</b>.',
+    '{done_text}\n\nСообщение доставлено <b>{sent}</b> пользователям. Ошибок доставки: <b>{failed}</b>.': '{done_text}\n\nDelivered to <b>{sent}</b> users. Delivery failures: <b>{failed}</b>.',
     '⏳ Готовлю большой отчёт по всему боту: собираю данные и строю диаграммы...': '⏳ Preparing the big report on the whole bot: collecting data and building charts...',
     '⏳ Готовлю единый PDF-отчёт по всем пользователям бота. Это может занять время...': '⏳ Preparing the combined PDF report on all bot users. This may take a while...',
     '⏳ Готовлю подробный PDF-отчёт по пользователю...': '⏳ Preparing the detailed PDF report on the user...',
