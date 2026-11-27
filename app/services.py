@@ -732,11 +732,32 @@ async def get_user_by_id(session: AsyncSession, user_id: int) -> "User | None":
 
 
 async def get_user_by_username(session: AsyncSession, username: str) -> "User | None":
-    if username.startswith("@"):
-        username = username[1:]
+    username = (username or "").strip().lstrip("@").lower()
+    if not username:
+        return None
     return (await session.execute(
-        select(User).where(User.username == username)
+        select(User).where(func.lower(User.username) == username)
     )).scalar_one_or_none()
+
+
+async def resolve_user_identifier(session: AsyncSession, identifier: str) -> "User | None":
+    """Resolve an admin-entered Telegram ID or exact username (with/without @)."""
+    value = (identifier or "").strip()
+    if not value:
+        return None
+    if value.startswith("@"):
+        return await get_user_by_username(session, value[1:])
+    if value.isdecimal():
+        return await get_user(session, int(value))
+    by_username = await get_user_by_username(session, value)
+    if by_username:
+        return by_username
+    # Nicknames are not guaranteed unique. Resolve one only when the exact
+    # case-insensitive display-name match is unambiguous.
+    matches = (await session.execute(
+        select(User).where(func.lower(User.display_name) == value.lower()).limit(2)
+    )).scalars().all()
+    return matches[0] if len(matches) == 1 else None
 
 
 async def get_user_by_display_name(session: AsyncSession, display_name: str) -> "User | None":
@@ -1272,19 +1293,107 @@ async def auto_approve_if_trusted(
     return True, reward
 
 
-async def get_random_video_for_user(session: AsyncSession, user_id: int) -> "Video | None":
-    from app.models import BlockedUser
+VIDEO_VIEW_CATEGORIES = {
+    "men_only": "Только мужчины",
+    "women_only": "Только женщины",
+    "men_and_women": "Мужчины и женщины",
+}
+CURATOR_LABEL_REWARD = Decimal("0")  # No reward until its amount is explicitly configured.
+
+
+def parse_video_category_preferences(raw: str | None) -> list[str]:
+    """Parse and validate the user's comma-separated extended-view categories."""
+    return [
+        item for item in (raw or "").split(",")
+        if item in VIDEO_VIEW_CATEGORIES
+    ]
+
+
+async def get_next_video_for_curation(session: AsyncSession, curator_telegram_id: int) -> "Video | None":
+    """Return the oldest approved, unlabelled video, excluding the curator's own."""
+    curator = await get_user(session, curator_telegram_id)
+    if not curator or curator.curator_status != "active":
+        return None
+    curator_user_id = curator.id
     return (await session.execute(
         select(Video).where(
             Video.status == "approved",
             Video.content_type == "video",
-            Video.uploader_user_id != user_id,
-            ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists(),
-            ~select(BlockedUser.id).where(
-                BlockedUser.user_id == user_id,
-                BlockedUser.blocked_user_id == Video.uploader_user_id
-            ).exists()
-        ).order_by(func.random()).limit(1)
+            Video.viewing_category.is_(None),
+            Video.uploader_user_id != curator_user_id,
+        ).order_by(Video.id.asc()).limit(1)
+    )).scalar_one_or_none()
+
+
+async def set_video_view_category(
+    session: AsyncSession,
+    curator_telegram_id: int,
+    video_id: int,
+    category: str,
+) -> tuple[bool, Decimal]:
+    """Label one already-approved video exactly once.
+
+    The curator is a classifier, not a moderator: only approved videos qualify.
+    Conditional UPDATE prevents concurrent curators from receiving duplicate
+    rewards for the same video. Own uploads are excluded to avoid self-awarding.
+    """
+    if category not in VIDEO_VIEW_CATEGORIES:
+        return False, Decimal("0")
+    curator = await get_user(session, curator_telegram_id)
+    if not curator or curator.curator_status != "active":
+        return False, Decimal("0")
+    curator_user_id = curator.id
+
+    result = await session.execute(
+        update(Video)
+        .where(
+            Video.id == video_id,
+            Video.status == "approved",
+            Video.content_type == "video",
+            Video.viewing_category.is_(None),
+            Video.uploader_user_id != curator_user_id,
+        )
+        .values(viewing_category=category)
+    )
+    if (result.rowcount or 0) != 1:
+        return False, Decimal("0")
+
+    await log_user_action(
+        session,
+        curator_user_id,
+        "video_category_labeled",
+        f"video_id={video_id}; category={category}",
+        auto_commit=False,
+    )
+    await session.commit()
+    return True, CURATOR_LABEL_REWARD
+
+
+async def get_random_video_for_user(
+    session: AsyncSession,
+    user_id: int,
+    categories: list[str] | None = None,
+) -> "Video | None":
+    from app.models import BlockedUser
+    if categories is not None and not categories:
+        return None
+    filters = [
+        Video.status == "approved",
+        Video.content_type == "video",
+        Video.uploader_user_id != user_id,
+        ~select(VideoView.id).where(VideoView.video_id == Video.id, VideoView.user_id == user_id).exists(),
+        ~select(BlockedUser.id).where(
+            BlockedUser.user_id == user_id,
+            BlockedUser.blocked_user_id == Video.uploader_user_id
+        ).exists(),
+    ]
+    if categories is not None:
+        valid = [category for category in categories if category in VIDEO_VIEW_CATEGORIES]
+        if not valid:
+            return None
+        filters.append(Video.viewing_category.in_(valid))
+    return (await session.execute(
+        select(Video).where(*filters).order_by(func.random()).limit(1)
     )).scalar_one_or_none()
 
 
@@ -1678,6 +1787,9 @@ async def search_users_admin(session: AsyncSession, query: str, limit: int = 8) 
     """Поиск пользователей для админки: частичное совпадение по нику/username,
     префикс по Telegram ID. Регистр не важен; символы % и _ в запросе безопасны."""
     q = (query or "").strip()
+    if not q:
+        return []
+    q = q.lstrip("@")
     if not q:
         return []
     # Экранируем спецсимволы LIKE, а не заменяем их: раньше «_» превращался в
@@ -4219,6 +4331,7 @@ REPORT_REASONS = {
     "spam": "Спам / реклама",
     "shock": "Шок-контент",
     "copyright": "Нарушение авторских прав",
+    "category_mismatch": "Несоответствие метки состава видео",
     "other": "Другое",
 }
 
@@ -4229,11 +4342,32 @@ async def create_video_report(
     video_id: int,
     reason: str,
     comment: str | None = None,
+    *,
+    allow_category_mismatch: bool = False,
 ) -> "VideoReport | None":
     """Создать жалобу на видео. Одна жалоба от юзера на одно видео."""
     from app.models import VideoReport
     if reason not in REPORT_REASONS:
         return None
+    if reason == "category_mismatch":
+        if not allow_category_mismatch:
+            return None
+        reporter = (await session.execute(
+            select(User).where(User.id == reporter_user_id)
+        )).scalar_one_or_none()
+        video = (await session.execute(
+            select(Video).where(
+                Video.id == video_id,
+                Video.status == "approved",
+                Video.content_type == "video",
+                Video.viewing_category.is_not(None),
+            )
+        )).scalar_one_or_none()
+        if (
+            not reporter or not reporter.advanced_view_enabled or not video
+            or video.viewing_category not in parse_video_category_preferences(reporter.advanced_video_categories)
+        ):
+            return None
     # Проверяем, не жаловался ли уже
     existing = (await session.execute(
         select(VideoReport).where(

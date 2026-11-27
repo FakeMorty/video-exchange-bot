@@ -5141,12 +5141,13 @@ def test_main_menu_rows_are_paired_and_compact():
     from app.keyboards import main_menu
 
     rows = main_menu().keyboard
-    assert len(rows) == 7
-    for row in rows:
-        assert len(row) == 2
+    assert len(rows) == 8
+    assert all(len(row) == 2 for row in rows[:2])
+    assert len(rows[2]) == 1  # настройка расширенного просмотра
+    assert all(len(row) == 2 for row in rows[3:])
 
     admin_rows = main_menu(is_admin=True).keyboard
-    assert len(admin_rows) == 8
+    assert len(admin_rows) == 9
     assert len(admin_rows[-1]) == 1  # «🔧 Админка» — отдельный ряд
 
 
@@ -5259,3 +5260,70 @@ async def test_apply_bot_commands_sets_localized_menus(monkeypatch):
         and c[2] == "en"
         for c in calls
     )
+
+
+@pytest.mark.asyncio
+async def test_video_category_curation_and_advanced_report_gates():
+    """Curators may label approved feed videos once; extended reports are scoped to selected tags."""
+    from app.services import (
+        create_video_report, get_next_video_for_curation,
+        get_random_video_for_user, set_video_view_category,
+    )
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with Session() as session:
+        curator = User(telegram_id=97001, curator_status="active")
+        viewer = User(telegram_id=97002)
+        author = User(telegram_id=97003)
+        session.add_all([curator, viewer, author])
+        await session.flush()
+        video = Video(
+            uploader_user_id=author.id, content_type="video",
+            telegram_file_id="file-1", telegram_file_unique_id="unique-1",
+            status="approved",
+        )
+        session.add(video)
+        await session.commit()
+
+        next_video = await get_next_video_for_curation(session, curator.telegram_id)
+        assert next_video.id == video.id
+        labeled, reward = await set_video_view_category(
+            session, curator.telegram_id, video.id, "men_only"
+        )
+        assert labeled and reward == Decimal("0")
+        labeled_again, _ = await set_video_view_category(
+            session, curator.telegram_id, video.id, "women_only"
+        )
+        assert not labeled_again
+
+        # An extended feed uses only the chosen category.
+        assert await get_random_video_for_user(session, viewer.id, categories=["women_only"]) is None
+        assert (await get_random_video_for_user(session, viewer.id, categories=["men_only"])).id == video.id
+
+        # Direct requests cannot bypass the advanced-view/category gate.
+        assert await create_video_report(session, viewer.id, video.id, "category_mismatch") is None
+        viewer.advanced_view_enabled = True
+        viewer.advanced_video_categories = "women_only"
+        await session.commit()
+        assert await create_video_report(
+            session, viewer.id, video.id, "category_mismatch", allow_category_mismatch=True
+        ) is None
+        viewer.advanced_video_categories = "men_only,women_only"
+        await session.commit()
+        report = await create_video_report(
+            session, viewer.id, video.id, "category_mismatch", allow_category_mismatch=True
+        )
+        assert report is not None
+
+    await engine.dispose()
+
+
+def test_category_preferences_are_validated_and_multiple():
+    from app.services import parse_video_category_preferences
+    assert parse_video_category_preferences("men_only,invalid,women_only,men_only") == [
+        "men_only", "women_only", "men_only"
+    ]

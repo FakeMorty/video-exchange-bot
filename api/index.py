@@ -60,6 +60,7 @@ _bot = None
 _dp = None
 _playlist_schema_ready = False
 _event_schema_ready = False
+_curator_schema_ready = False
 _bot_commands_ready = False
 _holiday_events_synced_date = None
 
@@ -129,6 +130,42 @@ async def _ensure_event_schema() -> None:
         if "poster_path" not in columns:
             await conn.execute(text(f"ALTER TABLE events ADD COLUMN {guard}poster_path TEXT"))
     _event_schema_ready = True
+
+
+async def _ensure_curator_schema() -> None:
+    """Additive columns for private curator roles and viewer category filters.
+
+    Vercel does not run the regular Alembic startup hook. These four columns
+    are kept in sync with the ORM models here before webhook updates are routed.
+    """
+    global _curator_schema_ready
+    if _curator_schema_ready:
+        return
+    from sqlalchemy import inspect, text
+    from app.db import engine
+
+    columns_to_add = {
+        "users": {
+            "curator_status": "VARCHAR(20) DEFAULT 'none'",
+            "advanced_view_enabled": "BOOLEAN DEFAULT FALSE",
+            "advanced_video_categories": "VARCHAR(64) DEFAULT ''",
+        },
+        "videos": {
+            "viewing_category": "VARCHAR(24)",
+        },
+    }
+    async with engine.begin() as conn:
+        for table, columns in columns_to_add.items():
+            existing = await conn.run_sync(lambda sync_conn, t=table: {
+                column["name"] for column in inspect(sync_conn).get_columns(t)
+            })
+            guard = "IF NOT EXISTS " if conn.dialect.name == "postgresql" else ""
+            for column, ddl in columns.items():
+                if column not in existing:
+                    await conn.execute(
+                        text(f'ALTER TABLE "{table}" ADD COLUMN {guard}"{column}" {ddl}')
+                    )
+    _curator_schema_ready = True
 
 
 async def _ensure_holiday_events() -> None:
@@ -466,6 +503,7 @@ async def app(scope, receive, send):
 
             bot, dp = _get_bot_and_dispatcher()
             await _ensure_playlist_schema()
+            await _ensure_curator_schema()
             await _ensure_bot_commands(bot)
             await _ensure_event_schema()
             await _ensure_holiday_events()

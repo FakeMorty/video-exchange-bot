@@ -30,6 +30,10 @@ class User(Base):
     balance: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     status: Mapped[str] = mapped_column(String(50), default="active")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Internal curator flag; never exposed as a public profile badge.
+    curator_status: Mapped[str] = mapped_column(String(20), default="none", server_default="none")
+    advanced_view_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    advanced_video_categories: Mapped[str] = mapped_column(String(64), default="")
     agreed_to_rules: Mapped[bool] = mapped_column(Boolean, default=False)
     nickname_set: Mapped[bool] = mapped_column(Boolean, default=False)
     referral_code: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
@@ -187,6 +191,8 @@ class Video(Base):
     telegram_file_id: Mapped[str] = mapped_column(Text, nullable=False)
     telegram_file_unique_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")
+    # Neutral composition tag chosen by a curator; never denotes anyone's orientation.
+    viewing_category: Mapped[str | None] = mapped_column(String(24), nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     rejection_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)

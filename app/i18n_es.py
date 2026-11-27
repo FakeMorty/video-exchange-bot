@@ -2022,4 +2022,5 @@ ES_SOURCE: dict[str, str] = {
     'Один файл получился слишком большим ({size} МБ при лимите {limit} МБ). Используйте батчный экспорт — он пришлёт отчёт частями.': 'El archivo único resultó demasiado grande ({size} MB con un límite de {limit} MB). Use la exportación por lotes: enviará el informe por partes.',
     '✅ Ранее недоступное видео восстановлено по новой загрузке и снова доступно в ленте. Повторная награда не начислялась.': '✅ El video que no estaba disponible se restauró con tu nueva carga y vuelve a estar en el feed. No se otorgó una recompensa duplicada.',
     '✅ Ранее недоступное фото восстановлено по новой загрузке и снова доступно. Повторная награда не начислялась.': '✅ La foto que no estaba disponible se restauró con tu nueva carga y vuelve a estar disponible. No se otorgó una recompensa duplicada.',
+    'Несоответствие метки состава видео': 'La etiqueta de composición del video no coincide',
 }
