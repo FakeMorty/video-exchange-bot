@@ -73,6 +73,7 @@ from app.services import (
     get_or_create_user, get_user, get_user_by_id, get_video_by_id, reject_video, get_setting, save_video, save_photo,
     get_xp_multiplier, get_stars_discount,
     get_random_video_for_user, get_random_photo_for_user,
+    VIDEO_VIEW_CATEGORIES, parse_video_category_preferences,
     record_view_and_charge_with_cost, refund_watch_and_unview, mark_content_broken,
     record_photo_view,
     rate_video, count_referrals,
@@ -1363,8 +1364,11 @@ async def watch_video_content(callback: CallbackQuery):
             last_send_error: str | None = None
             videos_tried = 0
             invalid_media_failures = 0
+            categories = None
+            if user.advanced_view_enabled:
+                categories = parse_video_category_preferences(user.advanced_video_categories)
             for _ in range(MAX_MEDIA_DELIVERY_ATTEMPTS):
-                video = await get_random_video_for_user(session, user.id)
+                video = await get_random_video_for_user(session, user.id, categories=categories)
                 if not video:
                     break
 
@@ -1384,10 +1388,14 @@ async def watch_video_content(callback: CallbackQuery):
                     uploader = await get_user_by_id(session, video.uploader_user_id)
                     uploader_name = await get_styled_display_name(session, uploader) if uploader else t('Автор')
 
+                    category_info = ""
+                    if user.advanced_view_enabled and video.viewing_category in VIDEO_VIEW_CATEGORIES:
+                        category_info = f"\n🏷 Состав: {VIDEO_VIEW_CATEGORIES[video.viewing_category]}"
                     await callback.message.answer_video(
                         video.telegram_file_id,
                         caption=(
                             t('🎬 Видео #{id}\n👤 Автор: <b>{uploader_name}</b>\n💰 Списано: {cost} монет', id=video.id, uploader_name=uploader_name, cost=cost)
+                            + category_info
                         ),
                         parse_mode="HTML",
                         reply_markup=video_rating_keyboard(
@@ -4531,11 +4539,19 @@ class ReportState(StatesGroup):
 @router.callback_query(F.data.startswith("report_video:"))
 async def report_video_start(callback: CallbackQuery, state: FSMContext):
     video_id = int(callback.data.split(":")[1])
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        video = await get_video_by_id(session, video_id)
+    advanced_mismatch_allowed = bool(
+        user and user.advanced_view_enabled and video and video.viewing_category
+    )
     await state.set_state(ReportState.picking_reason)
     await state.update_data(report_video_id=video_id)
 
     kb_rows = []
     for key, label in REPORT_REASONS.items():
+        if key == "category_mismatch" and not advanced_mismatch_allowed:
+            continue
         kb_rows.append([InlineKeyboardButton(text=t(label), callback_data=f"report_reason:{key}")])
     kb_rows.append([InlineKeyboardButton(text=t('❌ Отмена'), callback_data="report_cancel")])
 
@@ -4578,6 +4594,7 @@ async def report_comment(message: Message, state: FSMContext):
 
         report = await create_video_report(
             session, user.id, video_id, reason, comment,
+            allow_category_mismatch=bool(user.advanced_view_enabled),
         )
 
     await state.clear()

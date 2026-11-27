@@ -38,6 +38,7 @@ from app.i18n import (
 )
 from app.user_handlers import router as user_router
 from app.admin_handlers import router as admin_router
+from app.curator_handlers import router as curator_router
 from app.user_offer_handlers import router as user_offer_router
 from app.donation_shop import router as donation_router
 from app.arcade_handlers import router as arcade_router
@@ -4557,6 +4558,7 @@ def create_bot_and_dispatcher():
     dp.message.middleware(BanCheckMiddleware())
     dp.callback_query.middleware(BanCheckMiddleware())
     dp.include_router(admin_router)
+    dp.include_router(curator_router)
     dp.include_router(user_router)
     dp.include_router(playlist_router)
     dp.include_router(arcade_router)

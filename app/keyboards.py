@@ -50,6 +50,7 @@ def main_menu(is_admin: bool = False, lang: str | None = None) -> ReplyKeyboardM
         # Контент — главные действия всегда в первом ряду.
         [KeyboardButton(text=t(lang, "menu.watch")), KeyboardButton(text=t(lang, "menu.upload"))],
         [KeyboardButton(text=t(lang, "menu.playlists")), KeyboardButton(text=t(lang, "menu.tops"))],
+        [KeyboardButton(text=t(lang, "menu.advanced_view"))],
         # Я и покупки.
         [KeyboardButton(text=t(lang, "menu.profile")), KeyboardButton(text=t(lang, "menu.buy"))],
         # Развлечения и промокоды.

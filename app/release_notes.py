@@ -11,7 +11,7 @@ from app.i18n import t
 # поэтому будущим агентам достаточно:
 # 1) обновить CURRENT_VERSION при релизе,
 # 2) добавить записи в CHANGELOG.md.
-CURRENT_VERSION = "v3.55.6-deploy-event-notice"
+CURRENT_VERSION = "v3.56.0-video-curation"
 CURRENT_STATUS = "Актуальная боевая сборка"
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"

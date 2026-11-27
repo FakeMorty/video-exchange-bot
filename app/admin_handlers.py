@@ -33,7 +33,7 @@ from app.models import (
     AdminPoll, AdminPollResponse, utc_now,
 )
 from app.services import (
-    get_user, get_or_create_user, get_user_by_id, get_user_by_username,
+    get_user, get_or_create_user, get_user_by_id, get_user_by_username, resolve_user_identifier,
     get_user_dossier, count_pending_videos, count_approved_videos, count_rejected_videos,
     get_next_pending_video, get_video_by_id, get_rejected_video, restore_rejected_video,
     approve_video, reject_video,
@@ -131,6 +131,10 @@ class AdminVideoSearchState(StatesGroup):
 class AdminManageState(StatesGroup):
     waiting_new_admin = State()
     waiting_remove_admin = State()
+
+
+class CuratorAssignState(StatesGroup):
+    waiting_identifier = State()
 
 
 class AdminBroadcastState(StatesGroup):
@@ -1605,6 +1609,7 @@ async def admin_manage_users(callback: CallbackQuery, state: FSMContext):
         kb_rows.append(nav_row)
         
     kb_rows.append([InlineKeyboardButton(text=t('🔎 Поиск по нику/ID'), callback_data="admin_user_search")])
+    kb_rows.append([InlineKeyboardButton(text="🧭 Назначить смотрящего по ID/@username", callback_data="admin_assign_curator_start")])
     kb_rows.append([InlineKeyboardButton(text=t('◀️ Админ-панель'), callback_data="admin_center")])
     
     await _safe_edit(callback, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -4417,7 +4422,7 @@ async def cb_admin_add_admin_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminManageState.waiting_new_admin)
     await _safe_edit(
         callback,
-        t('✏️ <b>Назначение администратора</b>\n\nОтправь мне <b>Telegram ID</b> пользователя, которого хочешь назначить администратором в боте.\n\n<i>Пользователь должен хотя бы раз запустить бота перед этим, чтобы запись о нём была в базе данных.</i>'),
+        '✏️ <b>Назначение администратора</b>\n\nОтправь <b>Telegram ID или @username</b> пользователя.\n\n<i>Пользователь должен хотя бы раз запустить бота, чтобы запись о нём была в базе данных.</i>',
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t('❌ Отмена'), callback_data="admin_manage_admins")]
@@ -4432,13 +4437,9 @@ async def process_add_admin(message: Message, state: FSMContext):
         return
         
     text_val = (message.text or "").strip()
-    if not text_val.isdigit():
-        await message.answer(t('❌ Telegram ID должен состоять только из цифр. Пожалуйста, попробуйте снова или отправь команду отмены.'))
-        return
-        
-    tid = int(text_val)
     async with async_session() as session:
-        user = await get_user(session, tid)
+        user = await resolve_user_identifier(session, text_val)
+        tid = user.telegram_id if user else None
         if not user:
             await message.answer(
                 t('❌ Пользователь с Telegram ID <code>{tid}</code> не найден в базе данных.\nУбедись, что он запустил бота и создал профиль.', tid=tid),
@@ -5023,3 +5024,70 @@ async def admin_poll_close(callback: CallbackQuery):
         await session.commit()
     await callback.answer(t('Опрос завершён.'))
     await admin_poll_view(callback)
+
+
+# Private curator assignment. Admins can resolve a numeric Telegram ID or exact @username.
+@router.callback_query(F.data == "admin_assign_curator_start")
+async def curator_admin_button(callback: CallbackQuery, state: FSMContext):
+    if not await check_admin(callback.from_user.id):
+        return
+    await state.set_state(CuratorAssignState.waiting_identifier)
+    await callback.message.answer("Отправь Telegram ID, @username или уникальный ник. Пользователь должен хотя бы раз запустить бота.")
+    await callback.answer()
+
+
+@router.message(Command("curator_admin"))
+async def curator_admin_start(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    await state.set_state(CuratorAssignState.waiting_identifier)
+    await message.answer("Отправь Telegram ID, @username или уникальный ник. Пользователь должен хотя бы раз запустить бота.")
+
+
+@router.message(CuratorAssignState.waiting_identifier)
+async def curator_admin_assign(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    identifier = (message.text or "").strip()
+    data = await state.get_data()
+    async with async_session() as session:
+        user = await resolve_user_identifier(session, identifier)
+        if not user:
+            await message.answer("Пользователь не найден. Проверь ID/@username: он должен быть точным, и пользователь должен запускать бота.")
+            return
+        if data.get("remove_curator"):
+            user.curator_status = "none"
+            await session.commit()
+            await state.clear()
+            await message.answer("Роль смотрящего снята.")
+            return
+        if user.curator_status == "active":
+            await message.answer("Пользователь уже принял роль смотрящего.")
+            await state.clear()
+            return
+        user.curator_status = "invited"
+        telegram_id = user.telegram_id
+        await session.commit()
+    await state.clear()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Принять", callback_data="curator_accept:yes"),
+        InlineKeyboardButton(text="🙅 Отказаться", callback_data="curator_accept:no"),
+    ]])
+    try:
+        await message.bot.send_message(
+            telegram_id,
+            "🧭 <b>Приглашение стать смотрящим</b>\n\nСмотрящий может размечать состав уже одобренных видео: «Только мужчины», «Только женщины» или «Мужчины и женщины». Метки описывают состав видео, не ориентацию.\n\nОбязанности: выбирать только точную метку, пропускать сомнительное видео и сообщать о проблемах. Роль не позволяет одобрять, отклонять или публиковать ожидающий контент — это по-прежнему делают администраторы. Метка не является модерационным решением.\n\nХочешь принять роль?",
+            parse_mode="HTML", reply_markup=keyboard,
+        )
+        await message.answer(f"Приглашение отправлено пользователю {identifier}.")
+    except Exception:
+        await message.answer("Не удалось отправить приглашение. Пользователь должен запустить бота; статус приглашения сохранён.")
+
+
+@router.message(Command("curator_remove"))
+async def curator_remove_start(message: Message, state: FSMContext):
+    if not await check_admin(message.from_user.id):
+        return
+    await state.set_state(CuratorAssignState.waiting_identifier)
+    await state.update_data(remove_curator=True)
+    await message.answer("Отправь Telegram ID или @username смотрящего, чтобы снять роль.")
