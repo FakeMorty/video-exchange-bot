@@ -1124,6 +1124,41 @@ async def reject_video(
     return v
 
 
+def _recover_broken_media_from_reupload(
+    existing: "Video",
+    *,
+    user_id: int,
+    content_type: str,
+    file_id: str,
+) -> bool:
+    """Refresh an invalid Telegram file_id when its owner uploads the same file.
+
+    Telegram's file_unique_id identifies the same media across re-uploads while
+    file_id is the sendable, bot-specific handle. Only recover rows that this
+    uploader owns and that were marked broken for a known invalid-file_id error;
+    do not undo moderation rejections or delivery/chat failures.
+    """
+    reason = (existing.rejection_reason or "").lower()
+    invalid_file_id = any(marker in reason for marker in (
+        "wrong file identifier/http url specified",
+        "media_file_invalid",
+        "failed to get http url",
+    ))
+    if not (
+        existing.status == "broken"
+        and existing.content_type == content_type
+        and existing.uploader_user_id == user_id
+        and reason.startswith("send_failed:")
+        and invalid_file_id
+    ):
+        return False
+
+    existing.telegram_file_id = file_id
+    existing.status = "approved"
+    existing.rejection_reason = None
+    return True
+
+
 async def save_video(session: AsyncSession, user_id: int, file_id: str,
                      file_unique_id: str, duration: int = None,
                      file_size: int = None) -> tuple["Video", bool]:
@@ -1131,6 +1166,14 @@ async def save_video(session: AsyncSession, user_id: int, file_id: str,
         select(Video).where(Video.telegram_file_unique_id == file_unique_id)
     )).scalar_one_or_none()
     if existing:
+        recovered = _recover_broken_media_from_reupload(
+            existing, user_id=user_id, content_type="video", file_id=file_id
+        )
+        if recovered:
+            await session.commit()
+            # Recovered media is already approved and must not earn a second
+            # upload reward or go through moderation again.
+            return existing, False
         return existing, True
     video = Video(
         uploader_user_id=user_id,
@@ -1153,6 +1196,12 @@ async def save_photo(session: AsyncSession, user_id: int, file_id: str,
         select(Video).where(Video.telegram_file_unique_id == file_unique_id)
     )).scalar_one_or_none()
     if existing:
+        recovered = _recover_broken_media_from_reupload(
+            existing, user_id=user_id, content_type="photo", file_id=file_id
+        )
+        if recovered:
+            await session.commit()
+            return existing, False
         return existing, True
     photo = Video(
         uploader_user_id=user_id,

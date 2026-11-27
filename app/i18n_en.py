@@ -2009,4 +2009,6 @@ EN_SOURCE: dict[str, str] = {
     '👥 PDF по всем пользователям': '👥 All-users PDF',
     'Сборка отчёта не уложилась в {limit} секунд. База слишком большая для одного файла: используйте батчный экспорт.': 'The report did not finish within {limit} seconds. The database is too large for a single file: use batched export.',
     'Один файл получился слишком большим ({size} МБ при лимите {limit} МБ). Используйте батчный экспорт — он пришлёт отчёт частями.': 'The single file came out too large ({size} MB with a limit of {limit} MB). Use batched export — it will send the report in parts.',
+    '✅ Ранее недоступное видео восстановлено по новой загрузке и снова доступно в ленте. Повторная награда не начислялась.': '✅ The previously unavailable video was restored from your re-upload and is available in the feed again. No duplicate upload reward was granted.',
+    '✅ Ранее недоступное фото восстановлено по новой загрузке и снова доступно. Повторная награда не начислялась.': '✅ The previously unavailable photo was restored from your re-upload and is available again. No duplicate upload reward was granted.',
 }

@@ -2017,6 +2017,10 @@ async def handle_video_upload(message: Message):
             v.duration, v.file_size
         )
 
+        if not is_duplicate and getattr(saved, "status", None) == "approved":
+            await message.answer(t('✅ Ранее недоступное видео восстановлено по новой загрузке и снова доступно в ленте. Повторная награда не начислялась.'))
+            return
+
         if is_duplicate:
             data = _upload_notifications[user.id]
             if "dup_count" not in data:
@@ -2075,6 +2079,10 @@ async def handle_photo_upload(message: Message):
             p.file_id, p.file_unique_id,
             p.file_size
         )
+
+        if not is_duplicate and getattr(saved, "status", None) == "approved":
+            await message.answer(t('✅ Ранее недоступное фото восстановлено по новой загрузке и снова доступно. Повторная награда не начислялась.'))
+            return
 
         if is_duplicate:
             data = _upload_notifications[user.id]
