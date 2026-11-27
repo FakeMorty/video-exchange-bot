@@ -135,6 +135,26 @@ logger = get_logger(__name__)
 router = Router()
 
 
+_INVALID_STORED_MEDIA_ERRORS = (
+    "wrong file identifier/http url specified",
+    "failed to get http url",
+    "media_file_invalid",
+)
+
+
+def _is_invalid_stored_media_error(exc: Exception) -> bool:
+    """True only for Telegram errors that prove the stored file_id is unusable.
+
+    A failed delivery can also mean the recipient blocked the bot, Telegram is
+    temporarily unavailable, or sending is otherwise forbidden. Those errors
+    must never poison a video/photo for every other user.
+    """
+    if not isinstance(exc, TelegramBadRequest):
+        return False
+    error_text = str(exc).lower()
+    return any(marker in error_text for marker in _INVALID_STORED_MEDIA_ERRORS)
+
+
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
     """Глобально сбрасывает любой FSM-сценарий.
@@ -1337,6 +1357,7 @@ async def watch_video_content(callback: CallbackQuery):
             # Пытаемся несколько раз: бракованное видео не значит, что следующее такое же.
             last_send_error: str | None = None
             videos_tried = 0
+            invalid_media_failures = 0
             for _ in range(5):
                 video = await get_random_video_for_user(session, user.id)
                 if not video:
@@ -1371,7 +1392,18 @@ async def watch_video_content(callback: CallbackQuery):
                     )
                 except Exception as e:
                     last_send_error = str(e)
-                    await mark_content_broken(session, video.id, f"send_failed: {e}")
+                    is_invalid_media = _is_invalid_stored_media_error(e)
+                    if is_invalid_media:
+                        invalid_media_failures += 1
+                        await mark_content_broken(session, video.id, f"send_failed: {e}")
+                    else:
+                        # Chat-level / transient errors are not properties of the
+                        # media. Keep the row approved and stop retrying this update.
+                        logger.warning(
+                            "Video delivery failed without invalidating media: video_id=%s error=%s",
+                            video.id,
+                            e,
+                        )
                     await refund_watch_and_unview(
                         session,
                         user.id,
@@ -1379,6 +1411,8 @@ async def watch_video_content(callback: CallbackQuery):
                         cost,
                         reason=f"send_failed: {e}",
                     )
+                    if not is_invalid_media:
+                        break
                     continue
 
                 # Видео успешно отправлено — возвращаем управление сразу,
@@ -1434,8 +1468,12 @@ async def watch_video_content(callback: CallbackQuery):
                     t('watch_video_content: %d видео не отправилось, last_error=%s'),
                     videos_tried, last_send_error,
                 )
+                if invalid_media_failures == videos_tried:
+                    error_text = t('😵\u200d💫 <b>Несколько видео подряд не удалось показать.</b>\n\nЭто временный сбой, проблемные ролики мы уже пометили.\nСледующее видео может быть совершенно рабочим — попробуйте ещё раз!')
+                else:
+                    error_text = t('🛠 <b>Не получилось показать видео.</b>\n\nПроизошёл кратковременный сбой — это не значит, что видео нет.\nПопробуй ещё раз, следующее должно открыться нормально.')
                 await callback.message.answer(
-                    t('😵\u200d💫 <b>Несколько видео подряд не удалось показать.</b>\n\nЭто временный сбой, проблемные ролики мы уже пометили.\nСледующее видео может быть совершенно рабочим — попробуйте ещё раз!'),
+                    error_text,
                     parse_mode="HTML",
                     reply_markup=video_error_keyboard(),
                 )
@@ -1576,6 +1614,7 @@ async def watch_photo_content(callback: CallbackQuery):
 
             last_send_error: str | None = None
             photos_tried = 0
+            invalid_media_failures = 0
             for _ in range(5):
                 photo = await get_random_photo_for_user(session, user.id)
                 if not photo:
@@ -1598,7 +1637,18 @@ async def watch_photo_content(callback: CallbackQuery):
                     )
                 except Exception as e:
                     last_send_error = str(e)
-                    await mark_content_broken(session, photo.id, f"send_failed: {e}")
+                    if _is_invalid_stored_media_error(e):
+                        invalid_media_failures += 1
+                        await mark_content_broken(session, photo.id, f"send_failed: {e}")
+                    else:
+                        # Ошибка доставки в конкретный чат или временный сбой
+                        # Telegram не должна скрывать фото у всех пользователей.
+                        logger.warning(
+                            "Photo delivery failed without invalidating media: photo_id=%s error=%s",
+                            photo.id,
+                            e,
+                        )
+                        break
                     continue
 
                 # Фото успешно отправлено — пост-обработка в фоне
@@ -1616,8 +1666,12 @@ async def watch_photo_content(callback: CallbackQuery):
                     t('watch_photo_content: %d фото не отправилось, last_error=%s'),
                     photos_tried, last_send_error,
                 )
+                if invalid_media_failures == photos_tried:
+                    error_text = t('😵\u200d💫 <b>Несколько фото подряд не удалось показать.</b>\n\nВременный сбой — мы пометили проблемные фото.\nСледующее может открыться нормально, попробуйте ещё раз!')
+                else:
+                    error_text = t('🛠 <b>Не получилось показать фото.</b>\n\nКратковременный сбой — это не значит, что фото нет.\nПопробуй ещё раз или перейди к видео.')
                 await callback.message.answer(
-                    t('😵\u200d💫 <b>Несколько фото подряд не удалось показать.</b>\n\nВременный сбой — мы пометили проблемные фото.\nСледующее может открыться нормально, попробуйте ещё раз!'),
+                    error_text,
                     parse_mode="HTML",
                     reply_markup=photo_error_keyboard(),
                 )

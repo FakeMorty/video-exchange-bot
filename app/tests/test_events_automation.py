@@ -166,9 +166,11 @@ async def test_ensure_holiday_events_respects_toggle(db_session):
 
 
 @pytest.mark.asyncio
-async def test_toggle_off_deactivates_future_auto_events_only(db_session):
+async def test_toggle_off_deactivates_future_auto_events_only(db_session, monkeypatch):
     from sqlalchemy import select
+    import app.services as services
     now = datetime(2026, 10, 19, 12, 0)
+    monkeypatch.setattr(services, "utc_now", lambda: now)
     await ensure_holiday_events(db_session, now=now)
     manual = _make_event(name="Ручное", slug=None, start_date=now, end_date=now + timedelta(days=3))
     db_session.add(manual)
