@@ -1,6 +1,7 @@
 """Admin release notifications are once per applied build."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -107,9 +108,18 @@ async def test_vercel_promotion_notifies_immediately_without_waiting_for_telegra
     import app.main as main
 
     notify = AsyncMock(return_value=True)
+    bot = SimpleNamespace(
+        set_webhook=AsyncMock(),
+        get_webhook_info=AsyncMock(return_value=SimpleNamespace(
+            url="https://bot.example.com/webhook", pending_update_count=0
+        )),
+    )
     monkeypatch.setattr(main, "_notify_admins_release_applied", notify)
-    monkeypatch.setattr(vercel_entrypoint, "_get_bot_and_dispatcher", lambda: (object(), object()))
+    monkeypatch.setattr(vercel_entrypoint, "_get_bot_and_dispatcher", lambda: (bot, object()))
     monkeypatch.setenv("VERCEL_RELEASE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setenv("WEBHOOK_BASE", "https://bot.example.com")
+    monkeypatch.setenv("WEBHOOK_PATH", "/webhook")
+    monkeypatch.setenv("WEBHOOK_SECRET", "telegram-secret")
     event = {
         "type": "deployment.promoted",
         "payload": {
@@ -128,7 +138,13 @@ async def test_vercel_promotion_notifies_immediately_without_waiting_for_telegra
     )
 
     assert status == 200
-    assert response == {"ok": True}
+    assert response == {"ok": True, "webhook_configured": True}
+    bot.set_webhook.assert_awaited_once_with(
+        url="https://bot.example.com/webhook",
+        secret_token="telegram-secret",
+        drop_pending_updates=False,
+    )
+    bot.get_webhook_info.assert_awaited_once()
     notify.assert_awaited_once()
     assert notify.await_args.kwargs == {"build_id": "dpl_applied123"}
 
