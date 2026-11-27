@@ -1,5 +1,6 @@
-"""Admin release notifications are once-per-build, including Vercel cold starts."""
+"""Admin release notifications are once per applied build."""
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -38,7 +39,7 @@ async def test_release_notification_is_sent_once_per_build(monkeypatch):
         setting = await session.scalar(
             select(BotSetting).where(BotSetting.key == "last_admin_release_notice")
         )
-        assert setting.value == "test-release-v1:0123456789ab"
+        assert setting.value == "test-release-v1:0123456789abcdef"
 
     await engine.dispose()
 
@@ -69,22 +70,93 @@ async def test_failed_admin_delivery_releases_marker_for_retry(monkeypatch):
         setting = await session.scalar(
             select(BotSetting).where(BotSetting.key == "last_admin_release_notice")
         )
-        assert setting.value == "test-release-retry:test-release"
+        assert setting.value == "test-release-retry:test-release-retry"
 
     await engine.dispose()
 
 
+async def _invoke_asgi(app, *, query: str, body: bytes):
+    messages = [{"type": "http.request", "body": body, "more_body": False}]
+    sent = []
+
+    async def receive():
+        return messages.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/index",
+            "query_string": query.encode(),
+            "headers": [],
+        },
+        receive,
+        send,
+    )
+    status = next(message["status"] for message in sent if message["type"] == "http.response.start")
+    response = next(message["body"] for message in sent if message["type"] == "http.response.body")
+    return status, json.loads(response)
+
+
 @pytest.mark.asyncio
-async def test_vercel_checks_release_notice_once_per_warm_instance(monkeypatch):
+async def test_vercel_promotion_notifies_immediately_without_waiting_for_telegram_update(monkeypatch):
     import api.index as vercel_entrypoint
     import app.main as main
 
     notify = AsyncMock(return_value=True)
     monkeypatch.setattr(main, "_notify_admins_release_applied", notify)
-    monkeypatch.setattr(vercel_entrypoint, "_release_notification_checked", False)
+    monkeypatch.setattr(vercel_entrypoint, "_get_bot_and_dispatcher", lambda: (object(), object()))
+    monkeypatch.setenv("VERCEL_RELEASE_WEBHOOK_SECRET", "test-secret")
+    event = {
+        "type": "deployment.promoted",
+        "payload": {
+            "deployment": {
+                "id": "dpl_applied123",
+                "target": "production",
+                "meta": {"githubCommitSha": "abc123"},
+            }
+        },
+    }
 
-    bot = object()
-    await vercel_entrypoint._ensure_release_notification(bot)
-    await vercel_entrypoint._ensure_release_notification(bot)
+    status, response = await _invoke_asgi(
+        vercel_entrypoint.app,
+        query="__vercel_path=%2Fapi%2Frelease-applied&key=test-secret",
+        body=json.dumps(event).encode(),
+    )
 
-    notify.assert_awaited_once_with(bot)
+    assert status == 200
+    assert response == {"ok": True}
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs == {"build_id": "dpl_applied123"}
+
+
+@pytest.mark.asyncio
+async def test_vercel_release_webhook_rejects_bad_secret_and_ignores_preview(monkeypatch):
+    import api.index as vercel_entrypoint
+    import app.main as main
+
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(main, "_notify_admins_release_applied", notify)
+    monkeypatch.setattr(vercel_entrypoint, "_get_bot_and_dispatcher", lambda: (object(), object()))
+    monkeypatch.setenv("VERCEL_RELEASE_WEBHOOK_SECRET", "test-secret")
+    body = json.dumps({"type": "deployment.promoted", "payload": {"target": "preview"}}).encode()
+
+    status, response = await _invoke_asgi(
+        vercel_entrypoint.app,
+        query="__vercel_path=%2Fapi%2Frelease-applied&key=wrong",
+        body=body,
+    )
+    assert status == 403
+    assert response["error"] == "bad key"
+
+    status, response = await _invoke_asgi(
+        vercel_entrypoint.app,
+        query="__vercel_path=%2Fapi%2Frelease-applied&key=test-secret",
+        body=body,
+    )
+    assert status == 200
+    assert response["ignored"] == "not production"
+    notify.assert_not_awaited()
