@@ -23,6 +23,8 @@ from app.services import (
     restore_rejected_video,
 )
 from types import SimpleNamespace
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import SendVideo, SendPhoto
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.models import Base, User
 import time
@@ -2414,12 +2416,18 @@ class DummyMessage_watch_error_exit:
 
     async def answer_video(self, *args, **kwargs):
         if self._video_raises:
-            raise RuntimeError("Bad Request: failed to get HTTP URL")
+            raise TelegramBadRequest(
+                method=SendVideo(chat_id=1, video="file-id"),
+                message="Bad Request: failed to get HTTP URL",
+            )
         self.video_answers.append((args, kwargs))
 
     async def answer_photo(self, *args, **kwargs):
         if self._photo_raises:
-            raise RuntimeError("Bad Request: failed to get HTTP URL")
+            raise TelegramBadRequest(
+                method=SendPhoto(chat_id=1, photo="file-id"),
+                message="Bad Request: failed to get HTTP URL",
+            )
         self.photo_answers.append((args, kwargs))
 
     async def answer(self, text, **kwargs):
