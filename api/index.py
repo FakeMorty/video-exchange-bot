@@ -60,6 +60,7 @@ _dp = None
 _playlist_schema_ready = False
 _event_schema_ready = False
 _bot_commands_ready = False
+_release_notification_checked = False
 _holiday_events_synced_date = None
 
 
@@ -171,6 +172,19 @@ async def _ensure_bot_commands(bot) -> None:
         _bot_commands_ready = True
     except Exception as exc:
         print(f"vercel set_my_commands error: {exc!r}", flush=True)
+
+
+async def _ensure_release_notification(bot) -> None:
+    """Vercel has no persistent startup hook; announce on the first webhook."""
+    global _release_notification_checked
+    if _release_notification_checked:
+        return
+    try:
+        from app.main import _notify_admins_release_applied
+
+        _release_notification_checked = await _notify_admins_release_applied(bot)
+    except Exception as exc:
+        print(f"vercel release notification error: {exc!r}", flush=True)
 
 
 def _get_bot_and_dispatcher():
@@ -412,6 +426,7 @@ async def app(scope, receive, send):
             bot, dp = _get_bot_and_dispatcher()
             await _ensure_playlist_schema()
             await _ensure_bot_commands(bot)
+            await _ensure_release_notification(bot)
             await _ensure_event_schema()
             await _ensure_holiday_events()
             update = Update.model_validate(data, context={"bot": bot})
