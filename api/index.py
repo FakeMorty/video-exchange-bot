@@ -21,9 +21,9 @@ Telegram-апдейт отдельным вызовом функции чере�
     DATABASE_URL   — PostgreSQL async URL уже смигрированной БД (обязательно)
     ADMINS         — id администраторов через запятую
     WEBHOOK_PATH   — путь вебхука (по умолчанию /webhook)
-    WEBHOOK_SECRET — необязательный секрет; если задан, он же должен быть
-                     передан Telegram при setWebhook и сверяется с
-                     заголовком X-Telegram-Bot-Api-Secret-Token.
+    WEBHOOK_SECRET — необязательный секрет Telegram webhook.
+    VERCEL_RELEASE_WEBHOOK_SECRET — секрет для защищённого endpoint'а,
+                     который принимает от Vercel событие deployment.promoted.
 
 После деплоя вебхук ставится один раз скриптом:
     WEBHOOK_BASE=https://<проект>.vercel.app BOT_TOKEN=... \\
@@ -50,6 +50,7 @@ Vercel rewrites вида {\"source\": \"/(.*)\", \"destination\": \"/api/index\"
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import urllib.parse
@@ -60,7 +61,6 @@ _dp = None
 _playlist_schema_ready = False
 _event_schema_ready = False
 _bot_commands_ready = False
-_release_notification_checked = False
 _holiday_events_synced_date = None
 
 
@@ -173,18 +173,6 @@ async def _ensure_bot_commands(bot) -> None:
     except Exception as exc:
         print(f"vercel set_my_commands error: {exc!r}", flush=True)
 
-
-async def _ensure_release_notification(bot) -> None:
-    """Vercel has no persistent startup hook; announce on the first webhook."""
-    global _release_notification_checked
-    if _release_notification_checked:
-        return
-    try:
-        from app.main import _notify_admins_release_applied
-
-        _release_notification_checked = await _notify_admins_release_applied(bot)
-    except Exception as exc:
-        print(f"vercel release notification error: {exc!r}", flush=True)
 
 
 def _get_bot_and_dispatcher():
@@ -345,6 +333,59 @@ async def app(scope, receive, send):
         )
         return
 
+    if method == "POST" and path == "/api/release-applied":
+        # Vercel sends this event as soon as the production deployment is
+        # promoted. Authenticate it independently of Telegram's webhook token.
+        expected = os.getenv("VERCEL_RELEASE_WEBHOOK_SECRET", "").strip()
+        query = scope.get("query_string", b"")
+        query = query.decode("latin-1") if isinstance(query, bytes) else str(query)
+        supplied = urllib.parse.parse_qs(query, keep_blank_values=True).get("key", [""])[0]
+        if not expected or not hmac.compare_digest(supplied, expected):
+            await _json(send, 403, {"ok": False, "error": "bad key"})
+            return
+
+        raw = await _read_body(receive)
+        try:
+            event = json.loads(raw.decode("utf-8")) if raw else {}
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            await _json(send, 400, {"ok": False, "error": "invalid json"})
+            return
+
+        event_type = event.get("type") or event.get("event")
+        if event_type != "deployment.promoted":
+            await _json(send, 200, {"ok": True, "ignored": "not a production promotion"})
+            return
+
+        payload = event.get("payload") or event
+        deployment = payload.get("deployment") or payload
+        target = deployment.get("target") or payload.get("target")
+        if target and target != "production":
+            await _json(send, 200, {"ok": True, "ignored": "not production"})
+            return
+
+        deployment_id = deployment.get("id") or payload.get("id")
+        commit_sha = (
+            (deployment.get("meta") or {}).get("githubCommitSha")
+            or (payload.get("meta") or {}).get("githubCommitSha")
+        )
+        try:
+            bot, _dp_unused = _get_bot_and_dispatcher()
+            from app.main import _notify_admins_release_applied
+
+            sent = await _notify_admins_release_applied(
+                bot, build_id=deployment_id or commit_sha
+            )
+        except Exception as exc:
+            print(f"vercel release-applied webhook error: {exc!r}", flush=True)
+            sent = False
+
+        if not sent:
+            # A non-2xx response asks Vercel to retry a transient delivery error.
+            await _json(send, 503, {"ok": False, "error": "admin notification failed"})
+            return
+        await _json(send, 200, {"ok": True})
+        return
+
     if method == "GET" and path == "/api/setup-webhook":
         # Одноразовая установка вебхука прямо из функции Vercel (у песочниц и
         # локальных машин часто нет прямого доступа к api.telegram.org).
@@ -426,7 +467,6 @@ async def app(scope, receive, send):
             bot, dp = _get_bot_and_dispatcher()
             await _ensure_playlist_schema()
             await _ensure_bot_commands(bot)
-            await _ensure_release_notification(bot)
             await _ensure_event_schema()
             await _ensure_holiday_events()
             update = Update.model_validate(data, context={"bot": bot})

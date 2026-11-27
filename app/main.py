@@ -2214,12 +2214,12 @@ async def handle_health_check(request):
     """Handler for Render health checks"""
     return web.Response(text="Bot is running", status=200)
 
-async def _notify_admins_release_applied(bot: Bot) -> bool:
+async def _notify_admins_release_applied(bot: Bot, *, build_id: str | None = None) -> bool:
     """Notify admins once when a new build/release starts serving updates.
 
-    The marker is claimed atomically in bot_settings, so simultaneous Vercel
-    cold starts cannot send duplicate announcements. If all admin sends fail,
-    release the marker so the next webhook/startup can retry.
+    The marker is claimed atomically in bot_settings, so duplicate deployment
+    events cannot send duplicate announcements. If delivery fails, release the
+    marker so the caller can retry.
     """
     from app.models import BotSetting
     from app.release_notes import CURRENT_VERSION
@@ -2231,11 +2231,12 @@ async def _notify_admins_release_applied(bot: Bot) -> bool:
         return True
 
     build_id = (
-        os.getenv("VERCEL_GIT_COMMIT_SHA")
+        build_id
+        or os.getenv("VERCEL_GIT_COMMIT_SHA")
         or os.getenv("RENDER_GIT_COMMIT")
         or CURRENT_VERSION
     )
-    marker = f"{CURRENT_VERSION}:{build_id[:12]}"
+    marker = f"{CURRENT_VERSION}:{build_id[:32]}"
     setting_key = "last_admin_release_notice"
 
     try:
@@ -2265,7 +2266,7 @@ async def _notify_admins_release_applied(bot: Bot) -> bool:
         )
         sent = await notify_admins(bot, text)
         if sent:
-            log_info(logger, "Admin release notification sent", version=CURRENT_VERSION, build=build_id[:12])
+            log_info(logger, "Admin release notification sent", version=CURRENT_VERSION, build=build_id[:32])
             return True
 
         # Do not permanently suppress the notice if Telegram could not deliver it.

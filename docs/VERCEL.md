@@ -33,7 +33,10 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
   таблицы VIP-плейлистов, нужные serverless-версии бота. Базовые таблицы
   `users` и `videos` должны уже существовать; DB-пользователю нужны права
   проверять схему и создавать таблицы/индексы (или их нужно заранее создать
-  через Alembic `upgrade head`).
+  через Alembic `upgrade head`). Отдельный `POST /api/release-applied`
+  принимает событие Vercel `deployment.promoted` и сразу отправляет
+  администраторам сообщение через Telegram Bot API — не дожидаясь апдейта
+  пользователя. Endpoint защищён секретом `VERCEL_RELEASE_WEBHOOK_SECRET`.
 - `scripts/set_vercel_webhook.py` — ставит/снимает Telegram-вебхук.
 
 ## Как задеплоить
@@ -46,9 +49,14 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
      Telegram webhook Vercel создаёт только таблицы VIP-плейлистов; для этого
      нужны права DDL, если миграция `vip_playlists_001` ещё не применена;
    - `ADMINS` — id администраторов через запятую;
-   - при желании `WEBHOOK_PATH=/webhook` и `WEBHOOK_SECRET=<случайная строка>`.
-3. Сделайте Redeploy.
-4. Поставьте вебхук:
+   - при желании `WEBHOOK_PATH=/webhook` и `WEBHOOK_SECRET=<случайная строка>`;
+   - `VERCEL_RELEASE_WEBHOOK_SECRET=<случайная строка>` для входящего события деплоя.
+3. Создайте Vercel Webhook, ограниченный этим проектом, с событием
+   `deployment.promoted` и URL
+   `https://<проект>.vercel.app/api/release-applied?key=<VERCEL_RELEASE_WEBHOOK_SECRET>`.
+   Оно отправляется сразу после применения production alias; preview не затрагивается.
+4. Сделайте Redeploy.
+5. Поставьте Telegram-вебхук:
 
    ```bash
    BOT_TOKEN=... WEBHOOK_BASE=https://<проект>.vercel.app \
@@ -56,7 +64,7 @@ Found app/main.py but it does not export a top-level "app", "application", or "h
    ```
 
    Если задавали `WEBHOOK_SECRET` в Vercel, передайте его и скрипту.
-5. Проверьте: `curl https://<проект>.vercel.app/health` → `{"status": "ok", ..., "configured": true}`.
+6. Проверьте: `curl https://<проект>.vercel.app/health` → `{"status": "ok", ..., "configured": true}`.
 
 ## Ограничения Vercel (важно)
 
