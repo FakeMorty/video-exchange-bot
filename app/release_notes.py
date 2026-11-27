@@ -11,7 +11,7 @@ from app.i18n import t
 # поэтому будущим агентам достаточно:
 # 1) обновить CURRENT_VERSION при релизе,
 # 2) добавить записи в CHANGELOG.md.
-CURRENT_VERSION = "v3.55.3-media-reupload-recovery"
+CURRENT_VERSION = "v3.55.4-video-feed-resilience"
 CURRENT_STATUS = "Актуальная боевая сборка"
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"

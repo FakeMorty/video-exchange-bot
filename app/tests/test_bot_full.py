@@ -2407,15 +2407,18 @@ async def test_custom_stars_topup_uses_shop_rate_not_inflated():
 # ══════════════════════════════════════════════════════════════
 
 class DummyMessage_watch_error_exit:
-    def __init__(self, *, video_raises=False, photo_raises=False):
+    def __init__(self, *, video_raises=False, video_failures_remaining=0, photo_raises=False):
         self.video_answers = []
         self.photo_answers = []
         self.answers = []
         self._video_raises = video_raises
+        self._video_failures_remaining = video_failures_remaining
         self._photo_raises = photo_raises
 
     async def answer_video(self, *args, **kwargs):
-        if self._video_raises:
+        if self._video_raises or self._video_failures_remaining > 0:
+            if self._video_failures_remaining > 0:
+                self._video_failures_remaining -= 1
             raise TelegramBadRequest(
                 method=SendVideo(chat_id=1, video="file-id"),
                 message="Bad Request: failed to get HTTP URL",
@@ -2435,9 +2438,13 @@ class DummyMessage_watch_error_exit:
 
 
 class DummyCallback_watch_error_exit:
-    def __init__(self, user_id, *, video_raises=False, photo_raises=False):
+    def __init__(self, user_id, *, video_raises=False, video_failures_remaining=0, photo_raises=False):
         self.from_user = SimpleNamespace(id=user_id)
-        self.message = DummyMessage_watch_error_exit(video_raises=video_raises, photo_raises=photo_raises)
+        self.message = DummyMessage_watch_error_exit(
+            video_raises=video_raises,
+            video_failures_remaining=video_failures_remaining,
+            photo_raises=photo_raises,
+        )
 
     async def answer(self, *args, **kwargs):
         return None
@@ -2549,6 +2556,56 @@ async def test_watch_video_broken_video_does_not_leak_raw_error_and_gives_exit(m
             select(VideoView).where(VideoView.user_id == 2)
         )).scalars().all()
         assert views == [], "Просмотр неотправленного видео не должен сохраниться"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_watch_video_keeps_searching_after_five_invalid_file_ids(monkeypatch):
+    """A bad streak of five media IDs must not hide the next healthy video."""
+    import app.user_handlers as user_handlers
+    from sqlalchemy import select
+
+    engine, Session = await _make_session()
+    monkeypatch.setattr(user_handlers, "async_session", Session)
+
+    async with Session() as session:
+        uploader = User(telegram_id=2012, balance=Decimal("0.00"),
+                        nickname_set=True, display_name="Uploader")
+        viewer = User(telegram_id=2013, balance=Decimal("1000.00"),
+                      nickname_set=True, agreed_to_rules=True, display_name="Viewer")
+        session.add_all([uploader, viewer])
+        await session.flush()
+        videos = [
+            Video(
+                uploader_user_id=uploader.id,
+                content_type="video",
+                telegram_file_id=f"candidate_{index}",
+                telegram_file_unique_id=f"candidate_unique_{index}",
+                status="approved",
+            )
+            for index in range(6)
+        ]
+        session.add_all(videos)
+        await session.commit()
+        viewer_id = viewer.telegram_id
+
+    callback = DummyCallback_watch_error_exit(
+        viewer_id, video_failures_remaining=5
+    )
+    await user_handlers.watch_video_content(callback)
+
+    assert len(callback.message.video_answers) == 1
+    assert not any("несколько видео подряд" in text.lower()
+                   for text, _ in callback.message.answers)
+    async with Session() as session:
+        statuses = (await session.execute(
+            select(Video.status).where(Video.content_type == "video")
+        )).scalars().all()
+        assert statuses.count("broken") == 5
+        assert statuses.count("approved") == 1
+        viewer = await user_handlers.get_user(session, viewer_id)
+        assert viewer.balance == Decimal("990.00")
 
     await engine.dispose()
 
