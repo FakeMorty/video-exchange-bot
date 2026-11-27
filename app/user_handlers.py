@@ -141,6 +141,11 @@ _INVALID_STORED_MEDIA_ERRORS = (
     "media_file_invalid",
 )
 
+# A small run of stale Telegram file_ids should not make the viewer give up
+# when the feed still has healthy content. Failed IDs are quarantined during
+# the loop, so retries select a fresh candidate each time.
+MAX_MEDIA_DELIVERY_ATTEMPTS = 25
+
 
 def _is_invalid_stored_media_error(exc: Exception) -> bool:
     """True only for Telegram errors that prove the stored file_id is unusable.
@@ -1358,7 +1363,7 @@ async def watch_video_content(callback: CallbackQuery):
             last_send_error: str | None = None
             videos_tried = 0
             invalid_media_failures = 0
-            for _ in range(5):
+            for _ in range(MAX_MEDIA_DELIVERY_ATTEMPTS):
                 video = await get_random_video_for_user(session, user.id)
                 if not video:
                     break
