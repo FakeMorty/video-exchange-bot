@@ -65,6 +65,36 @@ _bot_commands_ready = False
 _holiday_events_synced_date = None
 
 
+async def _configure_telegram_webhook(bot) -> dict:
+    """Idempotently point Telegram at this production Vercel webhook.
+
+    A Vercel deployment becoming READY does not update Telegram's webhook.
+    Run this from the authenticated promotion hook so token rotations and
+    hostname moves become effective without putting BOT_TOKEN in a URL or log.
+    """
+    base = os.getenv("WEBHOOK_BASE", "").strip().rstrip("/")
+    if not base.startswith("https://"):
+        raise RuntimeError("WEBHOOK_BASE is missing or is not HTTPS")
+    webhook_path = os.getenv("WEBHOOK_PATH", "/webhook").strip() or "/webhook"
+    if not webhook_path.startswith("/"):
+        webhook_path = f"/{webhook_path}"
+    target_url = f"{base}{webhook_path}"
+    secret = os.getenv("WEBHOOK_SECRET", "").strip()
+
+    await bot.set_webhook(
+        url=target_url,
+        secret_token=secret or None,
+        drop_pending_updates=False,
+    )
+    info = await bot.get_webhook_info()
+    if info.url != target_url:
+        raise RuntimeError("Telegram did not confirm the configured webhook URL")
+    return {
+        "webhook_url": target_url,
+        "pending_update_count": info.pending_update_count,
+    }
+
+
 async def _ensure_playlist_schema() -> None:
     """Create only the new playlist tables on the first Vercel webhook.
 
@@ -405,22 +435,28 @@ async def app(scope, receive, send):
             (deployment.get("meta") or {}).get("githubCommitSha")
             or (payload.get("meta") or {}).get("githubCommitSha")
         )
+        webhook_info = None
         try:
             bot, _dp_unused = _get_bot_and_dispatcher()
+            # Re-register after every production promotion. This is idempotent
+            # and fixes stale hostnames after Vercel moves / token rotations.
+            webhook_info = await _configure_telegram_webhook(bot)
             from app.main import _notify_admins_release_applied
 
             sent = await _notify_admins_release_applied(
                 bot, build_id=deployment_id or commit_sha
             )
         except Exception as exc:
-            print(f"vercel release-applied webhook error: {exc!r}", flush=True)
+            # Exception text from bot clients can contain request URLs. Log only
+            # its type; never risk writing a token or secret to deployment logs.
+            print(f"vercel release setup error: {type(exc).__name__}", flush=True)
             sent = False
 
         if not sent:
-            # A non-2xx response asks Vercel to retry a transient delivery error.
-            await _json(send, 503, {"ok": False, "error": "admin notification failed"})
+            # Vercel retries transient setup/notification failures.
+            await _json(send, 503, {"ok": False, "error": "release setup failed"})
             return
-        await _json(send, 200, {"ok": True})
+        await _json(send, 200, {"ok": True, "webhook_configured": bool(webhook_info)})
         return
 
     if method == "GET" and path == "/api/setup-webhook":
