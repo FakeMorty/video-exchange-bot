@@ -2020,4 +2020,6 @@ ES_SOURCE: dict[str, str] = {
     '👥 PDF по всем пользователям': '👥 PDF de todos los usuarios',
     'Сборка отчёта не уложилась в {limit} секунд. База слишком большая для одного файла: используйте батчный экспорт.': 'La generación del informe no terminó en {limit} segundos. La base de datos es demasiado grande para un solo archivo: use la exportación por lotes.',
     'Один файл получился слишком большим ({size} МБ при лимите {limit} МБ). Используйте батчный экспорт — он пришлёт отчёт частями.': 'El archivo único resultó demasiado grande ({size} MB con un límite de {limit} MB). Use la exportación por lotes: enviará el informe por partes.',
+    '✅ Ранее недоступное видео восстановлено по новой загрузке и снова доступно в ленте. Повторная награда не начислялась.': '✅ El video que no estaba disponible se restauró con tu nueva carga y vuelve a estar en el feed. No se otorgó una recompensa duplicada.',
+    '✅ Ранее недоступное фото восстановлено по новой загрузке и снова доступно. Повторная награда не начислялась.': '✅ La foto que no estaba disponible se restauró con tu nueva carga y vuelve a estar disponible. No se otorgó una recompensa duplicada.',
 }
