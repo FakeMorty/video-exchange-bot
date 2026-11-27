@@ -2214,13 +2214,78 @@ async def handle_health_check(request):
     """Handler for Render health checks"""
     return web.Response(text="Bot is running", status=200)
 
+async def _notify_admins_release_applied(bot: Bot) -> bool:
+    """Notify admins once when a new build/release starts serving updates.
+
+    The marker is claimed atomically in bot_settings, so simultaneous Vercel
+    cold starts cannot send duplicate announcements. If all admin sends fail,
+    release the marker so the next webhook/startup can retry.
+    """
+    from app.models import BotSetting
+    from app.release_notes import CURRENT_VERSION
+    from sqlalchemy import delete, or_
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    if not ADMINS:
+        return True
+
+    build_id = (
+        os.getenv("VERCEL_GIT_COMMIT_SHA")
+        or os.getenv("RENDER_GIT_COMMIT")
+        or CURRENT_VERSION
+    )
+    marker = f"{CURRENT_VERSION}:{build_id[:12]}"
+    setting_key = "last_admin_release_notice"
+
+    try:
+        async with async_session() as session:
+            dialect = session.get_bind().dialect.name
+            insert = sqlite_insert if dialect == "sqlite" else pg_insert
+            claim = (
+                insert(BotSetting)
+                .values(key=setting_key, value=marker)
+                .on_conflict_do_update(
+                    index_elements=[BotSetting.key],
+                    set_={"value": marker},
+                    where=or_(BotSetting.value.is_(None), BotSetting.value != marker),
+                )
+                .returning(BotSetting.key)
+            )
+            claimed = (await session.execute(claim)).scalar_one_or_none()
+            await session.commit()
+
+        if claimed is None:
+            return True  # already announced by this build, including another cold start
+
+        text = (
+            "✅ <b>Обновление бота применено</b>\n"
+            f"Версия: <code>{CURRENT_VERSION}</code>\n"
+            "Подробности: /version"
+        )
+        sent = await notify_admins(bot, text)
+        if sent:
+            log_info(logger, "Admin release notification sent", version=CURRENT_VERSION, build=build_id[:12])
+            return True
+
+        # Do not permanently suppress the notice if Telegram could not deliver it.
+        async with async_session() as session:
+            await session.execute(
+                delete(BotSetting).where(
+                    BotSetting.key == setting_key,
+                    BotSetting.value == marker,
+                )
+            )
+            await session.commit()
+        return False
+    except Exception as exc:
+        log_error(logger, f"Admin release notification failed: {exc}")
+        return False
+
+
 async def _notify_admins_started(bot: Bot) -> None:
-    text = '✅ Бот запущен и готов к работе!'
-    for admin_id in ADMINS:
-        try:
-            await bot.send_message(admin_id, text, parse_mode="HTML")
-        except Exception:
-            pass
+    """For polling hosts, announce a release once after startup."""
+    await _notify_admins_release_applied(bot)
 
 
 async def _mod_notification_loop(bot):
