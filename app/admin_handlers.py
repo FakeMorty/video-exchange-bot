@@ -5062,26 +5062,22 @@ async def curator_admin_assign(message: Message, state: FSMContext):
             await message.answer("Роль смотрящего снята.")
             return
         if user.curator_status == "active":
-            await message.answer("Пользователь уже принял роль смотрящего.")
+            await message.answer("Пользователь уже назначен смотрящим.")
             await state.clear()
             return
-        user.curator_status = "invited"
+        user.curator_status = "active"
         telegram_id = user.telegram_id
         await session.commit()
     await state.clear()
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Принять", callback_data="curator_accept:yes"),
-        InlineKeyboardButton(text="🙅 Отказаться", callback_data="curator_accept:no"),
-    ]])
     try:
         await message.bot.send_message(
             telegram_id,
-            "🧭 <b>Приглашение стать смотрящим</b>\n\nСмотрящий может размечать состав уже одобренных видео: «Только мужчины», «Только женщины» или «Мужчины и женщины». Метки описывают состав видео, не ориентацию.\n\nОбязанности: выбирать только точную метку, пропускать сомнительное видео и сообщать о проблемах. Роль не позволяет одобрять, отклонять или публиковать ожидающий контент — это по-прежнему делают администраторы. Метка не является модерационным решением.\n\nХочешь принять роль?",
-            parse_mode="HTML", reply_markup=keyboard,
+            "🧭 <b>Тебя назначили смотрящим</b>\n\nМожно размечать состав уже одобренных видео: «Только мужчины», «Только женщины» или «Мужчины и женщины». Метки описывают видимый состав видео, не ориентацию. Выбери одну метку для каждого видео, чтобы перейти к следующему.\n\nРоль не позволяет одобрять, отклонять или публиковать ожидающий контент — это делают администраторы. Для начала открой /curator. Роль можно снять в любой момент из инструментов смотрящего.",
+            parse_mode="HTML",
         )
-        await message.answer(f"Приглашение отправлено пользователю {identifier}.")
+        await message.answer(f"Смотрящий назначен пользователю {identifier}.")
     except Exception:
-        await message.answer("Не удалось отправить приглашение. Пользователь должен запустить бота; статус приглашения сохранён.")
+        await message.answer(f"Смотрящий назначен пользователю {identifier}, но уведомление не доставлено. Пользователь должен запустить бота, чтобы получить сообщение.")
 
 
 @router.message(Command("curator_remove"))
