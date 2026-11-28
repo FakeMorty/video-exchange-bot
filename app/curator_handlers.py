@@ -103,14 +103,28 @@ async def curator_home(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏷 Разметить следующее видео", callback_data="curator_next")],
         [InlineKeyboardButton(text="ℹ️ Возможности смотрящего", callback_data="curator_info")],
+        [InlineKeyboardButton(text="🚪 Снять с себя роль смотрящего", callback_data="curator_leave")],
     ])
-    await message.answer("🧭 <b>Возможности смотрящего</b>\n\nСмотрящий назначает нейтральную метку состава одобренному видео. Он не одобряет, не отклоняет и не публикует ожидающие видео.", parse_mode="HTML", reply_markup=keyboard)
+    await message.answer("🧭 <b>Возможности смотрящего</b>\n\nДля каждого одобренного видео выбери одну нейтральную метку состава — только мужчины, только женщины или мужчины и женщины. Без выбора следующее видео не откроется. Смотрящий не одобряет, не отклоняет и не публикует ожидающие видео; роль можно снять здесь же в любой момент.", parse_mode="HTML", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "curator_leave")
+async def curator_leave(callback: CallbackQuery):
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user or user.curator_status != "active":
+            await callback.answer("Активная роль смотрящего не найдена.", show_alert=True)
+            return
+        user.curator_status = "none"
+        await session.commit()
+    await callback.message.edit_text("✅ Роль смотрящего снята. Если захочешь вернуться, попроси администратора назначить тебя снова.")
+    await callback.answer("Роль снята")
 
 
 @router.callback_query(F.data == "curator_info")
 async def curator_info(callback: CallbackQuery):
     await callback.answer()
-    await callback.message.answer("Смотрящий может только присвоить метку уже одобренному видео: «Только мужчины», «Только женщины» или «Мужчины и женщины». Метка должна описывать видимый состав видео, не ориентацию. Не уверен — пропусти; жалобы пользователей и админ-модерация остаются отдельными.")
+    await callback.message.answer("Смотрящий может только присвоить одобренному видео одну из трёх меток состава: «Только мужчины», «Только женщины» или «Мужчины и женщины». Метка описывает видимый состав видео, не ориентацию. Чтобы перейти дальше, нужно выбрать метку. Если определить её нельзя, сними с себя роль через меню и сообщи администратору; жалобы и модерация остаются отдельными.")
 
 
 @router.callback_query(F.data == "curator_next")
@@ -124,10 +138,8 @@ async def curator_next(callback: CallbackQuery):
         file_id = video.telegram_file_id
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=label, callback_data=f"curator_label:{video_id}:{key}")
-    ] for key, label in VIDEO_VIEW_CATEGORIES.items()] + [[
-        InlineKeyboardButton(text="⏭ Пропустить", callback_data="curator_next")
-    ]])
-    await callback.message.answer_video(file_id, caption=f"Видео #{video_id} — выбери нейтральную метку состава:", reply_markup=keyboard)
+    ] for key, label in VIDEO_VIEW_CATEGORIES.items()])
+    await callback.message.answer_video(file_id, caption=f"Видео #{video_id} — выбери нейтральную метку состава, чтобы продолжить:", reply_markup=keyboard)
     await callback.answer()
 
 
@@ -143,6 +155,11 @@ async def curator_label(callback: CallbackQuery):
         ok, _ = await set_video_view_category(session, callback.from_user.id, video_id, category)
     if ok:
         await callback.answer("Метка сохранена")
-        await callback.message.edit_caption(caption=f"✅ Видео #{video_id}: {VIDEO_VIEW_CATEGORIES[category]}")
+        await callback.message.edit_caption(
+            caption=f"✅ Видео #{video_id}: {VIDEO_VIEW_CATEGORIES[category]}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🏷 Следующее видео", callback_data="curator_next")
+            ]]),
+        )
     else:
         await callback.answer("Не удалось сохранить: роль неактивна, видео уже размечено или больше не одобрено.", show_alert=True)
